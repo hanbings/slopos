@@ -109,6 +109,10 @@ impl Superblock {
         Self::parse_internal(bytes, false)
     }
 
+    pub fn parse_for_recovery(bytes: &[u8]) -> Result<Self, ParseError> {
+        Self::parse_internal(bytes, true)
+    }
+
     fn parse_internal(bytes: &[u8], allow_recovery: bool) -> Result<Self, ParseError> {
         if bytes.len() < SUPERBLOCK_SIZE {
             return Err(ParseError::Truncated);
@@ -526,6 +530,32 @@ pub fn decode_journal_data_block(
         output[..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
     }
     Ok(())
+}
+
+pub fn decode_single_block_journal_transaction(
+    output: &mut [u8],
+    descriptor_block: &[u8],
+    journal_data_block: &[u8],
+    commit_block: &[u8],
+    expected_sequence: u32,
+    expected_uuid: &[u8; 16],
+) -> Result<JournalDescriptor, ParseError> {
+    if expected_sequence == 0
+        || descriptor_block.len() != journal_data_block.len()
+        || commit_block.len() != journal_data_block.len()
+    {
+        return Err(ParseError::InvalidJournal);
+    }
+    let descriptor = JournalDescriptor::parse(descriptor_block)?;
+    let commit = JournalCommit::parse(commit_block)?;
+    if descriptor.sequence != expected_sequence
+        || commit.sequence != expected_sequence
+        || descriptor.uuid != *expected_uuid
+    {
+        return Err(ParseError::InvalidJournal);
+    }
+    decode_journal_data_block(output, journal_data_block, &descriptor)?;
+    Ok(descriptor)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1458,6 +1488,17 @@ mod tests {
         let mut decoded = [0u8; 4096];
         decode_journal_data_block(&mut decoded, &journal_data, &parsed_descriptor).unwrap();
         assert_eq!(decoded, home);
+        assert_eq!(
+            decode_single_block_journal_transaction(
+                &mut decoded,
+                &descriptor,
+                &journal_data,
+                &commit,
+                9,
+                &uuid,
+            ),
+            Ok(parsed_descriptor)
+        );
 
         home[..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
         encode_single_block_journal_transaction(
@@ -1473,7 +1514,17 @@ mod tests {
         let parsed_descriptor = JournalDescriptor::parse(&descriptor).unwrap();
         assert!(parsed_descriptor.escaped);
         assert_eq!(journal_data[..4], [0; 4]);
-        decode_journal_data_block(&mut decoded, &journal_data, &parsed_descriptor).unwrap();
+        assert_eq!(
+            decode_single_block_journal_transaction(
+                &mut decoded,
+                &descriptor,
+                &journal_data,
+                &commit,
+                10,
+                &uuid,
+            ),
+            Ok(parsed_descriptor)
+        );
         assert_eq!(decoded, home);
     }
 
@@ -1492,6 +1543,29 @@ mod tests {
             &[b'M'; 4096],
         )
         .unwrap();
+        let mut decoded = [0u8; 4096];
+        assert_eq!(
+            decode_single_block_journal_transaction(
+                &mut decoded,
+                &descriptor,
+                &journal_data,
+                &commit,
+                8,
+                &[0x53; 16],
+            ),
+            Err(ParseError::InvalidJournal)
+        );
+        assert_eq!(
+            decode_single_block_journal_transaction(
+                &mut decoded,
+                &descriptor,
+                &journal_data,
+                &commit,
+                9,
+                &[0x54; 16],
+            ),
+            Err(ParseError::InvalidJournal)
+        );
         descriptor[18..20].copy_from_slice(&JOURNAL_TAG_SAME_UUID.to_be_bytes());
         assert_eq!(
             JournalDescriptor::parse(&descriptor),
@@ -1527,6 +1601,13 @@ mod tests {
             FEATURE_INCOMPAT_RECOVER
         );
         assert_eq!(Superblock::parse(&bytes), Err(ParseError::DirtyFilesystem));
+        assert!(
+            Superblock::parse_for_recovery(&bytes)
+                .unwrap()
+                .feature_incompat
+                & FEATURE_INCOMPAT_RECOVER
+                != 0
+        );
         set_superblock_recovery(&mut bytes, false).unwrap();
         assert_eq!(bytes, original);
         assert!(Superblock::parse(&bytes).is_ok());
