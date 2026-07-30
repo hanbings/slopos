@@ -265,6 +265,71 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         Ok(())
     }
 
+    pub fn consume_window_into_column(&mut self) -> bool {
+        if self.column_count == 0 || self.focused_column + 1 >= self.column_count {
+            return false;
+        }
+        let destination = self.focused_column;
+        let source = destination + 1;
+        if self.columns[destination].window_count == WINDOWS {
+            return false;
+        }
+        let window = self.columns[source].windows[0];
+        for index in 0..self.columns[source].window_count - 1 {
+            self.columns[source].windows[index] = self.columns[source].windows[index + 1];
+        }
+        self.columns[source].window_count -= 1;
+        self.columns[source].focused_window = self.columns[source]
+            .focused_window
+            .saturating_sub(1)
+            .min(self.columns[source].window_count.saturating_sub(1));
+
+        let destination_row = self.columns[destination].window_count;
+        self.columns[destination].windows[destination_row] = window;
+        self.columns[destination].window_count += 1;
+        self.columns[destination].focused_window = destination_row;
+
+        if self.columns[source].window_count == 0 {
+            for index in source..self.column_count - 1 {
+                self.columns[index] = self.columns[index + 1];
+            }
+            self.column_count -= 1;
+            self.columns[self.column_count] = Column::empty();
+        }
+        self.ensure_focused_visible();
+        true
+    }
+
+    pub fn expel_window_from_column(&mut self) -> bool {
+        if self.column_count == 0
+            || self.column_count == COLUMNS
+            || self.columns[self.focused_column].window_count <= 1
+        {
+            return false;
+        }
+        let source = self.focused_column;
+        let source_row = self.columns[source].window_count - 1;
+        let window = self.columns[source].windows[source_row];
+        let width = self.columns[source].width;
+        self.columns[source].window_count -= 1;
+        self.columns[source].focused_window = self.columns[source]
+            .focused_window
+            .min(self.columns[source].window_count - 1);
+
+        let destination = source + 1;
+        for index in (destination..self.column_count).rev() {
+            self.columns[index + 1] = self.columns[index];
+        }
+        let mut column = Column::empty();
+        column.windows[0] = window;
+        column.window_count = 1;
+        column.width = width;
+        self.columns[destination] = column;
+        self.column_count += 1;
+        self.ensure_focused_visible();
+        true
+    }
+
     pub fn close_window(&mut self, window: u32) -> Result<(), LayoutError> {
         let (column_index, window_index) =
             self.find_window(window).ok_or(LayoutError::UnknownWindow)?;
@@ -983,7 +1048,9 @@ mod tests {
     fn stacks_windows_vertically_with_stable_column_width() {
         let mut layout = ScrollLayout::<2, 3>::new(1000, 700, 30, LayoutConfig::default());
         layout.open_window(1).unwrap();
-        layout.consume_window(2).unwrap();
+        layout.open_window(2).unwrap();
+        assert!(layout.focus_column_left());
+        assert!(layout.consume_window_into_column());
         let top = layout.tile_rect(1).unwrap();
         let bottom = layout.tile_rect(2).unwrap();
         assert_eq!(top.x, bottom.x);
@@ -992,6 +1059,10 @@ mod tests {
         assert_eq!(layout.focused_window(), Some(2));
         assert!(layout.focus_window_up());
         assert_eq!(layout.focused_window(), Some(1));
+        assert!(layout.focus_window_down());
+        assert!(layout.expel_window_from_column());
+        assert_eq!(layout.focused_window(), Some(1));
+        assert!(layout.tile_rect(2).unwrap().x > layout.tile_rect(1).unwrap().x);
     }
 
     #[test]

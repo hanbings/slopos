@@ -48,7 +48,7 @@ pub struct Desktop {
     screen_width: i32,
     screen_height: i32,
     windows: [Window; WINDOW_COUNT],
-    workspaces: WorkspaceSet<WORKSPACE_CAPACITY, WINDOW_COUNT, 1>,
+    workspaces: WorkspaceSet<WORKSPACE_CAPACITY, WINDOW_COUNT, WINDOW_COUNT>,
     niri: NiriShellConfig<'static>,
     bar: WaybarConfig<'static>,
     bar_style: WaybarStyle<'static>,
@@ -1288,6 +1288,8 @@ impl Desktop {
         let changed = match action {
             NiriAction::FocusColumnLeft => self.workspaces.focus_column_left(),
             NiriAction::FocusColumnRight => self.workspaces.focus_column_right(),
+            NiriAction::FocusWindowUp => self.workspaces.focus_window_up(),
+            NiriAction::FocusWindowDown => self.workspaces.focus_window_down(),
             NiriAction::MoveColumnLeft => self.workspaces.move_column_left(),
             NiriAction::MoveColumnRight => self.workspaces.move_column_right(),
             NiriAction::FocusWorkspaceUp => self.workspaces.focus_workspace_up(),
@@ -1321,6 +1323,8 @@ impl Desktop {
                     .move_focused_to_workspace(workspace)
                     .unwrap_or_else(|_| crate::fatal("niri move-to-workspace failed"))
             }
+            NiriAction::ConsumeWindowIntoColumn => self.workspaces.consume_window_into_column(),
+            NiriAction::ExpelWindowFromColumn => self.workspaces.expel_window_from_column(),
             NiriAction::SetColumnWidth(change) => self
                 .workspaces
                 .change_focused_column_width(change)
@@ -1566,6 +1570,8 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
     match action {
         NiriAction::FocusColumnLeft => "focus-column-left",
         NiriAction::FocusColumnRight => "focus-column-right",
+        NiriAction::FocusWindowUp => "focus-window-up",
+        NiriAction::FocusWindowDown => "focus-window-down",
         NiriAction::MoveColumnLeft => "move-column-left",
         NiriAction::MoveColumnRight => "move-column-right",
         NiriAction::FocusWorkspaceUp => "focus-workspace-up",
@@ -1575,6 +1581,8 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::MoveColumnToWorkspaceUp => "move-column-to-workspace-up",
         NiriAction::MoveColumnToWorkspaceDown => "move-column-to-workspace-down",
         NiriAction::MoveColumnToWorkspace(_) => "move-column-to-workspace",
+        NiriAction::ConsumeWindowIntoColumn => "consume-window-into-column",
+        NiriAction::ExpelWindowFromColumn => "expel-window-from-column",
         NiriAction::SetColumnWidth(_) => "set-column-width",
         NiriAction::CloseWindow => "close-window",
     }

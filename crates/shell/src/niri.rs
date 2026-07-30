@@ -3,7 +3,7 @@
 use crate::{ColumnWidth, ColumnWidthChange, LayoutConfig, LayoutError, Rect, ScrollLayout};
 
 pub const MAX_NIRI_WORKSPACES: usize = 8;
-pub const MAX_NIRI_BINDINGS: usize = 24;
+pub const MAX_NIRI_BINDINGS: usize = 32;
 pub const MAX_NIRI_WINDOW_RULES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +55,8 @@ pub enum WorkspaceReference<'a> {
 pub enum NiriAction<'a> {
     FocusColumnLeft,
     FocusColumnRight,
+    FocusWindowUp,
+    FocusWindowDown,
     MoveColumnLeft,
     MoveColumnRight,
     FocusWorkspaceUp,
@@ -64,6 +66,8 @@ pub enum NiriAction<'a> {
     MoveColumnToWorkspaceUp,
     MoveColumnToWorkspaceDown,
     MoveColumnToWorkspace(WorkspaceReference<'a>),
+    ConsumeWindowIntoColumn,
+    ExpelWindowFromColumn,
     SetColumnWidth(ColumnWidthChange),
     CloseWindow,
 }
@@ -454,6 +458,8 @@ impl<'a> ShellConfigParser<'a> {
         Ok(match value {
             "focus-column-left" => NiriAction::FocusColumnLeft,
             "focus-column-right" => NiriAction::FocusColumnRight,
+            "focus-window-up" => NiriAction::FocusWindowUp,
+            "focus-window-down" => NiriAction::FocusWindowDown,
             "move-column-left" => NiriAction::MoveColumnLeft,
             "move-column-right" => NiriAction::MoveColumnRight,
             "focus-workspace-up" => NiriAction::FocusWorkspaceUp,
@@ -465,6 +471,8 @@ impl<'a> ShellConfigParser<'a> {
             "move-column-to-workspace" => {
                 NiriAction::MoveColumnToWorkspace(self.parse_workspace_reference()?)
             }
+            "consume-window-into-column" => NiriAction::ConsumeWindowIntoColumn,
+            "expel-window-from-column" => NiriAction::ExpelWindowFromColumn,
             "set-column-width" => {
                 let KdlToken::String(width) = self.next() else {
                     return Err(NiriConfigError::InvalidBinding);
@@ -601,6 +609,8 @@ fn parse_binding_key(value: &str) -> Result<BindingKey, NiriConfigError> {
         "Escape" => Ok(BindingKey::Escape),
         "Minus" => Ok(BindingKey::Minus),
         "Equal" => Ok(BindingKey::Equal),
+        "Comma" => Ok(BindingKey::Character(b',')),
+        "Period" | "Dot" => Ok(BindingKey::Character(b'.')),
         _ if value.len() == 1 => Ok(BindingKey::Character(
             value.as_bytes()[0].to_ascii_uppercase(),
         )),
@@ -859,12 +869,28 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].focus_column_right()
     }
 
+    pub fn focus_window_up(&mut self) -> bool {
+        self.layouts[self.active].focus_window_up()
+    }
+
+    pub fn focus_window_down(&mut self) -> bool {
+        self.layouts[self.active].focus_window_down()
+    }
+
     pub fn move_column_left(&mut self) -> bool {
         self.layouts[self.active].move_column_left()
     }
 
     pub fn move_column_right(&mut self) -> bool {
         self.layouts[self.active].move_column_right()
+    }
+
+    pub fn consume_window_into_column(&mut self) -> bool {
+        self.layouts[self.active].consume_window_into_column()
+    }
+
+    pub fn expel_window_from_column(&mut self) -> bool {
+        self.layouts[self.active].expel_window_from_column()
     }
 
     pub fn scroll_by(&mut self, delta: i32) {
@@ -995,6 +1021,10 @@ mod tests {
                 Mod+C { focus-workspace "config"; }
                 Mod+Ctrl+M { move-column-to-workspace "main"; }
                 Mod+Tab { focus-workspace-previous; }
+                Mod+K { focus-window-up; }
+                Mod+J { focus-window-down; }
+                Mod+Comma { consume-window-into-column; }
+                Mod+Period { expel-window-from-column; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
                 Mod+Q { close-window; }
@@ -1016,7 +1046,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 12);
+        assert_eq!(config.bindings.len(), 16);
         assert_eq!(
             config
                 .bindings
@@ -1081,6 +1111,30 @@ mod tests {
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Tab),
             Some(NiriAction::FocusWorkspacePrevious)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'K')),
+            Some(NiriAction::FocusWindowUp)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'J')),
+            Some(NiriAction::FocusWindowDown)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b',')),
+            Some(NiriAction::ConsumeWindowIntoColumn)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'.')),
+            Some(NiriAction::ExpelWindowFromColumn)
         );
         assert_eq!(
             config
