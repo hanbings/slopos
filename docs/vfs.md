@@ -19,4 +19,4 @@
 - 只有一个 root filesystem，没有 mount/unmount 生命周期或引用计数；
 - 只有 regular-file read/原位 write/seek/close，没有 directory fd、stat、dup、poll、mmap、owner/mode 权限或文件增长；
 - 没有 syscall，因此用户程序尚不能访问这些 fd；
-- fd write 只覆盖已有 initialized extent 中完整存在的 block；没有 create/truncate/append 或 metadata transaction。
+- fd write 只覆盖已有 initialized extent 中完整存在的 block；底层 ext4 已有 create/unlink 与 block growth probe，但尚未接到 VFS create/truncate/append API。
