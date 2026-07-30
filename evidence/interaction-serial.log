@@ -1,0 +1,21 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI Non-Block Boot Device" from PciRoot(0x0)/Pci(0x3,0x0)
+BdsDxe: starting Boot0001 "UEFI Non-Block Boot Device" from PciRoot(0x0)/Pci(0x3,0x0)
+SLOPOS-UEFI: loader entered
+SLOPOS-UEFI: raw protocol layer initialized
+SLOPOS-UEFI: ACPI RSDP=0xf77e014
+SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
+SLOPOS-UEFI: kernel file loaded bytes=58184
+SLOPOS-UEFI: kernel mapped 0x4000000..0x4005000 entry=0x4000000
+SLOPOS-UEFI: initrd loaded bytes=187 base=0xdf6d000
+SLOPOS-UEFI: Boot Services exited descriptors=113
+SLOPOS-UEFI: transferring control to kernel
+SLOPOS-KERNEL: entry reached
+SLOPOS-KERNEL: boot info valid memory_descriptors=113
+SLOPOS-KERNEL: ACPI RSDP validated at 0xf77e014
+SLOPOS-KERNEL: initrd available base=0xdf6d000 bytes=187
+SLOPOS-KERNEL: framebuffer ownership accepted 1024x768
+SLOPOS-INPUT: PS/2 keyboard and mouse enabled
+SLOPOS-DESKTOP: interactive compositor loop entered windows=3
+SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
+SLOPOS-TERMINAL: command=STATUS
+SLOPOS-DESKTOP: window moved kind=TERMINAL x=152 y=153
