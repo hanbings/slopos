@@ -75,6 +75,7 @@ pub enum NiriAction<'a> {
     SwitchPresetWindowHeight,
     SwitchPresetWindowHeightBack,
     MaximizeColumn,
+    MaximizeWindowToEdges,
     CenterColumn,
     CenterVisibleColumns,
     ExpandColumnToAvailableWidth,
@@ -492,6 +493,7 @@ impl<'a> ShellConfigParser<'a> {
             "switch-preset-window-height" => NiriAction::SwitchPresetWindowHeight,
             "switch-preset-window-height-back" => NiriAction::SwitchPresetWindowHeightBack,
             "maximize-column" => NiriAction::MaximizeColumn,
+            "maximize-window-to-edges" => NiriAction::MaximizeWindowToEdges,
             "center-column" => NiriAction::CenterColumn,
             "center-visible-columns" => NiriAction::CenterVisibleColumns,
             "expand-column-to-available-width" => NiriAction::ExpandColumnToAvailableWidth,
@@ -976,6 +978,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].toggle_maximize_focused_column()
     }
 
+    pub fn maximize_focused_window_to_edges(&mut self) -> bool {
+        self.layouts[self.active].toggle_maximize_focused_window_to_edges()
+    }
+
     pub fn center_focused_column(&mut self) -> bool {
         self.layouts[self.active].center_focused_column()
     }
@@ -1119,6 +1125,7 @@ mod tests {
                 Mod+Ctrl+Alt+R { switch-preset-window-height-back; }
                 Mod+Ctrl+R { reset-window-height; }
                 Mod+F { maximize-column; }
+                Mod+M { maximize-window-to-edges; }
                 Mod+C { center-column; }
                 Mod+Ctrl+C { center-visible-columns; }
                 Mod+Ctrl+F { expand-column-to-available-width; }
@@ -1141,7 +1148,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 29);
+        assert_eq!(config.bindings.len(), 30);
         assert_eq!(
             config
                 .bindings
@@ -1233,6 +1240,12 @@ mod tests {
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Character(b'C')),
             Some(NiriAction::CenterColumn)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'M')),
+            Some(NiriAction::MaximizeWindowToEdges)
         );
         assert_eq!(
             config.bindings.action(

@@ -1336,6 +1336,7 @@ impl Desktop {
                 self.workspaces.switch_preset_window_height_back()
             }
             NiriAction::MaximizeColumn => self.workspaces.maximize_focused_column(),
+            NiriAction::MaximizeWindowToEdges => self.workspaces.maximize_focused_window_to_edges(),
             NiriAction::CenterColumn => self.workspaces.center_focused_column(),
             NiriAction::CenterVisibleColumns => self.workspaces.center_visible_columns(),
             NiriAction::ExpandColumnToAvailableWidth => {
@@ -1385,6 +1386,19 @@ impl Desktop {
                 "SLOPOS-DESKTOP: window resized kind={} width={} layout=scrolling",
                 title(window.kind),
                 window.width
+            ));
+        }
+        if changed
+            && matches!(action, NiriAction::MaximizeWindowToEdges)
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: window edge maximize toggled kind={} x={} y={} width={} height={} layout=scrolling",
+                title(window.kind),
+                window.x,
+                window.y,
+                window.width,
+                window.height
             ));
         }
         if changed
@@ -1656,6 +1670,7 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::SwitchPresetWindowHeight => "switch-preset-window-height",
         NiriAction::SwitchPresetWindowHeightBack => "switch-preset-window-height-back",
         NiriAction::MaximizeColumn => "maximize-column",
+        NiriAction::MaximizeWindowToEdges => "maximize-window-to-edges",
         NiriAction::CenterColumn => "center-column",
         NiriAction::CenterVisibleColumns => "center-visible-columns",
         NiriAction::ExpandColumnToAvailableWidth => "expand-column-to-available-width",

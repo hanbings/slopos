@@ -156,6 +156,11 @@ monitor_type() {
     sleep 1
     echo "sendkey meta_l-left 50"
     sleep 1
+    echo "sendkey meta_l-m 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-window-maximized-to-edges.ppm"
+    echo "sendkey meta_l-m 50"
+    sleep 1
     echo "mouse_move -300 -300"
     sleep 1
     echo "mouse_button 1"
@@ -344,6 +349,12 @@ grep -Fq "SLOPOS-NIRI: binding action=expand-column-to-available-width changed=t
 grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=657 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=center-visible-columns changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: visible columns centered kind=TERMINAL x=185 offset=-169 layout=scrolling" "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=maximize-window-to-edges changed=true workspace=1 name=main focused=0" "${serial_log}")" -ne 2 ]]; then
+    echo "niri maximize-window-to-edges did not toggle and restore" >&2
+    exit 1
+fi
+grep -Fq "SLOPOS-DESKTOP: window edge maximize toggled kind=TERMINAL x=0 y=40 width=1024 height=728 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window edge maximize toggled kind=TERMINAL x=16 y=56 width=488 height=696 layout=scrolling" "${serial_log}"
 if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=maximize-column changed=true workspace=1 name=main focused=0" "${serial_log}")" -ne 2 ]]; then
     echo "niri maximize-column did not toggle full width and restore" >&2
     exit 1
@@ -404,6 +415,7 @@ test -s "${repo_dir}/evidence/niri-column-maximized.ppm"
 test -s "${repo_dir}/evidence/niri-preset-column-width.ppm"
 test -s "${repo_dir}/evidence/niri-column-expanded.ppm"
 test -s "${repo_dir}/evidence/niri-visible-columns-centered.ppm"
+test -s "${repo_dir}/evidence/niri-window-maximized-to-edges.ppm"
 test -s "${repo_dir}/evidence/window-moved.ppm"
 test -s "${repo_dir}/evidence/window-resized.ppm"
 test -s "${repo_dir}/evidence/column-reordered.ppm"
@@ -449,6 +461,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-column-expanded.png"
     pnmtopng "${repo_dir}/evidence/niri-visible-columns-centered.ppm" \
         >"${repo_dir}/evidence/niri-visible-columns-centered.png"
+    pnmtopng "${repo_dir}/evidence/niri-window-maximized-to-edges.ppm" \
+        >"${repo_dir}/evidence/niri-window-maximized-to-edges.png"
     pnmtopng "${repo_dir}/evidence/window-moved.ppm" \
         >"${repo_dir}/evidence/window-moved.png"
     pnmtopng "${repo_dir}/evidence/window-resized.ppm" \
