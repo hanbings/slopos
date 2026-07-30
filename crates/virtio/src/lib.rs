@@ -56,18 +56,37 @@ pub const fn block_read_descriptors(
     data_length: u32,
     status_address: u64,
 ) -> [Descriptor; 3] {
+    block_read_descriptors_at(
+        0,
+        header_address,
+        header_length,
+        data_address,
+        data_length,
+        status_address,
+    )
+}
+
+pub const fn block_read_descriptors_at(
+    head: u16,
+    header_address: u64,
+    header_length: u32,
+    data_address: u64,
+    data_length: u32,
+    status_address: u64,
+) -> [Descriptor; 3] {
+    assert!(head <= u16::MAX - 2);
     [
         Descriptor {
             address: header_address,
             length: header_length,
             flags: DESCRIPTOR_NEXT,
-            next: 1,
+            next: head + 1,
         },
         Descriptor {
             address: data_address,
             length: data_length,
             flags: DESCRIPTOR_NEXT | DESCRIPTOR_WRITE,
-            next: 2,
+            next: head + 2,
         },
         Descriptor {
             address: status_address,
@@ -131,5 +150,9 @@ mod tests {
                 }
             ]
         );
+        let descriptors = block_read_descriptors_at(3, 0x4000, 16, 0x5000, 4096, 0x6000);
+        assert_eq!(descriptors[0].next, 4);
+        assert_eq!(descriptors[1].next, 5);
+        assert_eq!(descriptors[2].next, 0);
     }
 }

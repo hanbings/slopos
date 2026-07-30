@@ -77,6 +77,9 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     if multiblock.inode.size != 6144 {
         device.fail("ext4 multiblock file size mismatch");
     }
+    mount
+        .prefetch_file_pair(&mut device, &multiblock, 0, 1)
+        .await;
     let mut multiblock_bytes = 0usize;
     for logical_block in 0..2 {
         let bytes = mount
@@ -96,13 +99,14 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         multiblock.inode.number,
     ));
     crate::serial::serialln(format_args!(
-        "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={}",
-        mount.cache.hits, mount.cache.misses
+        "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={}",
+        mount.cache.hits, mount.cache.misses, mount.cache.batched_pairs
     ));
     let (interrupts, queue_interrupts) = crate::virtio::interrupt_counts();
     crate::serial::serialln(format_args!(
-        "SLOPOS-VIRTIO: async block sequence complete requests={} interrupts={interrupts} queue_interrupts={queue_interrupts}",
-        device.request_count()
+        "SLOPOS-VIRTIO: bounded block sequence complete requests={} max_in_flight={} interrupts={interrupts} queue_interrupts={queue_interrupts}",
+        device.request_count(),
+        device.max_in_flight()
     ));
     pending::<()>().await;
     unreachable!()
@@ -233,6 +237,37 @@ impl ReadOnlyMount {
         file: &ReadOnlyFile,
         logical_block: u32,
     ) -> &'a [u8] {
+        let physical_block = self.file_physical_block(device, file, logical_block);
+        let block = self
+            .cache
+            .read_block(device, &self.superblock, physical_block)
+            .await;
+        let byte_offset = u64::from(logical_block) * u64::from(self.superblock.block_size);
+        let remaining = file.inode.size - byte_offset;
+        let length = remaining.min(u64::from(self.superblock.block_size)) as usize;
+        &block[..length]
+    }
+
+    async fn prefetch_file_pair(
+        &mut self,
+        device: &mut BlockDevice,
+        file: &ReadOnlyFile,
+        first_logical_block: u32,
+        second_logical_block: u32,
+    ) {
+        let first = self.file_physical_block(device, file, first_logical_block);
+        let second = self.file_physical_block(device, file, second_logical_block);
+        self.cache
+            .prefetch_pair(device, &self.superblock, first, second)
+            .await;
+    }
+
+    fn file_physical_block(
+        &self,
+        device: &BlockDevice,
+        file: &ReadOnlyFile,
+        logical_block: u32,
+    ) -> u64 {
         let file_block_count = file
             .inode
             .size
@@ -253,14 +288,7 @@ impl ReadOnlyMount {
         if physical_block >= self.superblock.block_count {
             device.fail("ext4 regular file block is outside the filesystem");
         }
-        let block = self
-            .cache
-            .read_block(device, &self.superblock, physical_block)
-            .await;
-        let byte_offset = u64::from(logical_block) * u64::from(self.superblock.block_size);
-        let remaining = file.inode.size - byte_offset;
-        let length = remaining.min(u64::from(self.superblock.block_size)) as usize;
-        &block[..length]
+        physical_block
     }
 
     fn directory_extent(&self, device: &BlockDevice, inode: &Inode) -> Extent {
@@ -310,6 +338,7 @@ struct BlockCache {
     next_victim: usize,
     hits: u64,
     misses: u64,
+    batched_pairs: u64,
 }
 
 impl BlockCache {
@@ -327,6 +356,7 @@ impl BlockCache {
             next_victim: 0,
             hits: 0,
             misses: 0,
+            batched_pairs: 0,
         }
     }
 
@@ -363,6 +393,58 @@ impl BlockCache {
         self.entries[victim].valid = true;
         self.misses += 1;
         self.entry_bytes(victim)
+    }
+
+    async fn prefetch_pair(
+        &mut self,
+        device: &mut BlockDevice,
+        superblock: &Superblock,
+        first_block: u64,
+        second_block: u64,
+    ) {
+        if first_block == second_block {
+            device.fail("ext4 paired prefetch blocks are not distinct");
+        }
+        let first_cached = self
+            .entries
+            .iter()
+            .any(|entry| entry.valid && entry.block == first_block);
+        let second_cached = self
+            .entries
+            .iter()
+            .any(|entry| entry.valid && entry.block == second_block);
+        if first_cached || second_cached {
+            return;
+        }
+
+        let first_sector = block_to_sector(device, superblock, first_block);
+        let second_sector = block_to_sector(device, superblock, second_block);
+        device
+            .read_pair(first_sector, second_sector, BLOCK_SIZE)
+            .await;
+
+        let first_victim = self.next_victim;
+        let second_victim = (first_victim + 1) % CACHE_ENTRY_COUNT;
+        self.next_victim = (second_victim + 1) % CACHE_ENTRY_COUNT;
+        for (slot, victim, block) in [
+            (0, first_victim, first_block),
+            (1, second_victim, second_block),
+        ] {
+            let frame = self.entries[victim].frame;
+            // SAFETY: each completed DMA slot and each selected cache frame
+            // are disjoint live 4 KiB buffers.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    device.pair_data(slot, BLOCK_SIZE).as_ptr(),
+                    frame as *mut u8,
+                    BLOCK_SIZE,
+                )
+            };
+            self.entries[victim].block = block;
+            self.entries[victim].valid = true;
+        }
+        self.misses += 2;
+        self.batched_pairs += 1;
     }
 
     fn entry_bytes(&self, index: usize) -> &[u8] {

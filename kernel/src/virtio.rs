@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicU64, Ordering, fence};
 use core::task::{Context, Poll};
 use slopos_pci::{Device, VirtioRegion};
 use slopos_virtio::{
-    BLOCK_REQUEST_IN, BlockRequestHeader, Descriptor, block_read_descriptors, choose_queue_size,
+    BLOCK_REQUEST_IN, BlockRequestHeader, Descriptor, block_read_descriptors_at, choose_queue_size,
 };
 
 const STATUS_ACKNOWLEDGE: u8 = 1;
@@ -36,6 +36,8 @@ const BLOCK_STATUS_OK: u8 = 0;
 const QUEUE_LIMIT: u16 = 8;
 const SECTOR_SIZE: usize = 512;
 const DATA_PAGE_SIZE: usize = 4096;
+const REQUEST_SLOT_COUNT: usize = 2;
+const DESCRIPTORS_PER_REQUEST: u16 = 3;
 
 static ISR_BASE: AtomicU64 = AtomicU64::new(0);
 static INTERRUPT_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -46,12 +48,17 @@ pub struct BlockDevice {
     descriptor_page: usize,
     available_page: usize,
     used_page: usize,
-    control_page: usize,
-    data_page: usize,
+    request_slots: [RequestSlot; REQUEST_SLOT_COUNT],
     notify_address: usize,
     queue_size: u16,
     capacity_sectors: u64,
     available_index: u16,
+}
+
+#[derive(Clone, Copy)]
+struct RequestSlot {
+    control_page: usize,
+    data_page: usize,
 }
 
 pub fn initialize_block(
@@ -112,13 +119,24 @@ pub fn initialize_block(
     let offered_queue_size = read_u16(common_base, COMMON_QUEUE_SIZE);
     let queue_size = choose_queue_size(offered_queue_size, QUEUE_LIMIT)
         .unwrap_or_else(|| fail(common_base, "virtio queue is too small"));
+    if usize::from(queue_size) < REQUEST_SLOT_COUNT * DESCRIPTORS_PER_REQUEST as usize {
+        fail(common_base, "virtio queue cannot hold two block requests");
+    }
     write_u16(common_base, COMMON_QUEUE_SIZE, queue_size);
 
     let descriptor_page = allocate_zeroed_frame();
     let available_page = allocate_zeroed_frame();
     let used_page = allocate_zeroed_frame();
-    let control_page = allocate_zeroed_frame();
-    let data_page = allocate_zeroed_frame();
+    let request_slots = [
+        RequestSlot {
+            control_page: allocate_zeroed_frame(),
+            data_page: allocate_zeroed_frame(),
+        },
+        RequestSlot {
+            control_page: allocate_zeroed_frame(),
+            data_page: allocate_zeroed_frame(),
+        },
+    ];
     write_u64(common_base, COMMON_QUEUE_DESCRIPTOR, descriptor_page as u64);
     write_u64(common_base, COMMON_QUEUE_DRIVER, available_page as u64);
     write_u64(common_base, COMMON_QUEUE_DEVICE, used_page as u64);
@@ -159,8 +177,7 @@ pub fn initialize_block(
             descriptor_page,
             available_page,
             used_page,
-            control_page,
-            data_page,
+            request_slots,
             notify_address,
             queue_size,
             capacity_sectors,
@@ -193,6 +210,62 @@ pub fn interrupt_counts() -> (u64, u64) {
 
 impl BlockDevice {
     pub(crate) async fn read(&mut self, sector: u64, byte_count: usize) {
+        self.validate_read(sector, byte_count);
+        self.prepare_request(0, sector, byte_count);
+        let expected_used_index = self.publish(&[0]);
+        Completion {
+            used_page: self.used_page,
+            expected_used_index,
+        }
+        .await;
+        fence(Ordering::Acquire);
+        self.validate_status(0);
+    }
+
+    pub(crate) async fn read_pair(
+        &mut self,
+        first_sector: u64,
+        second_sector: u64,
+        byte_count: usize,
+    ) {
+        self.validate_read(first_sector, byte_count);
+        self.validate_read(second_sector, byte_count);
+        self.prepare_request(0, first_sector, byte_count);
+        self.prepare_request(1, second_sector, byte_count);
+        let expected_used_index = self.publish(&[0, DESCRIPTORS_PER_REQUEST]);
+        Completion {
+            used_page: self.used_page,
+            expected_used_index,
+        }
+        .await;
+        fence(Ordering::Acquire);
+        self.validate_status(0);
+        self.validate_status(1);
+    }
+
+    pub(crate) fn data(&self, byte_count: usize) -> &[u8] {
+        self.slot_data(0, byte_count)
+    }
+
+    pub(crate) fn pair_data(&self, slot: usize, byte_count: usize) -> &[u8] {
+        if slot >= REQUEST_SLOT_COUNT {
+            self.fail("virtio request slot is out of bounds");
+        }
+        self.slot_data(slot, byte_count)
+    }
+
+    fn slot_data(&self, slot: usize, byte_count: usize) -> &[u8] {
+        if byte_count > DATA_PAGE_SIZE {
+            self.fail("virtio block buffer view is out of bounds");
+        }
+        // SAFETY: data_page is a permanently live DMA frame and callers only
+        // request the completed prefix, bounded by DATA_PAGE_SIZE.
+        unsafe {
+            core::slice::from_raw_parts(self.request_slots[slot].data_page as *const u8, byte_count)
+        }
+    }
+
+    fn validate_read(&self, sector: u64, byte_count: usize) {
         if byte_count == 0
             || byte_count > DATA_PAGE_SIZE
             || byte_count % SECTOR_SIZE != 0
@@ -200,71 +273,74 @@ impl BlockDevice {
                 .checked_add((byte_count / SECTOR_SIZE) as u64)
                 .is_none_or(|end| end > self.capacity_sectors)
         {
-            fail(
-                self.common_base,
-                "virtio block read is outside device bounds",
-            );
+            self.fail("virtio block read is outside device bounds");
         }
-        let expected_used_index = self.available_index.wrapping_add(1);
-        // SAFETY: a previous request completed before this reusable descriptor
-        // chain and its exclusive control/data pages are rewritten.
+    }
+
+    fn prepare_request(&self, slot_index: usize, sector: u64, byte_count: usize) {
+        let slot = self.request_slots[slot_index];
+        let head = slot_index as u16 * DESCRIPTORS_PER_REQUEST;
+        // SAFETY: this slot is not in flight; it owns its control/data pages
+        // and three descriptor entries until the next used-index completion.
         unsafe {
             ptr::write_volatile(
-                self.control_page as *mut BlockRequestHeader,
+                slot.control_page as *mut BlockRequestHeader,
                 BlockRequestHeader {
                     request_type: BLOCK_REQUEST_IN,
                     reserved: 0,
                     sector,
                 },
             );
-            ptr::write_bytes(self.data_page as *mut u8, 0, byte_count);
-            let status = self.control_page + size_of::<BlockRequestHeader>();
+            ptr::write_bytes(slot.data_page as *mut u8, 0, byte_count);
+            let status = slot.control_page + size_of::<BlockRequestHeader>();
             ptr::write_volatile(status as *mut u8, 0xff);
-            let chain = block_read_descriptors(
-                self.control_page as u64,
+            let chain = block_read_descriptors_at(
+                head,
+                slot.control_page as u64,
                 size_of::<BlockRequestHeader>() as u32,
-                self.data_page as u64,
+                slot.data_page as u64,
                 byte_count as u32,
                 status as u64,
             );
             let descriptors = self.descriptor_page as *mut Descriptor;
-            for (index, descriptor) in chain.into_iter().enumerate() {
-                ptr::write_volatile(descriptors.add(index), descriptor);
+            for (offset, descriptor) in chain.into_iter().enumerate() {
+                ptr::write_volatile(descriptors.add(usize::from(head) + offset), descriptor);
             }
-            let ring_slot = usize::from(self.available_index % self.queue_size);
-            ptr::write_volatile(
-                (self.available_page + 4 + ring_slot * size_of::<u16>()) as *mut u16,
-                0,
-            );
+        }
+    }
+
+    fn publish(&mut self, heads: &[u16]) -> u16 {
+        if heads.is_empty() || heads.len() > REQUEST_SLOT_COUNT {
+            self.fail("virtio publish batch size is invalid");
+        }
+        // SAFETY: each head names a prepared, disjoint descriptor chain and
+        // available ring slots are owned by the driver until index publication.
+        unsafe {
+            for (offset, head) in heads.iter().enumerate() {
+                let ring_index = self.available_index.wrapping_add(offset as u16);
+                let ring_slot = usize::from(ring_index % self.queue_size);
+                ptr::write_volatile(
+                    (self.available_page + 4 + ring_slot * size_of::<u16>()) as *mut u16,
+                    *head,
+                );
+            }
+            let expected_used_index = self.available_index.wrapping_add(heads.len() as u16);
             fence(Ordering::Release);
             ptr::write_volatile((self.available_page + 2) as *mut u16, expected_used_index);
             self.available_index = expected_used_index;
             fence(Ordering::SeqCst);
             ptr::write_volatile(self.notify_address as *mut u16, 0);
-        }
-        Completion {
-            used_page: self.used_page,
-            expected_used_index,
-        }
-        .await;
-        fence(Ordering::Acquire);
-        // SAFETY: the used index for this chain is visible, so the device has
-        // completed its write to the one-byte status field.
-        if unsafe {
-            ptr::read_volatile((self.control_page + size_of::<BlockRequestHeader>()) as *const u8)
-        } != BLOCK_STATUS_OK
-        {
-            fail(self.common_base, "virtio block request returned an error");
+            expected_used_index
         }
     }
 
-    pub(crate) fn data(&self, byte_count: usize) -> &[u8] {
-        if byte_count > DATA_PAGE_SIZE {
-            self.fail("virtio block buffer view is out of bounds");
+    fn validate_status(&self, slot_index: usize) {
+        let status = self.request_slots[slot_index].control_page + size_of::<BlockRequestHeader>();
+        // SAFETY: Completion observed the used index covering this slot, so
+        // the device's status-byte write is visible.
+        if unsafe { ptr::read_volatile(status as *const u8) } != BLOCK_STATUS_OK {
+            self.fail("virtio block request returned an error");
         }
-        // SAFETY: data_page is a permanently live DMA frame and callers only
-        // request the completed prefix, bounded by DATA_PAGE_SIZE.
-        unsafe { core::slice::from_raw_parts(self.data_page as *const u8, byte_count) }
     }
 
     pub(crate) const fn queue_size(&self) -> u16 {
@@ -277,6 +353,10 @@ impl BlockDevice {
 
     pub(crate) const fn request_count(&self) -> u16 {
         self.available_index
+    }
+
+    pub(crate) const fn max_in_flight(&self) -> usize {
+        REQUEST_SLOT_COUNT
     }
 
     pub(crate) fn fail(&self, message: &'static str) -> ! {
