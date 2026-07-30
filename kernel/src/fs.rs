@@ -704,7 +704,10 @@ async fn load_and_run_init(
             crate::process::ProcessEvent::Close(request) => {
                 complete_process_close(&mut open_files, request)
             }
-            crate::process::ProcessEvent::Exited => break,
+            crate::process::ProcessEvent::Exited => {
+                release_exited_process_files(device, &mut open_files);
+                break;
+            }
         };
     }
 }
@@ -795,8 +798,13 @@ async fn complete_process_read(
     crate::process::advance_fd(request.fd, bytes)
         .unwrap_or_else(|_| device.fail("process VFS read offset advance failed"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-VFS: process read complete pid=1 fd={} inode={} offset={} requested={} bytes={bytes} async=true",
-        request.fd, file.inode.number, window.offset, request.requested
+        "SLOPOS-VFS: process read complete pid=1 fd={} inode={} offset={} requested={} bytes={bytes} user_pages={} cross_page={} async=true",
+        request.fd,
+        file.inode.number,
+        window.offset,
+        request.requested,
+        request.user_pages(),
+        request.user_pages() > 1
     ));
     crate::process::resume_probe(bytes as i64, Some(&output[..bytes]))
 }
@@ -827,11 +835,13 @@ async fn complete_process_write(
     crate::process::advance_fd(request.fd, bytes)
         .unwrap_or_else(|_| device.fail("process VFS write offset advance failed"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-VFS: process write complete pid=1 fd={} inode={} offset={} requested={} bytes={bytes} async=true flushed=true",
+        "SLOPOS-VFS: process write complete pid=1 fd={} inode={} offset={} requested={} bytes={bytes} user_pages={} cross_page={} async=true flushed=true",
         request.fd,
         file.inode.number,
         window.offset,
-        input.len()
+        input.len(),
+        request.user_pages(),
+        request.user_pages() > 1
     ));
     crate::process::resume_probe(bytes as i64, None)
 }
@@ -856,6 +866,26 @@ fn complete_process_close(
         request.fd
     ));
     crate::process::resume_probe(0, None)
+}
+
+fn release_exited_process_files(
+    device: &BlockDevice,
+    open_files: &mut [Option<Ext4File>; PROCESS_FILE_CAPACITY],
+) {
+    let descriptors = crate::process::close_all_files()
+        .unwrap_or_else(|_| device.fail("exited process descriptor cleanup failed"));
+    let mut backing_objects = 0usize;
+    for file in open_files {
+        if file.take().is_some() {
+            backing_objects += 1;
+        }
+    }
+    if descriptors != backing_objects {
+        device.fail("exited process descriptor/backing cleanup diverged");
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-PROCESS: pid=1 exit resources released descriptors={descriptors} backing_objects={backing_objects} address_space_retained=true"
+    ));
 }
 
 async fn read_process_file_range(

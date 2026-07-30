@@ -380,6 +380,17 @@ impl<const N: usize> FileDescriptorTable<N> {
         Ok(())
     }
 
+    pub fn close_all(&mut self) -> usize {
+        let mut closed = 0;
+        for descriptor in &mut self.descriptors {
+            if descriptor.open {
+                *descriptor = Descriptor::EMPTY;
+                closed += 1;
+            }
+        }
+        closed
+    }
+
     fn descriptor(&self, fd: u32) -> Result<&Descriptor, VfsError> {
         let index = descriptor_index(fd)?;
         self.descriptors
@@ -484,6 +495,15 @@ mod tests {
         descriptors.close(fd).unwrap();
         assert_eq!(
             descriptors.read_window(fd, 1),
+            Err(VfsError::BadFileDescriptor)
+        );
+        let first = descriptors.open(node).unwrap();
+        let second = descriptors.open(node).unwrap();
+        assert_eq!((first, second), (3, 4));
+        assert_eq!(descriptors.close_all(), 2);
+        assert_eq!(descriptors.close_all(), 0);
+        assert_eq!(
+            descriptors.read_window(first, 1),
             Err(VfsError::BadFileDescriptor)
         );
     }

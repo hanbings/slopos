@@ -14,7 +14,9 @@ const CACHE_DISABLE: u64 = 1 << 4;
 const USER_ACCESSIBLE: u64 = 1 << 2;
 const HUGE: u64 = 1 << 7;
 pub const USER_CODE_BASE: u64 = 0x4000_0000;
-pub const USER_STACK_TOP: u64 = USER_CODE_BASE + 2 * PAGE_SIZE;
+pub const USER_STACK_PAGES: usize = 2;
+pub const USER_STACK_BASE: u64 = USER_CODE_BASE + PAGE_SIZE;
+pub const USER_STACK_TOP: u64 = USER_STACK_BASE + USER_STACK_PAGES as u64 * PAGE_SIZE;
 
 pub struct PagingStats {
     pub pml4: u64,
@@ -31,7 +33,7 @@ pub struct MmioRange {
 pub struct UserAddressSpace {
     pub root: u64,
     pub code_frame: u64,
-    pub stack_frame: u64,
+    pub stack_frames: [u64; USER_STACK_PAGES],
 }
 
 pub fn install(framebuffer: FramebufferInfo, mmio_ranges: &[MmioRange]) -> PagingStats {
@@ -129,7 +131,7 @@ pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressS
     let user_directory = table_frame();
     let user_table = table_frame();
     let code_frame = data_frame();
-    let stack_frame = data_frame();
+    let stack_frames = [data_frame(), data_frame()];
     // SAFETY: code_frame is exclusive, writable through the kernel identity map,
     // and the source is bounded to one page.
     unsafe {
@@ -138,8 +140,9 @@ pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressS
     let pdpt_index = ((USER_CODE_BASE >> 30) & 0x1ff) as usize;
     let directory_index = ((USER_CODE_BASE >> 21) & 0x1ff) as usize;
     let code_index = ((USER_CODE_BASE >> 12) & 0x1ff) as usize;
-    let stack_index = code_index + 1;
-    if get_entry(process_low_pdpt, pdpt_index) & PRESENT != 0 || stack_index >= ENTRY_COUNT {
+    let first_stack_index = code_index + 1;
+    let last_stack_index = first_stack_index + USER_STACK_PAGES - 1;
+    if get_entry(process_low_pdpt, pdpt_index) & PRESENT != 0 || last_stack_index >= ENTRY_COUNT {
         crate::fatal("user virtual address range overlaps a kernel mapping");
     }
     set_entry(
@@ -157,16 +160,18 @@ pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressS
         code_index,
         code_frame | PRESENT | USER_ACCESSIBLE,
     );
-    set_entry(
-        user_table,
-        stack_index,
-        stack_frame | PRESENT | WRITABLE | USER_ACCESSIBLE,
-    );
+    for (index, frame) in stack_frames.iter().copied().enumerate() {
+        set_entry(
+            user_table,
+            first_stack_index + index,
+            frame | PRESENT | WRITABLE | USER_ACCESSIBLE,
+        );
+    }
 
     UserAddressSpace {
         root,
         code_frame,
-        stack_frame,
+        stack_frames,
     }
 }
 

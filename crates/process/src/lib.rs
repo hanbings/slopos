@@ -274,6 +274,14 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
             .map_err(ProcessError::Vfs)
     }
 
+    pub fn close_all_files(&mut self, pid: ProcessId) -> Result<usize, ProcessError> {
+        let slot = self.slot_mut(pid).ok_or(ProcessError::NotFound)?;
+        if slot.state != Some(ProcessState::Exited) {
+            return Err(ProcessError::InvalidState);
+        }
+        Ok(slot.descriptors.close_all())
+    }
+
     pub const fn len(&self) -> usize {
         self.count
     }
@@ -683,6 +691,19 @@ mod tests {
         let mut table = ProcessTable::<1, 1>::new();
         let pid = table.spawn(None, IMAGE).unwrap();
         table.mark_running(pid).unwrap();
+        let fd = table
+            .open_file(
+                pid,
+                FileNode {
+                    filesystem_id: 1,
+                    node_id: 1,
+                    size: 0,
+                },
+                AccessMode::ReadOnly,
+            )
+            .unwrap();
+        assert_eq!(fd, 3);
+        assert_eq!(table.close_all_files(pid), Err(ProcessError::InvalidState));
         table.exit(pid, 0).unwrap();
         assert_eq!(
             table.open_file(
@@ -696,6 +717,8 @@ mod tests {
             ),
             Err(ProcessError::InvalidState)
         );
+        assert_eq!(table.close_all_files(pid), Ok(1));
+        assert_eq!(table.close_all_files(pid), Ok(0));
     }
 
     fn stack_string(stack: &[u8], pointer: u64) -> &[u8] {

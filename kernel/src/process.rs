@@ -12,7 +12,7 @@ use slopos_vfs::{AccessMode, FileNode, ReadWindow, VfsError, WriteWindow};
 const PID: u32 = 1;
 const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
-const PROCESS_EXPECTED_SYSCALLS: u64 = 15;
+const PROCESS_EXPECTED_SYSCALLS: u64 = 14;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
 const LINUX_AT_FDCWD: u64 = (-100i64) as u64;
@@ -66,7 +66,7 @@ static PROCESS_TABLE: ProcessTableStorage =
 #[derive(Clone, Copy)]
 struct UserMapping {
     code_frame: u64,
-    stack_frame: u64,
+    stack_frames: [u64; crate::paging::USER_STACK_PAGES],
     code_start: u64,
     code_end: u64,
     stack_start: u64,
@@ -103,6 +103,13 @@ pub struct ReadRequest {
     pub fd: u32,
     pub requested: usize,
     destination: u64,
+    user_pages: u8,
+}
+
+impl ReadRequest {
+    pub const fn user_pages(&self) -> u8 {
+        self.user_pages
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -110,11 +117,16 @@ pub struct WriteRequest {
     pub fd: u32,
     input: [u8; PROCESS_SYSCALL_IO_CAPACITY],
     input_length: usize,
+    user_pages: u8,
 }
 
 impl WriteRequest {
     pub fn input(&self) -> &[u8] {
         &self.input[..self.input_length]
+    }
+
+    pub const fn user_pages(&self) -> u8 {
+        self.user_pages
     }
 }
 
@@ -226,7 +238,10 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
     // stack frame that remains identity-mapped by the kernel and is not yet
     // reachable by user mode.
     let stack = unsafe {
-        core::slice::from_raw_parts_mut(address_space.stack_frame as *mut u8, PAGE_SIZE as usize)
+        core::slice::from_raw_parts_mut(
+            address_space.stack_frames[crate::paging::USER_STACK_PAGES - 1] as *mut u8,
+            PAGE_SIZE as usize,
+        )
     };
     let initial_stack = build_linux_initial_stack(
         stack,
@@ -239,10 +254,10 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
     .unwrap_or_else(|_| crate::fatal("boot user initial stack construction failed"));
     set_user_mapping(UserMapping {
         code_frame: address_space.code_frame,
-        stack_frame: address_space.stack_frame,
+        stack_frames: address_space.stack_frames,
         code_start: crate::paging::USER_CODE_BASE,
         code_end: crate::paging::USER_CODE_BASE + segment.memory_size(),
-        stack_start: stack_base,
+        stack_start: crate::paging::USER_STACK_BASE,
         stack_end: crate::paging::USER_STACK_TOP,
     });
     clear_pending_syscall();
@@ -264,7 +279,7 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
         "SLOPOS-PROCESS: table initialized capacity={PROCESS_CAPACITY} pid={PID} state=ready fd_capacity={PROCESS_FD_CAPACITY} per_process_fds=true"
     ));
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={PID} source={source} path={path} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frame={:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        "SLOPOS-PROCESS: pid={PID} source={source} path={path} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frames={:#x}/{:#x} code=user-readonly stack=user-writable kernel=supervisor",
         elf.entry(),
         elf.load_segment_count(),
         user_image.len(),
@@ -274,11 +289,13 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
         crate::paging::USER_CODE_BASE,
         crate::paging::USER_STACK_TOP,
         address_space.code_frame,
-        address_space.stack_frame
+        address_space.stack_frames[0],
+        address_space.stack_frames[1]
     ));
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={PID} initial_stack abi=linux-x86_64 rsp={:#x} aligned=16 argc={} argv0=/sbin/slop-init envc={} auxv_pairs={} bytes={}",
+        "SLOPOS-PROCESS: pid={PID} initial_stack abi=linux-x86_64 rsp={:#x} aligned=16 stack_pages={} argc={} argv0=/sbin/slop-init envc={} auxv_pairs={} bytes={}",
         initial_stack.stack_pointer,
+        crate::paging::USER_STACK_PAGES,
         initial_stack.argument_count,
         initial_stack.environment_count,
         initial_stack.auxiliary_pairs,
@@ -318,6 +335,10 @@ pub fn seek_fd(fd: u32, offset: u64) -> Result<(), ProcessError> {
 
 pub fn close_fd(fd: u32) -> Result<(), ProcessError> {
     process_table_mut().close_fd(PID, fd)
+}
+
+pub fn close_all_files() -> Result<usize, ProcessError> {
+    process_table_mut().close_all_files(PID)
 }
 
 pub fn resume_probe(result: i64, read_output: Option<&[u8]>) -> ProcessEvent {
@@ -374,7 +395,7 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
     if process.state != ProcessState::Running
         || frame.user_rip < process.image.user_memory_start
         || frame.user_rip >= process.image.user_memory_end
-        || frame.user_rsp < process.image.stack_top - PAGE_SIZE
+        || frame.user_rsp < crate::paging::USER_STACK_BASE
         || frame.user_rsp > process.image.stack_top
         || frame.user_rflags & RFLAGS_RESERVED_ONE == 0
     {
@@ -426,20 +447,23 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 frame.rax = 0;
                 return 0;
             }
-            if user_physical_pointer(frame.rsi, requested, true).is_none() {
+            if !validate_user_range(frame.rsi, requested, true) {
                 frame.rax = LINUX_EFAULT as u64;
                 return 0;
             }
+            let user_pages = user_page_count(frame.rsi, requested)
+                .unwrap_or_else(|| crate::fatal("validated read range has invalid page span"));
             suspend_syscall(
                 frame,
                 PendingSyscall::Read(ReadRequest {
                     fd,
                     requested,
                     destination: frame.rsi,
+                    user_pages,
                 }),
             );
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd={fd} requested={requested} origin=cpl3"
+                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd={fd} requested={requested} user_pages={user_pages} origin=cpl3"
             ));
             2
         }
@@ -449,8 +473,11 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                     frame.rax = LINUX_EINVAL as u64;
                     return 0;
                 }
-                let message = user_bytes(frame.rsi, USER_MESSAGE.len())
-                    .unwrap_or_else(|| crate::fatal("user write range is outside PT_LOAD memory"));
+                let mut message = [0u8; USER_MESSAGE.len()];
+                if copy_from_user(frame.rsi, &mut message).is_none() {
+                    frame.rax = LINUX_EFAULT as u64;
+                    return 0;
+                }
                 if message != USER_MESSAGE {
                     crate::fatal("user write syscall payload is invalid");
                 }
@@ -473,19 +500,21 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 frame.rax = 0;
                 return 0;
             }
-            let Some(input) = user_bytes(frame.rsi, requested) else {
-                frame.rax = LINUX_EFAULT as u64;
-                return 0;
-            };
             let mut request = WriteRequest {
                 fd,
                 input: [0; PROCESS_SYSCALL_IO_CAPACITY],
                 input_length: requested,
+                user_pages: user_page_count(frame.rsi, requested)
+                    .unwrap_or_else(|| crate::fatal("write range has invalid page span")),
             };
-            request.input[..requested].copy_from_slice(input);
+            if copy_from_user(frame.rsi, &mut request.input[..requested]).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
             suspend_syscall(frame, PendingSyscall::Write(request));
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd={fd} requested={requested} origin=cpl3"
+                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd={fd} requested={requested} user_pages={} origin=cpl3",
+                request.user_pages()
             ));
             2
         }
@@ -593,9 +622,9 @@ fn copy_user_path(address: u64, access_mode: AccessMode) -> Result<OpenAtRequest
     for index in 0..PROCESS_SYSCALL_PATH_CAPACITY {
         let index = u64::try_from(index).map_err(|_| LINUX_EFAULT)?;
         let byte_address = address.checked_add(index).ok_or(LINUX_EFAULT)?;
-        let byte = user_bytes(byte_address, 1)
-            .and_then(|bytes| bytes.first().copied())
-            .ok_or(LINUX_EFAULT)?;
+        let mut byte = [0u8; 1];
+        copy_from_user(byte_address, &mut byte).ok_or(LINUX_EFAULT)?;
+        let byte = byte[0];
         if byte == 0 {
             if request.path_length == 0 {
                 return Err(LINUX_EINVAL);
@@ -608,36 +637,103 @@ fn copy_user_path(address: u64, access_mode: AccessMode) -> Result<OpenAtRequest
     Err(LINUX_ENAMETOOLONG)
 }
 
-fn user_bytes(address: u64, length: usize) -> Option<&'static [u8]> {
-    let pointer = user_physical_pointer(address, length, false)?;
-    // SAFETY: the translated physical frame is permanently identity-mapped and
-    // the requested range was bounded to one live user page.
-    Some(unsafe { core::slice::from_raw_parts(pointer.cast_const(), length) })
-}
-
-fn copy_to_user(address: u64, bytes: &[u8]) -> Option<()> {
-    let pointer = user_physical_pointer(address, bytes.len(), true)?;
-    // SAFETY: the destination was bounded to the writable user stack frame,
-    // which remains exclusively owned by suspended PID 1.
-    unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), pointer, bytes.len()) };
+fn copy_from_user(address: u64, output: &mut [u8]) -> Option<()> {
+    if !validate_user_range(address, output.len(), false) {
+        return None;
+    }
+    let mut copied = 0usize;
+    while copied < output.len() {
+        let cursor = address.checked_add(u64::try_from(copied).ok()?)?;
+        let (pointer, length) = user_physical_chunk(cursor, output.len() - copied, false)?;
+        // SAFETY: validation covered the entire source range before mutation;
+        // each chunk is bounded to a live, identity-mapped user frame.
+        unsafe {
+            ptr::copy_nonoverlapping(pointer.cast_const(), output[copied..].as_mut_ptr(), length)
+        };
+        copied += length;
+    }
     Some(())
 }
 
-fn user_physical_pointer(address: u64, length: usize, writable: bool) -> Option<*mut u8> {
-    let mapping = user_mapping()?;
-    let length = u64::try_from(length).ok()?;
-    let end = address.checked_add(length)?;
-    let (virtual_start, physical_start) =
-        if !writable && address >= mapping.code_start && end <= mapping.code_end {
-            (mapping.code_start, mapping.code_frame)
-        } else if address >= mapping.stack_start && end <= mapping.stack_end {
-            (mapping.stack_start, mapping.stack_frame)
-        } else {
-            return None;
+fn copy_to_user(address: u64, bytes: &[u8]) -> Option<()> {
+    if !validate_user_range(address, bytes.len(), true) {
+        return None;
+    }
+    let mut copied = 0usize;
+    while copied < bytes.len() {
+        let cursor = address.checked_add(u64::try_from(copied).ok()?)?;
+        let (pointer, length) = user_physical_chunk(cursor, bytes.len() - copied, true)?;
+        // SAFETY: validation covered the entire destination before mutation;
+        // PID 1 is suspended and each chunk lies in a writable mapped frame.
+        unsafe {
+            ptr::copy_nonoverlapping(bytes[copied..].as_ptr(), pointer, length);
+        }
+        copied += length;
+    }
+    Some(())
+}
+
+fn validate_user_range(address: u64, length: usize, writable: bool) -> bool {
+    let Ok(total_length) = u64::try_from(length) else {
+        return false;
+    };
+    if address.checked_add(total_length).is_none() {
+        return false;
+    }
+    let mut checked = 0usize;
+    while checked < length {
+        let Ok(offset) = u64::try_from(checked) else {
+            return false;
         };
-    let offset = address.checked_sub(virtual_start)?;
-    let physical = physical_start.checked_add(offset)?;
-    Some(physical as *mut u8)
+        let Some(cursor) = address.checked_add(offset) else {
+            return false;
+        };
+        let Some((_, chunk)) = user_physical_chunk(cursor, length - checked, writable) else {
+            return false;
+        };
+        checked += chunk;
+    }
+    true
+}
+
+fn user_page_count(address: u64, length: usize) -> Option<u8> {
+    let length = u64::try_from(length).ok()?;
+    if length == 0 {
+        return Some(0);
+    }
+    let last = address.checked_add(length - 1)?;
+    let first_page = address / PAGE_SIZE;
+    let last_page = last / PAGE_SIZE;
+    u8::try_from(last_page.checked_sub(first_page)?.checked_add(1)?).ok()
+}
+
+fn user_physical_chunk(
+    address: u64,
+    maximum_length: usize,
+    writable: bool,
+) -> Option<(*mut u8, usize)> {
+    let mapping = user_mapping()?;
+    if maximum_length == 0 {
+        return Some((core::ptr::null_mut(), 0));
+    }
+    if !writable && address >= mapping.code_start && address < mapping.code_end {
+        let offset = address.checked_sub(mapping.code_start)?;
+        let physical = mapping.code_frame.checked_add(offset)?;
+        let remaining = usize::try_from(mapping.code_end - address).ok()?;
+        return Some((physical as *mut u8, maximum_length.min(remaining)));
+    }
+    if address < mapping.stack_start || address >= mapping.stack_end {
+        return None;
+    }
+    let stack_offset = address.checked_sub(mapping.stack_start)?;
+    let page_index = usize::try_from(stack_offset / PAGE_SIZE).ok()?;
+    let page_offset = stack_offset % PAGE_SIZE;
+    let physical = mapping
+        .stack_frames
+        .get(page_index)?
+        .checked_add(page_offset)?;
+    let page_remaining = usize::try_from(PAGE_SIZE - page_offset).ok()?;
+    Some((physical as *mut u8, maximum_length.min(page_remaining)))
 }
 
 fn set_user_mapping(mapping: UserMapping) {

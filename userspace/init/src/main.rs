@@ -8,8 +8,10 @@ use core::mem::size_of;
 use core::panic::PanicInfo;
 
 const USER_ENTRY: u64 = 0x4000_0000;
-const USER_STACK_BASE: u64 = 0x4000_1000;
-const USER_STACK_TOP: u64 = 0x4000_2000;
+const INITIAL_STACK_BASE: u64 = 0x4000_2000;
+const USER_STACK_TOP: u64 = 0x4000_3000;
+const CROSS_PAGE_BUFFER_ADDRESS: u64 = INITIAL_STACK_BASE - 32;
+const CROSS_PAGE_TRANSFER_BYTES: usize = 64;
 const INITIAL_STACK_WORDS: usize = 26;
 const INITIAL_ARGC: u64 = 2;
 const INITIAL_ENVC: usize = 3;
@@ -39,8 +41,8 @@ static CONFIG_PATH: &[u8; 24] = b"/etc/slopos/system.conf\0";
 static EXPECTED_CONFIG: &[u8; 76] =
     b"# SlopOS declarative configuration seed\ntheme = \"ocean\"\nhostname = \"slopos\"\n";
 static WRITE_PATH: &[u8; 34] = b"/usr/share/slopos/write-probe.bin\0";
-static PATCH: &[u8; 16] = &[0xa5; 16];
-static ORIGINAL: &[u8; 16] = b"PPPPPPPPPPPPPPPP";
+const PATCH_BYTE: u8 = 0xa5;
+const ORIGINAL_BYTE: u8 = b'P';
 static EXPECTED_ARGV: [&[u8]; 2] = [b"/sbin/slop-init", b"--system"];
 static EXPECTED_ENVIRONMENT: [&[u8]; INITIAL_ENVC] = [
     b"SLOPOS_SESSION=desktop",
@@ -100,45 +102,58 @@ pub extern "C" fn slopos_init_main(initial_stack: *const u64) -> ! {
     if fd != EXPECTED_FD {
         exit(4);
     }
+    // SAFETY: the kernel maps two writable stack pages. This bounded scratch
+    // range deliberately spans their non-contiguous physical frames without
+    // overlapping the initial stack or Rust call stack in the upper page.
+    let transfer = unsafe {
+        core::slice::from_raw_parts_mut(
+            CROSS_PAGE_BUFFER_ADDRESS as *mut u8,
+            CROSS_PAGE_TRANSFER_BYTES,
+        )
+    };
+    transfer.fill(PATCH_BYTE);
     if !seek(fd, 123)
         || syscall3(
             SYS_WRITE,
             fd as u64,
-            PATCH.as_ptr() as u64,
-            PATCH.len() as u64,
-        ) != PATCH.len() as i64
+            transfer.as_ptr() as u64,
+            transfer.len() as u64,
+        ) != transfer.len() as i64
         || !seek(fd, 123)
     {
         exit(5);
     }
-    let mut verification = [0u8; PATCH.len()];
+    transfer.fill(0);
     if syscall3(
         SYS_READ,
         fd as u64,
-        verification.as_mut_ptr() as u64,
-        verification.len() as u64,
-    ) != verification.len() as i64
-        || verification != *PATCH
-        || !seek(fd, 123)
-        || syscall3(
-            SYS_WRITE,
-            fd as u64,
-            ORIGINAL.as_ptr() as u64,
-            ORIGINAL.len() as u64,
-        ) != ORIGINAL.len() as i64
+        transfer.as_mut_ptr() as u64,
+        transfer.len() as u64,
+    ) != transfer.len() as i64
+        || !transfer.iter().all(|byte| *byte == PATCH_BYTE)
         || !seek(fd, 123)
     {
         exit(6);
     }
-    verification.fill(0);
+    transfer.fill(ORIGINAL_BYTE);
+    if syscall3(
+        SYS_WRITE,
+        fd as u64,
+        transfer.as_ptr() as u64,
+        transfer.len() as u64,
+    ) != transfer.len() as i64
+        || !seek(fd, 123)
+    {
+        exit(6);
+    }
+    transfer.fill(0);
     if syscall3(
         SYS_READ,
         fd as u64,
-        verification.as_mut_ptr() as u64,
-        verification.len() as u64,
-    ) != verification.len() as i64
-        || verification != *ORIGINAL
-        || syscall1(SYS_CLOSE, fd as u64) != 0
+        transfer.as_mut_ptr() as u64,
+        transfer.len() as u64,
+    ) != transfer.len() as i64
+        || !transfer.iter().all(|byte| *byte == ORIGINAL_BYTE)
     {
         exit(7);
     }
@@ -156,7 +171,7 @@ fn initial_stack_is_valid(initial_stack: *const u64) -> bool {
     let Some(end) = address.checked_add((INITIAL_STACK_WORDS * size_of::<u64>()) as u64) else {
         return false;
     };
-    if address & 15 != 0 || address < USER_STACK_BASE || end > USER_STACK_TOP {
+    if address & 15 != 0 || address < INITIAL_STACK_BASE || end > USER_STACK_TOP {
         return false;
     }
     // SAFETY: the range above is bounded to the single user stack page mapped
@@ -208,7 +223,7 @@ fn stack_string_equals(address: u64, expected: &[u8]) -> bool {
     else {
         return false;
     };
-    if address < USER_STACK_BASE || end > USER_STACK_TOP {
+    if address < INITIAL_STACK_BASE || end > USER_STACK_TOP {
         return false;
     }
     // SAFETY: address..end was bounded to the mapped stack page.
