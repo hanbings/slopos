@@ -815,6 +815,7 @@ async fn drive_user_processes(
     open_files: &mut ProcessOpenFiles,
     mut event: crate::process::ProcessEvent,
 ) -> crate::process::DesktopWaitRequest {
+    let mut parked_desktop = None;
     loop {
         event = match event {
             crate::process::ProcessEvent::OpenAt(request) => {
@@ -833,15 +834,28 @@ async fn drive_user_processes(
             crate::process::ProcessEvent::Preempted { pid, tick, count } => {
                 crate::process::schedule_after_preemption(pid, tick, count)
             }
-            crate::process::ProcessEvent::Waiting { pid } => crate::process::schedule_next(pid),
-            crate::process::ProcessEvent::DesktopWaiting(request) => {
-                if request.kind() == EVENT_CONFIG_APPLIED {
+            crate::process::ProcessEvent::Waiting { pid } => {
+                if let Some(request) = parked_desktop.take() {
                     return request;
                 }
-                let event =
-                    crate::desktop_service::next_event(request.kind(), request.after_generation())
-                        .await;
-                crate::process::resume_desktop_wait(request, event)
+                crate::process::schedule_next(pid)
+            }
+            crate::process::ProcessEvent::DesktopWaiting(request) => {
+                if request.kind() == EVENT_CONFIG_APPLIED {
+                    if let Some(next) = crate::process::schedule_next_if_any(request.pid()) {
+                        parked_desktop = Some(request);
+                        next
+                    } else {
+                        return request;
+                    }
+                } else {
+                    let event = crate::desktop_service::next_event(
+                        request.kind(),
+                        request.after_generation(),
+                    )
+                    .await;
+                    crate::process::resume_desktop_wait(request, event)
+                }
             }
             crate::process::ProcessEvent::Exited { pid } => {
                 release_exited_process_files(device, open_files, pid);

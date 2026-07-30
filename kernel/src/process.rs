@@ -180,6 +180,10 @@ pub struct DesktopWaitRequest {
 }
 
 impl DesktopWaitRequest {
+    pub const fn pid(&self) -> u32 {
+        self.pid
+    }
+
     pub const fn kind(&self) -> u16 {
         self.kind
     }
@@ -496,7 +500,10 @@ fn run_process(pid: u32) -> ProcessEvent {
     set_current_process(Some(pid));
     // SAFETY: the process owns a validated address space. Ready processes use
     // their ELF entry/initial stack; Runnable processes use a frame captured
-    // by the IF-masked syscall or timer entry.
+    // by the IF-masked syscall or timer entry. The shared resume path uses
+    // IRETQ so timer preemption preserves RCX/R11 as ordinary user GPRs,
+    // while syscall resumes retain the architecturally clobbered values that
+    // SYSCALL placed in those registers.
     unsafe {
         if process.state == ProcessState::Ready {
             slopos_enter_user(
@@ -774,9 +781,12 @@ const fn desktop_event_name(kind: u16) -> &'static str {
 }
 
 pub fn schedule_next(after_pid: u32) -> ProcessEvent {
-    let pid = process_table()
-        .next_schedulable_after(after_pid)
-        .unwrap_or_else(|| crate::fatal("cooperative scheduler found no runnable process"));
+    schedule_next_if_any(after_pid)
+        .unwrap_or_else(|| crate::fatal("cooperative scheduler found no runnable process"))
+}
+
+pub fn schedule_next_if_any(after_pid: u32) -> Option<ProcessEvent> {
+    let pid = process_table().next_schedulable_after(after_pid)?;
     let process = process_table()
         .snapshot(pid)
         .unwrap_or_else(|_| crate::fatal("scheduled process disappeared"));
@@ -785,7 +795,7 @@ pub fn schedule_next(after_pid: u32) -> ProcessEvent {
         process.state
     ));
     match process.state {
-        ProcessState::Ready | ProcessState::Runnable => run_process(pid),
+        ProcessState::Ready | ProcessState::Runnable => Some(run_process(pid)),
         ProcessState::Running | ProcessState::Blocked | ProcessState::Exited => {
             crate::fatal("cooperative scheduler selected an invalid state")
         }
@@ -1550,10 +1560,16 @@ slopos_resume_user:
     mov [rip + slopos_user_kernel_cr3], rax
     mov cr3, rdi
     mov rax, rsi
+    push 0x1b
+    push qword ptr [rax + 136]
+    push qword ptr [rax + 128]
+    push 0x23
+    push qword ptr [rax + 120]
     mov r15, [rax + 0]
     mov r14, [rax + 8]
     mov r13, [rax + 16]
     mov r12, [rax + 24]
+    mov r11, [rax + 32]
     mov r10, [rax + 40]
     mov r9, [rax + 48]
     mov r8, [rax + 56]
@@ -1561,12 +1577,10 @@ slopos_resume_user:
     mov rdi, [rax + 72]
     mov rsi, [rax + 80]
     mov rdx, [rax + 88]
+    mov rcx, [rax + 96]
     mov rbx, [rax + 104]
-    mov rcx, [rax + 120]
-    mov r11, [rax + 128]
-    mov rsp, [rax + 136]
     mov rax, [rax + 112]
-    sysretq
+    iretq
     .size slopos_resume_user, .-slopos_resume_user
 
     .global slopos_syscall_entry
