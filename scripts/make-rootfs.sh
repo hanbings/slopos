@@ -27,21 +27,18 @@ cp -a "${source_dir}/." "${staging_dir}/"
 mkdir -p "${staging_dir}/usr/share/slopos"
 dd if=/dev/zero bs=1024 count=6 status=none \
     | tr '\000' 'Z' >"${staging_dir}/usr/share/slopos/multiblock.bin"
-truncate -s 128M "${image}"
+truncate -s 256M "${image}"
 "${mke2fs}" \
     -q \
     -t ext4 \
     -F \
     -b 4096 \
+    -N 32 \
     -L SLOPOS_ROOT \
     -U 534c4f50-4f53-4000-8000-000000000001 \
-    -E lazy_itable_init=0,lazy_journal_init=0,root_owner=0:0 \
+    -E lazy_itable_init=0,lazy_journal_init=0,root_owner=0:0,hash_seed=534c4f50-4f53-4000-8000-000000000002 \
     -d "${staging_dir}" \
     "${image}"
-"${debugfs}" \
-    -w \
-    -R "set_super_value hash_seed 534c4f50-4f53-4000-8000-000000000002" \
-    "${image}" >/dev/null 2>&1
 
 # mke2fs -d intentionally preserves source ownership and inode timestamps.
 # Normalize every populated inode so a fresh checkout under another uid/umask

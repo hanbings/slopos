@@ -218,6 +218,36 @@ impl Superblock {
         self.first_data_block as u64 + 1
     }
 
+    pub fn group_count(&self) -> u64 {
+        let data_blocks = self
+            .block_count
+            .saturating_sub(u64::from(self.first_data_block));
+        data_blocks.div_ceil(u64::from(self.blocks_per_group))
+    }
+
+    pub fn inode_group(&self, inode_number: u32) -> Result<u32, ParseError> {
+        if inode_number == 0 || inode_number > self.inode_count {
+            return Err(ParseError::InvalidInode);
+        }
+        Ok((inode_number - 1) / self.inodes_per_group)
+    }
+
+    pub fn group_descriptor_location(
+        &self,
+        group_index: u32,
+    ) -> Result<GroupDescriptorLocation, ParseError> {
+        if u64::from(group_index) >= self.group_count() {
+            return Err(ParseError::InvalidGeometry);
+        }
+        let byte_offset = u64::from(group_index)
+            .checked_mul(u64::from(self.descriptor_size))
+            .ok_or(ParseError::InvalidGeometry)?;
+        Ok(GroupDescriptorLocation {
+            block: self.group_descriptor_block() + byte_offset / u64::from(self.block_size),
+            offset: (byte_offset % u64::from(self.block_size)) as u32,
+        })
+    }
+
     pub fn inode_location(
         &self,
         inode_number: u32,
@@ -258,6 +288,12 @@ pub struct GroupDescriptor {
     pub free_inode_count: u32,
     pub used_directory_count: u32,
     pub checksum: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GroupDescriptorLocation {
+    pub block: u64,
+    pub offset: u32,
 }
 
 impl GroupDescriptor {
@@ -633,7 +669,7 @@ mod tests {
 
     fn valid_superblock() -> [u8; SUPERBLOCK_SIZE] {
         let mut bytes = [0u8; SUPERBLOCK_SIZE];
-        bytes[0..4].copy_from_slice(&8192u32.to_le_bytes());
+        bytes[0..4].copy_from_slice(&16384u32.to_le_bytes());
         bytes[4..8].copy_from_slice(&32768u32.to_le_bytes());
         bytes[12..16].copy_from_slice(&30000u32.to_le_bytes());
         bytes[16..20].copy_from_slice(&8000u32.to_le_bytes());
@@ -815,6 +851,22 @@ mod tests {
     #[test]
     fn validates_group_and_locates_root_inode() {
         let superblock = Superblock::parse(&valid_superblock()).unwrap();
+        assert_eq!(superblock.inode_group(ROOT_INODE), Ok(0));
+        assert_eq!(superblock.inode_group(8193), Ok(1));
+        assert_eq!(
+            superblock.group_descriptor_location(0),
+            Ok(GroupDescriptorLocation {
+                block: 1,
+                offset: 0
+            })
+        );
+        assert_eq!(
+            superblock.group_descriptor_location(1),
+            Ok(GroupDescriptorLocation {
+                block: 1,
+                offset: 64
+            })
+        );
         let descriptor = valid_group_descriptor(&superblock);
         let group = GroupDescriptor::parse(&descriptor, 0, &superblock).unwrap();
         assert_eq!(group.inode_table_block, 49);

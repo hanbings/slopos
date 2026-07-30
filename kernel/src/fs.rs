@@ -28,10 +28,11 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     let volume_name = core::str::from_utf8(superblock.volume_name())
         .unwrap_or_else(|_| device.fail("ext4 volume label is not UTF-8"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: superblock valid label={volume_name} block_size={} blocks={} inodes={} features={:#x}/{:#x}/{:#x}",
+        "SLOPOS-EXT4: superblock valid label={volume_name} block_size={} blocks={} inodes={} groups={} features={:#x}/{:#x}/{:#x}",
         superblock.block_size,
         superblock.block_count,
         superblock.inode_count,
+        superblock.group_count(),
         superblock.feature_compat,
         superblock.feature_incompat,
         superblock.feature_read_only_compat
@@ -40,7 +41,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     let root = mount.probe_root(&mut device).await;
     crate::serial::serialln(format_args!(
         "SLOPOS-EXT4: root directory valid group_inode_table={} inode={} extent_block={} entries={} etc_inode={} lost_found_inode={} metadata_checksums=group/inode/directory",
-        mount.group.inode_table_block,
+        mount.group0.inode_table_block,
         ROOT_INODE,
         root.extent_block,
         root.entry_count,
@@ -84,9 +85,13 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         }
         multiblock_bytes += bytes.len();
     }
+    let multiblock_group = mount
+        .superblock
+        .inode_group(multiblock.inode.number)
+        .unwrap_or_else(|_| device.fail("ext4 multiblock inode group is invalid"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: multiblock file valid inode={} bytes={multiblock_bytes} logical_blocks=2 path=/usr/share/slopos/multiblock.bin",
-        multiblock.inode.number
+        "SLOPOS-EXT4: multiblock file valid inode={} inode_group={multiblock_group} bytes={multiblock_bytes} logical_blocks=2 path=/usr/share/slopos/multiblock.bin",
+        multiblock.inode.number,
     ));
     let (interrupts, queue_interrupts) = crate::virtio::interrupt_counts();
     crate::serial::serialln(format_args!(
@@ -99,7 +104,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
 
 struct ReadOnlyMount {
     superblock: Superblock,
-    group: GroupDescriptor,
+    group0: GroupDescriptor,
 }
 
 impl ReadOnlyMount {
@@ -110,12 +115,8 @@ impl ReadOnlyMount {
         if superblock.block_size as usize != BLOCK_SIZE {
             device.fail("ext4 mount requires a 4096-byte block size");
         }
-        let descriptor_sector =
-            block_to_sector(device, &superblock, superblock.group_descriptor_block());
-        device.read(descriptor_sector, BLOCK_SIZE).await;
-        let group = GroupDescriptor::parse(device.data(BLOCK_SIZE), 0, &superblock)
-            .unwrap_or_else(|_| device.fail("ext4 group descriptor validation failed"));
-        Self { superblock, group }
+        let group0 = read_group_descriptor(device, &superblock, 0).await;
+        Self { superblock, group0 }
     }
 
     async fn probe_root(&self, device: &mut BlockDevice) -> RootProbe {
@@ -185,9 +186,18 @@ impl ReadOnlyMount {
     }
 
     async fn read_inode(&self, device: &mut BlockDevice, inode_number: u32) -> Inode {
+        let group_index = self
+            .superblock
+            .inode_group(inode_number)
+            .unwrap_or_else(|_| device.fail("ext4 inode number is invalid"));
+        let group = if group_index == 0 {
+            self.group0
+        } else {
+            read_group_descriptor(device, &self.superblock, group_index).await
+        };
         let location = self
             .superblock
-            .inode_location(inode_number, &self.group)
+            .inode_location(inode_number, &group)
             .unwrap_or_else(|_| device.fail("ext4 inode location is invalid"));
         let sector = block_to_sector(device, &self.superblock, location.block);
         device.read(sector, BLOCK_SIZE).await;
@@ -263,6 +273,36 @@ struct RootProbe {
     entry_count: usize,
     etc_inode: u32,
     lost_and_found_inode: u32,
+}
+
+async fn read_group_descriptor(
+    device: &mut BlockDevice,
+    superblock: &Superblock,
+    group_index: u32,
+) -> GroupDescriptor {
+    let location = superblock
+        .group_descriptor_location(group_index)
+        .unwrap_or_else(|_| device.fail("ext4 group descriptor location is invalid"));
+    let sector = block_to_sector(device, superblock, location.block);
+    device.read(sector, BLOCK_SIZE).await;
+    let offset = location.offset as usize;
+    let end = offset + usize::from(superblock.descriptor_size);
+    if end > BLOCK_SIZE {
+        device.fail("ext4 group descriptor crosses the read block");
+    }
+    let descriptor = GroupDescriptor::parse(
+        &device.data(BLOCK_SIZE)[offset..end],
+        group_index,
+        superblock,
+    )
+    .unwrap_or_else(|_| device.fail("ext4 group descriptor validation failed"));
+    if group_index != 0 {
+        crate::serial::serialln(format_args!(
+            "SLOPOS-EXT4: group descriptor valid group={group_index} inode_table={}",
+            descriptor.inode_table_block
+        ));
+    }
+    descriptor
 }
 
 fn block_to_sector(device: &BlockDevice, superblock: &Superblock, block: u64) -> u64 {
