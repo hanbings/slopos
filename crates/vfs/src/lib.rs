@@ -17,6 +17,8 @@ pub enum VfsError {
     FileTableFull,
     BadFileDescriptor,
     InvalidOffset,
+    NotReadable,
+    NotWritable,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -202,10 +204,28 @@ pub struct FileNode {
     pub size: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccessMode {
+    ReadOnly,
+    WriteOnly,
+    ReadWrite,
+}
+
+impl AccessMode {
+    const fn readable(self) -> bool {
+        matches!(self, Self::ReadOnly | Self::ReadWrite)
+    }
+
+    const fn writable(self) -> bool {
+        matches!(self, Self::WriteOnly | Self::ReadWrite)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Descriptor {
     node: FileNode,
     offset: u64,
+    access_mode: AccessMode,
     open: bool,
 }
 
@@ -217,6 +237,7 @@ impl Descriptor {
             size: 0,
         },
         offset: 0,
+        access_mode: AccessMode::ReadOnly,
         open: false,
     };
 }
@@ -232,6 +253,13 @@ pub struct ReadWindow {
     pub length: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WriteWindow {
+    pub node: FileNode,
+    pub offset: u64,
+    pub length: usize,
+}
+
 impl<const N: usize> FileDescriptorTable<N> {
     pub const fn new() -> Self {
         Self {
@@ -240,26 +268,52 @@ impl<const N: usize> FileDescriptorTable<N> {
     }
 
     pub fn open(&mut self, node: FileNode) -> Result<u32, VfsError> {
+        self.open_with_mode(node, AccessMode::ReadOnly)
+    }
+
+    pub fn open_with_mode(
+        &mut self,
+        node: FileNode,
+        access_mode: AccessMode,
+    ) -> Result<u32, VfsError> {
         let index = self
             .descriptors
             .iter()
             .position(|descriptor| !descriptor.open)
             .ok_or(VfsError::FileTableFull)?;
+        let descriptor_number = u32::try_from(index).map_err(|_| VfsError::FileTableFull)?;
+        let fd = FIRST_FILE_DESCRIPTOR
+            .checked_add(descriptor_number)
+            .ok_or(VfsError::FileTableFull)?;
         self.descriptors[index] = Descriptor {
             node,
             offset: 0,
+            access_mode,
             open: true,
         };
-        let index = u32::try_from(index).map_err(|_| VfsError::FileTableFull)?;
-        FIRST_FILE_DESCRIPTOR
-            .checked_add(index)
-            .ok_or(VfsError::FileTableFull)
+        Ok(fd)
     }
 
     pub fn read_window(&self, fd: u32, requested: usize) -> Result<ReadWindow, VfsError> {
         let descriptor = self.descriptor(fd)?;
+        if !descriptor.access_mode.readable() {
+            return Err(VfsError::NotReadable);
+        }
         let remaining = descriptor.node.size.saturating_sub(descriptor.offset);
         Ok(ReadWindow {
+            node: descriptor.node,
+            offset: descriptor.offset,
+            length: requested.min(usize::try_from(remaining).unwrap_or(usize::MAX)),
+        })
+    }
+
+    pub fn write_window(&self, fd: u32, requested: usize) -> Result<WriteWindow, VfsError> {
+        let descriptor = self.descriptor(fd)?;
+        if !descriptor.access_mode.writable() {
+            return Err(VfsError::NotWritable);
+        }
+        let remaining = descriptor.node.size.saturating_sub(descriptor.offset);
+        Ok(WriteWindow {
             node: descriptor.node,
             offset: descriptor.offset,
             length: requested.min(usize::try_from(remaining).unwrap_or(usize::MAX)),
@@ -400,5 +454,38 @@ mod tests {
             descriptors.read_window(fd, 1),
             Err(VfsError::BadFileDescriptor)
         );
+    }
+
+    #[test]
+    fn enforces_descriptor_access_modes() {
+        let mut descriptors = FileDescriptorTable::<1>::new();
+        let node = FileNode {
+            filesystem_id: 1,
+            node_id: 42,
+            size: 10,
+        };
+        let fd = descriptors.open(node).unwrap();
+        assert_eq!(descriptors.write_window(fd, 1), Err(VfsError::NotWritable));
+        descriptors.close(fd).unwrap();
+
+        let fd = descriptors
+            .open_with_mode(node, AccessMode::WriteOnly)
+            .unwrap();
+        assert_eq!(descriptors.read_window(fd, 1), Err(VfsError::NotReadable));
+        assert_eq!(
+            descriptors.write_window(fd, 6),
+            Ok(WriteWindow {
+                node,
+                offset: 0,
+                length: 6,
+            })
+        );
+        descriptors.close(fd).unwrap();
+
+        let fd = descriptors
+            .open_with_mode(node, AccessMode::ReadWrite)
+            .unwrap();
+        assert_eq!(descriptors.read_window(fd, 1).unwrap().length, 1);
+        assert_eq!(descriptors.write_window(fd, 1).unwrap().length, 1);
     }
 }

@@ -7,7 +7,7 @@ use slopos_ext4::{
     DirectoryBlock, Extent, ExtentNode, GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode,
     ROOT_INODE, SUPERBLOCK_SIZE, Superblock, validate_path_component,
 };
-use slopos_vfs::{AbsolutePath, FileDescriptorTable, FileNode, MountTable};
+use slopos_vfs::{AbsolutePath, AccessMode, FileDescriptorTable, FileNode, MountTable};
 
 use crate::virtio::BlockDevice;
 
@@ -258,29 +258,105 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     if original.len() != BLOCK_SIZE || original.iter().any(|byte| *byte != b'P') {
         device.fail("ext4 write probe initial content mismatch");
     }
-    let mut write_buffer = [0xa5; BLOCK_SIZE];
     let physical_block = mount
-        .overwrite_existing_file_block(&mut device, &write_probe, 0, &write_buffer)
-        .await;
-    let persisted = mount.read_file_block(&mut device, &write_probe, 0).await;
-    if persisted.iter().any(|byte| *byte != 0xa5) {
-        device.fail("ext4 write probe did not persist after flush");
+        .inode_physical_block(&mut device, &write_probe.inode, 0)
+        .await
+        .unwrap_or_else(|| device.fail("ext4 write probe is sparse"));
+    let write_fd = descriptors
+        .open_with_mode(
+            FileNode {
+                filesystem_id: ROOT_FILESYSTEM_ID,
+                node_id: u64::from(write_probe.inode.number),
+                size: write_probe.inode.size,
+            },
+            AccessMode::ReadWrite,
+        )
+        .unwrap_or_else(|_| device.fail("VFS writable descriptor allocation failed"));
+    if write_fd != fd {
+        device.fail("VFS closed descriptor was not reused");
     }
-    write_buffer.fill(b'P');
-    let restored_block = mount
-        .overwrite_existing_file_block(&mut device, &write_probe, 0, &write_buffer)
-        .await;
-    let restored = mount.read_file_block(&mut device, &write_probe, 0).await;
-    if restored_block != physical_block || restored.iter().any(|byte| *byte != b'P') {
-        device.fail("ext4 write probe restoration failed");
+    descriptors
+        .seek(write_fd, 123)
+        .unwrap_or_else(|_| device.fail("VFS writable descriptor seek failed"));
+    let write_bytes = [0xa5; 73];
+    if write_descriptor(
+        &mut mount,
+        &mut device,
+        &mut descriptors,
+        write_fd,
+        &write_probe,
+        &write_bytes,
+    )
+    .await
+        != write_bytes.len()
+    {
+        device.fail("VFS writable descriptor returned a short write");
+    }
+    descriptors
+        .seek(write_fd, 100)
+        .unwrap_or_else(|_| device.fail("VFS write verification seek failed"));
+    let mut persisted = [0u8; 119];
+    if read_descriptor(
+        &mut mount,
+        &mut device,
+        &mut descriptors,
+        write_fd,
+        &write_probe,
+        &mut persisted,
+    )
+    .await
+        != persisted.len()
+        || persisted[..23].iter().any(|byte| *byte != b'P')
+        || persisted[23..96].iter().any(|byte| *byte != 0xa5)
+        || persisted[96..].iter().any(|byte| *byte != b'P')
+    {
+        device.fail("VFS partial write did not persist after flush");
+    }
+    descriptors
+        .seek(write_fd, 123)
+        .unwrap_or_else(|_| device.fail("VFS restore seek failed"));
+    let restore_bytes = [b'P'; 73];
+    if write_descriptor(
+        &mut mount,
+        &mut device,
+        &mut descriptors,
+        write_fd,
+        &write_probe,
+        &restore_bytes,
+    )
+    .await
+        != restore_bytes.len()
+    {
+        device.fail("VFS writable descriptor returned a short restore");
+    }
+    descriptors
+        .seek(write_fd, 100)
+        .unwrap_or_else(|_| device.fail("VFS restore verification seek failed"));
+    let mut restored = [0u8; 119];
+    if read_descriptor(
+        &mut mount,
+        &mut device,
+        &mut descriptors,
+        write_fd,
+        &write_probe,
+        &mut restored,
+    )
+    .await
+        != restored.len()
+        || restored.iter().any(|byte| *byte != b'P')
+    {
+        device.fail("VFS partial write restoration failed");
     }
     if mount.cache.invalidations != 2 {
         device.fail("ext4 write probe cache invalidation count mismatch");
     }
+    descriptors
+        .close(write_fd)
+        .unwrap_or_else(|_| device.fail("VFS writable descriptor close failed"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: in-place write valid inode={} physical_block={physical_block} bytes={} writes=2 flushes=2 cache_invalidations={} restored=true path=/usr/share/slopos/write-probe.bin",
+        "SLOPOS-VFS: writable descriptor valid fd={write_fd} inode={} physical_block={physical_block} offset=123 bytes={} writes=2 flushes=2 cache_invalidations={} restored=true path=/usr/share/slopos/write-probe.bin",
         write_probe.inode.number,
-        write_buffer.len(),
+        write_bytes.len(),
         mount.cache.invalidations
     ));
 
@@ -343,6 +419,56 @@ async fn read_descriptor(
     descriptors
         .advance(fd, copied)
         .unwrap_or_else(|_| device.fail("VFS descriptor offset advance failed"));
+    copied
+}
+
+async fn write_descriptor(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    descriptors: &mut FileDescriptorTable<8>,
+    fd: u32,
+    file: &Ext4File,
+    input: &[u8],
+) -> usize {
+    let window = descriptors
+        .write_window(fd, input.len())
+        .unwrap_or_else(|_| device.fail("VFS descriptor write window failed"));
+    if window.node.filesystem_id != ROOT_FILESYSTEM_ID
+        || window.node.node_id != u64::from(file.inode.number)
+    {
+        device.fail("VFS writable descriptor vnode mismatch");
+    }
+    let block_size = u64::try_from(BLOCK_SIZE)
+        .unwrap_or_else(|_| device.fail("VFS block size conversion failed"));
+    let mut block_buffer = [0u8; BLOCK_SIZE];
+    let mut copied = 0usize;
+    while copied < window.length {
+        let copied_offset = u64::try_from(copied)
+            .unwrap_or_else(|_| device.fail("VFS write offset conversion failed"));
+        let absolute_offset = window
+            .offset
+            .checked_add(copied_offset)
+            .unwrap_or_else(|| device.fail("VFS write offset overflow"));
+        let logical_block = u32::try_from(absolute_offset / block_size)
+            .unwrap_or_else(|_| device.fail("VFS writable file block index overflow"));
+        let block_offset = usize::try_from(absolute_offset % block_size)
+            .unwrap_or_else(|_| device.fail("VFS writable block offset conversion failed"));
+        let block = mount.read_file_block(device, file, logical_block).await;
+        if block.len() != BLOCK_SIZE {
+            device.fail("VFS partial-block EOF writes are unsupported");
+        }
+        block_buffer.copy_from_slice(block);
+        let length = (window.length - copied).min(BLOCK_SIZE - block_offset);
+        block_buffer[block_offset..block_offset + length]
+            .copy_from_slice(&input[copied..copied + length]);
+        mount
+            .overwrite_existing_file_block(device, file, logical_block, &block_buffer)
+            .await;
+        copied += length;
+    }
+    descriptors
+        .advance(fd, copied)
+        .unwrap_or_else(|_| device.fail("VFS writable descriptor offset advance failed"));
     copied
 }
 
