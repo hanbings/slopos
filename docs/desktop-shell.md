@@ -4,11 +4,11 @@ SlopOS 桌面以 niri、Waybar 和 swww 的用户习惯作为兼容目标，但�
 
 ## 用户态桌面策略边界
 
-root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`。PID 2 使用独立 CR3、Linux 风格 initial stack 和 100 Hz TSC preemption 路径启动，以异步 `openat/read/close` 分块读取恰好 904-byte 的 `/etc/slopos/waybar.jsonc` 与 172-byte 的 `/etc/slopos/swww.env`，并分别做一次 EOF read；这些 bytes 不再只是 kernel 内的编译期常量。
+root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`。PID 2 使用独立 CR3、Linux 风格 initial stack 和 100 Hz TSC preemption 路径启动，以异步 `openat/read/close` 每次最多 256 bytes 分块读取 `/etc/slopos/waybar.jsonc` 与 `/etc/slopos/swww.env`，分别限制为 4096/512 bytes并验证非空 EOF；这些 bytes 不再只是 kernel 内的编译期常量。
 
-`crates/desktop-protocol` 定义 40-byte、显式 magic/version/size 的 `DesktopCommit`。消息包含 Waybar provider 与 swww policy capability、两份配置的 FNV-1a hash、CPU/Memory 初始值范围和 wallpaper id；reserved bit/byte 必须为零。私有 syscall `0x534c0001` 只接受 PID 2，并要求上一代 policy 已被实际应用后才接受下一代；kernel 再以自己嵌入的同源 asset 校验 hash，成功后用 release/acquire snapshot 唤醒 desktop task。当前 PID 2 发布 CPU 0%、Memory 36% 和 Aurora wallpaper，desktop 在首个 snapshot 到达前明确保持 `awaiting-user-policy`，而不是自行选择初始壁纸。
+`crates/desktop-protocol` 定义 40-byte、显式 magic/version/size 的 `DesktopCommit`。消息包含 Waybar provider 与 swww policy capability、两份配置的增量 FNV-1a hash、CPU/Memory 初始值范围和 wallpaper id；reserved bit/byte 必须为零。私有 syscall `0x534c0001` 只接受 PID 2，并要求上一代 policy 已被实际应用后才接受下一代；kernel 将 hash 与 VFS config bank 当前发布的 bytes 比较，成功后用 release/acquire snapshot 唤醒 desktop task，因此合法的有界自定义配置不必等于编译期 asset。当前 PID 2 发布 CPU 0%、Memory 36% 和 Aurora wallpaper，desktop 在首个 snapshot 到达前明确保持 `awaiting-user-policy`，而不是自行选择初始壁纸。
 
-私有 syscall `0x534c0002` 建立反向生命周期事件。PID 2 传入 event kind、上一代 generation 与 writable user buffer 后阻塞；desktop task 真正应用 policy 时发布 32-byte `policy-applied`，真正 swap 一套 VFS 配置时发布同结构的 `config-applied`。kernel 分别保存两条单调 generation，验证 kind/generation/capability/reserved fields，复制 event 到 PID 2 user stack并恢复其 CR3/frame。事件可以先于 block task 进入等待而到达，generation 状态仍保证不丢通知。四条 QEMU 回归都出现 `Blocked → desktop-event → Runnable`，所以这不是同步伪造的成功返回。
+私有 syscall `0x534c0002` 建立反向生命周期事件。PID 2 传入 event kind、上一代 generation 与 writable user buffer 后阻塞；desktop task 真正应用 policy 时发布 32-byte `policy-applied`，真正 swap 一套 VFS 配置时发布同结构的 `config-applied`。kernel 分别保存两条单调 generation，验证 kind/generation/capability/reserved fields，复制 event 到 PID 2 user stack并恢复其 CR3/frame。事件可以先于 block task 进入等待而到达，generation 状态仍保证不丢通知。五条主要 QEMU 回归都出现 `Blocked → desktop-event → Runnable`，所以这不是同步伪造的成功返回。
 
 `/sbin/slop-shell` 现在是跨 reload 常驻的 service：初次提交 policy generation 1 并收到确认后，它等待 config generation 1；收到后重新读取 Waybar/swww、提交 policy generation 2，再等待下一代 config。交互回归中的有效 `RELOAD` 发布 config generation 2，令 PID 2 再读文件并提交 policy generation 3；`RELOAD BAD` 保持 config generation 2，所以 PID 2 继续休眠且没有 policy generation 4。PID 1 在关闭自己的最后一个 fd 后常驻 `wait4` 作为 supervisor，block task 持有两者的 process/VFS runtime。
 
@@ -47,6 +47,8 @@ workspace "config" { open-on-output "SLOPOS-1" }
 
 binds {
     Mod+Left { focus-column-left; }
+    Mod+Shift+Left { move-column-left; }
+    Mod+Shift+Right { move-column-right; }
     Mod+Down { focus-workspace-down; }
     Mod+Shift+Down { move-column-to-workspace-down; }
     Mod+Minus { set-column-width "-10%"; }
@@ -75,11 +77,11 @@ layout {
 }
 ```
 
-parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。workspace 状态机为每个 workspace 保留独立 column strip；named workspace 后附加一个空 workspace。window rule 按出现顺序叠加，后匹配规则可覆盖先前的 `open-on-workspace`。bind chord 支持 `Mod`、`Ctrl`、`Shift`、`Alt` 与方向键、PageUp/PageDown、Return、Tab、Escape、单字符；当前 action 集为 focus column/workspace、move column to workspace、`set-column-width` 与 close window。列宽参数当前接受整数像素或 `1%..100%`，可用前缀 `+`/`-` 表示相对调整；尚不接受小数参数。
+parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。workspace 状态机为每个 workspace 保留独立 column strip；named workspace 后附加一个空 workspace。window rule 按出现顺序叠加，后匹配规则可覆盖先前的 `open-on-workspace`。bind chord 支持 `Mod`、`Ctrl`、`Shift`、`Alt` 与方向键、PageUp/PageDown、Return、Tab、Escape、单字符；当前 action 集为 focus column/workspace、同 strip 左右重排列、move column to workspace、`set-column-width` 与 close window。列宽参数当前接受整数像素或 `1%..100%`，可用前缀 `+`/`-` 表示相对调整；尚不接受小数参数。
 
-9 项 layout 测试和 3 项 workspace/bind/rule 测试覆盖配置拒绝边界、open/focus/scroll/stack/close、绝对/相对列宽、workspace switch/move 与规则顺序。设计语义依据 [niri 默认配置](https://github.com/YaLTeR/niri/blob/main/resources/default-config.kdl)、[Layout 配置文档](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Layout)、[Key Bindings](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Key-Bindings) 与 [Window Rules](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Window-Rules)。
+10 项 layout 测试和 3 项 workspace/bind/rule 测试覆盖配置拒绝边界、open/focus/scroll/stack/close、绝对/相对列宽、列重排、workspace switch/move 与规则顺序。设计语义依据 [niri 默认配置](https://github.com/YaLTeR/niri/blob/main/resources/default-config.kdl)、[Layout 配置文档](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Layout)、[Key Bindings](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Key-Bindings) 与 [Window Rules](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Window-Rules)。
 
-当前 kernel desktop 用三个固定 surface 演示这些行为：Terminal/System 位于 `main`，Config 的 `app-id` 规则把它放到 `config`；顶部 workspace module 显示 active index。PS/2 parser 跟踪 Super/Ctrl/Shift/Alt 与扩展方向键，使 KDL bind 实际驱动桌面。交互回归用 `Mod+Equal` 把 Terminal 从 512 px 放大至 614 px并截图，再以 `Mod+Minus` 恢复 512 px。niri 配置已按上述 user/system/fallback 顺序从 VFS 加载，并能整套原子重读；尚未实现动态 workspace 创建/销毁、完整 niri action/XKB 命名、multi-output、floating/tabbed column、复杂 match、animation、overview、IPC、自动文件监听、Wayland surface 或普通用户 client。
+当前 kernel desktop 用三个固定 surface 演示这些行为：Terminal/System 位于 `main`，Config 的 `app-id` 规则把它放到 `config`；顶部 workspace module 显示 active index。PS/2 parser 跟踪 Super/Ctrl/Shift/Alt 与扩展方向键，使 KDL bind 实际驱动桌面。交互回归用 `Mod+Equal` 把 Terminal 从 512 px 放大至 614 px并截图，再以 `Mod+Minus` 恢复 512 px；随后用 `Mod+Shift+Right` 把整列从 x=16 重排至 x=496并截图，再以 `Mod+Shift+Left` 恢复。niri 配置已按上述 user/system/fallback 顺序从 VFS 加载，并能整套原子重读；尚未实现动态 workspace 创建/销毁、完整 niri action/XKB 命名、multi-output、floating/tabbed column、复杂 match、animation、overview、IPC、自动文件监听、Wayland surface 或普通用户 client。
 
 ## Waybar 式顶部栏
 
@@ -103,6 +105,6 @@ VFS 中选中的 CSS 使用 Waybar 同样的 GTK CSS selector 命名；仓库默
 - VFS 中发现的 environment 文件以同名 `SWWW_TRANSITION*` 变量提供 boot/reload 默认值，仓库默认源是 `assets/swww.env`；
 - `none`、`simple`、`fade`、`left/right/top/bottom`、`center/outer`、`any/random` transition。
 
-两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart 与 `none` 重设。7 项 swww/PNM、12 项 niri layout/shell、7 项 Waybar JSONC/CSS 与 5 项 desktop commit/event protocol 测试，共 31 项。
+两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart 与 `none` 重设。7 项 swww/PNM、13 项 niri layout/shell、7 项 Waybar JSONC/CSS 与 5 项 desktop commit/event protocol 测试，共 32 项。
 
 命令与 transition 语义依据 [swww 官方 README](https://github.com/LGFae/swww)。初始 environment/hash/image policy 已由用户进程提交，environment 默认值也参与后续四文件 VFS 原子重载；daemon state 和 image decode/render 仍在 kernel，而不是常驻用户进程或 Unix socket。也没有 Wayland layer-shell、多 output、从 VFS 解码任意图片路径、PNG/JPEG/GIF decode、animated image cache、frame callback/timing、transition position/bezier/wave/grow 或 damage tracking。同步 framebuffer renderer 为限制最坏 CPU 时间，会把极小 step 最多采样成 17 帧，因此不声称二进制或动画时序完全兼容 swww。

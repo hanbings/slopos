@@ -49,6 +49,8 @@ pub enum BindingKey {
 pub enum NiriAction {
     FocusColumnLeft,
     FocusColumnRight,
+    MoveColumnLeft,
+    MoveColumnRight,
     FocusWorkspaceUp,
     FocusWorkspaceDown,
     MoveColumnToWorkspaceUp,
@@ -416,6 +418,8 @@ impl<'a> ShellConfigParser<'a> {
         Ok(match value {
             "focus-column-left" => NiriAction::FocusColumnLeft,
             "focus-column-right" => NiriAction::FocusColumnRight,
+            "move-column-left" => NiriAction::MoveColumnLeft,
+            "move-column-right" => NiriAction::MoveColumnRight,
             "focus-workspace-up" => NiriAction::FocusWorkspaceUp,
             "focus-workspace-down" => NiriAction::FocusWorkspaceDown,
             "move-column-to-workspace-up" => NiriAction::MoveColumnToWorkspaceUp,
@@ -786,6 +790,14 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].focus_column_right()
     }
 
+    pub fn move_column_left(&mut self) -> bool {
+        self.layouts[self.active].move_column_left()
+    }
+
+    pub fn move_column_right(&mut self) -> bool {
+        self.layouts[self.active].move_column_right()
+    }
+
     pub fn scroll_by(&mut self, delta: i32) {
         self.layouts[self.active].scroll_by(delta);
     }
@@ -861,6 +873,8 @@ mod tests {
             workspace "config" { open-on-output "SLOPOS-1"; }
             binds {
                 Mod+Left { focus-column-left; }
+                Mod+Shift+Left { move-column-left; }
+                Mod+Shift+Right { move-column-right; }
                 Mod+Shift+Down repeat=false { move-column-to-workspace-down; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
@@ -883,12 +897,26 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 5);
+        assert_eq!(config.bindings.len(), 7);
         assert_eq!(
             config
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Left),
             Some(NiriAction::FocusColumnLeft)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::SHIFT),
+                BindingKey::Left
+            ),
+            Some(NiriAction::MoveColumnLeft)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::SHIFT),
+                BindingKey::Right
+            ),
+            Some(NiriAction::MoveColumnRight)
         );
         assert_eq!(
             config.bindings.action(

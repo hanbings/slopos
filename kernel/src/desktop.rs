@@ -1015,6 +1015,8 @@ impl Desktop {
         let changed = match action {
             NiriAction::FocusColumnLeft => self.workspaces.focus_column_left(),
             NiriAction::FocusColumnRight => self.workspaces.focus_column_right(),
+            NiriAction::MoveColumnLeft => self.workspaces.move_column_left(),
+            NiriAction::MoveColumnRight => self.workspaces.move_column_right(),
             NiriAction::FocusWorkspaceUp => self.workspaces.focus_workspace_up(),
             NiriAction::FocusWorkspaceDown => self.workspaces.focus_workspace_down(),
             NiriAction::MoveColumnToWorkspaceUp => {
@@ -1055,6 +1057,20 @@ impl Desktop {
                 "SLOPOS-DESKTOP: window resized kind={} width={} layout=scrolling",
                 title(window.kind),
                 window.width
+            ));
+        }
+        if changed
+            && matches!(
+                action,
+                NiriAction::MoveColumnLeft | NiriAction::MoveColumnRight
+            )
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: column reordered kind={} x={} direction={} layout=scrolling",
+                title(window.kind),
+                window.x,
+                action_name(action)
             ));
         }
         serialln(format_args!(
@@ -1200,6 +1216,8 @@ const fn action_name(action: NiriAction) -> &'static str {
     match action {
         NiriAction::FocusColumnLeft => "focus-column-left",
         NiriAction::FocusColumnRight => "focus-column-right",
+        NiriAction::MoveColumnLeft => "move-column-left",
+        NiriAction::MoveColumnRight => "move-column-right",
         NiriAction::FocusWorkspaceUp => "focus-workspace-up",
         NiriAction::FocusWorkspaceDown => "focus-workspace-down",
         NiriAction::MoveColumnToWorkspaceUp => "move-column-to-workspace-up",

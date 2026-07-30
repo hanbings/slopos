@@ -73,6 +73,11 @@ monitor_type() {
     echo "screendump ${repo_dir}/evidence/window-resized.ppm"
     echo "sendkey meta_l-minus 50"
     sleep 1
+    echo "sendkey meta_l-shift-right 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/column-reordered.ppm"
+    echo "sendkey meta_l-shift-left 50"
+    sleep 1
     echo "sendkey meta_l-q 50"
     sleep 1
     echo "sendkey meta_l-q 50"
@@ -172,6 +177,10 @@ grep -Fq "SLOPOS-DESKTOP: window moved kind=TERMINAL" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=614 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=512 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=set-column-width changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: column reordered kind=TERMINAL x=496 direction=move-column-right layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=move-column-right changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=TERMINAL" "${serial_log}"
@@ -181,6 +190,7 @@ test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/window-moved.ppm"
 test -s "${repo_dir}/evidence/window-resized.ppm"
+test -s "${repo_dir}/evidence/column-reordered.ppm"
 test -s "${repo_dir}/evidence/workspace-config.ppm"
 test -s "${repo_dir}/evidence/wallpaper-only.ppm"
 if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; then
@@ -196,9 +206,11 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/window-moved.png"
     pnmtopng "${repo_dir}/evidence/window-resized.ppm" \
         >"${repo_dir}/evidence/window-resized.png"
+    pnmtopng "${repo_dir}/evidence/column-reordered.ppm" \
+        >"${repo_dir}/evidence/column-reordered.png"
     pnmtopng "${repo_dir}/evidence/workspace-config.ppm" \
         >"${repo_dir}/evidence/workspace-config.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-only.ppm" \
         >"${repo_dir}/evidence/wallpaper-only.png"
 fi
-echo "SlopOS VFS config reload/rollback, swww, niri workspace/bind/rule, viewport, resize, and close verified"
+echo "SlopOS VFS config reload/rollback, swww, niri workspace/bind/rule, viewport, resize, reorder, and close verified"

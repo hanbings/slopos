@@ -305,6 +305,28 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         true
     }
 
+    pub fn move_column_left(&mut self) -> bool {
+        if self.focused_column == 0 || self.column_count == 0 {
+            return false;
+        }
+        self.columns
+            .swap(self.focused_column, self.focused_column - 1);
+        self.focused_column -= 1;
+        self.ensure_focused_visible();
+        true
+    }
+
+    pub fn move_column_right(&mut self) -> bool {
+        if self.column_count == 0 || self.focused_column + 1 >= self.column_count {
+            return false;
+        }
+        self.columns
+            .swap(self.focused_column, self.focused_column + 1);
+        self.focused_column += 1;
+        self.ensure_focused_visible();
+        true
+    }
+
     pub fn focus_window_up(&mut self) -> bool {
         let column = &mut self.columns[self.focused_column];
         if column.window_count == 0 || column.focused_window == 0 {
@@ -1030,5 +1052,29 @@ mod tests {
             .change_focused_column_width(ColumnWidthChange::AdjustFixed(i32::MIN))
             .unwrap();
         assert_eq!(layout.tile_rect(1).unwrap().width, 1);
+    }
+
+    #[test]
+    fn moves_the_focused_column_without_changing_its_contents() {
+        let mut layout = ScrollLayout::<3, 2>::new(1000, 700, 30, LayoutConfig::default());
+        layout.open_window(10).unwrap();
+        layout.consume_window(11).unwrap();
+        layout.open_window(20).unwrap();
+        layout.focus_window(10).unwrap();
+
+        assert!(!layout.move_column_left());
+        assert!(layout.move_column_right());
+        assert_eq!(layout.focused_column(), Some(1));
+        assert_eq!(layout.focused_window(), Some(10));
+        assert_eq!(layout.tile_rect(10).unwrap().x, 484);
+        assert_eq!(layout.tile_rect(11).unwrap().x, 484);
+        assert_eq!(layout.tile_rect(20).unwrap().x, -32);
+
+        assert!(!layout.move_column_right());
+        assert!(layout.move_column_left());
+        assert_eq!(layout.focused_column(), Some(0));
+        assert_eq!(layout.focused_window(), Some(10));
+        assert_eq!(layout.tile_rect(10).unwrap().x, 16);
+        assert_eq!(layout.tile_rect(20).unwrap().x, 532);
     }
 }

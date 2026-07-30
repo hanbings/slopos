@@ -3,9 +3,9 @@
 当前内核在中断子系统初始化、ext4 root mount 与 journal recovery 后，由 block task 驱动 PID 1 与 PID 2。它的目标是验证一条最小但真实的 VFS ELF→process table→cooperative/preemptive scheduler→x86-64 privilege/syscall→async block completion boundary，而不是模拟用户态日志：
 
 - 以独立 `slopos-elf` crate 校验 little-endian x86-64 `ET_EXEC`、program-header geometry、`PT_LOAD` range/alignment/overlap/W^X 与 executable entry；
-- 由 `userspace/init` 生成 26344-byte Rust ELF、由 `userspace/desktop` 生成另一个 27656-byte Rust ELF；rootfs builder 分别安装为 inode 23 `/sbin/slop-init` 和 inode 24 `/sbin/slop-shell`，kernel 的 ext4 path walker 各跨七个逻辑块读取全部 bytes；
+- 由 `userspace/init` 生成 26344-byte Rust ELF、由 `userspace/desktop` 生成另一个 26560-byte Rust ELF；rootfs builder 分别安装为 inode 23 `/sbin/slop-init` 和 inode 24 `/sbin/slop-shell`，kernel 的 ext4 path walker 各跨七个逻辑块读取全部 bytes；
 - UEFI 仍从 ESP `/slopos/init.elf` 读入 BootInfo v2 校验副本；kernel 要求 root VFS image 与该副本逐字节一致，差异会停止启动；
-- 从 ELF file offset `0x1000` 分别复制 init 的 2608-byte 与 desktop service 的 3664-byte R+X `PT_LOAD`，各 code page 的剩余部分保持为零；
+- 从 ELF file offset `0x1000` 分别复制 init 的 2608-byte 与 desktop service 的 2528-byte R+X `PT_LOAD`，各 code page 的剩余部分保持为零；
 - 把 image/CR3/entry/stack/user range 插入容量 4 的 `slopos-process` 表；状态机支持 `Ready → Running → Blocked/Runnable → Running → Exited`，每个 PID 独立保留 exit status、syscall count、pending syscall 与保存的 syscall frame；
 - 每个 slot 自带独立、容量 8 的 `slopos-vfs::FileDescriptorTable`；6 项宿主测试覆盖 Linux 初始栈、PID/parent/capacity、blocked/runnable/round-robin transition、exit/reap/`close_all`，以及两个进程各自取得 fd 3、独立 seek 且 offset 互不影响；
 - frame allocator 为两个进程各建一个 PML4，并保留 supervisor-only kernel identity map；allocator 另有容量 256 的 recycled-frame stack，拒绝未分配、未对齐、重复或超容量释放；
@@ -32,9 +32,9 @@
 4. 用户态把 76 bytes 与编译时预期内容逐字节比较，随后 `close(3)`；
 5. `openat(AT_FDCWD, "/usr/share/slopos/write-probe.bin", O_RDWR, 0)` 复用 fd 3，然后在 fd 保持打开时再次 yield。PID 2 随即以自己的 descriptor table 打开配置并同样取得 fd 3，由此实测同号 descriptor 的 per-process ownership；
 6. 四次 `lseek(3, 123, SEEK_SET)` 分别定位 patch/verify/restore/verify；64-byte scratch buffer 位于 `0x40001fe0..0x40002020`，故意横跨两个 stack page。两次 write 和两次 read 完成可逆 patch，四个 completion marker 都记录 `cross_page=true`；
-7. PID 1 显式 `close(3)`，`write(1, message, 18)` 经 stdout 特判直接返回 18，再以 `wait4(-1, &status, 0, NULL)` 常驻等待。PID 2 不退出，因此四条 QEMU 回归都保持 PID 1 blocked，runtime marker 核对 `init=wait4` 与资源保留；process 宿主测试另覆盖 child exit 后的 wake、zombie immediate 与 cleanup 路径。
+7. PID 1 显式 `close(3)`，`write(1, message, 18)` 经 stdout 特判直接返回 18，再以 `wait4(-1, &status, 0, NULL)` 常驻等待。PID 2 不退出，因此五条主要 QEMU 回归都保持 PID 1 blocked，runtime marker 核对 `init=wait4` 与资源保留；process 宿主测试另覆盖 child exit 后的 wake、zombie immediate 与 cleanup 路径。
 
-PID 2 是 lifecycle-aware 的常驻桌面策略服务。第一次 yield 后它打开 inode 20 `/etc/slopos/waybar.jsonc`，保持自己的 fd 3 再 yield；随后以 256/256/256/136 bytes 四段读齐 904 bytes，并以额外 1-byte read 验证严格 EOF，close 后再打开 inode 17 `/etc/slopos/swww.env`，读齐 172 bytes并同样验证 EOF。用户态把两份内容与编译进自身的预期 asset 比较，然后以私有 `0x534c0001` syscall 提交 40-byte versioned desktop policy。kernel 只接受 PID 2，核对 magic/version/size/capability/reserved fields、两份配置 hash、CPU/Memory range 与 wallpaper id，并要求上一代 policy 已实际应用才允许递增提交。
+PID 2 是 lifecycle-aware 的常驻桌面策略服务。第一次 yield 后它打开 inode 20 `/etc/slopos/waybar.jsonc`，保持自己的 fd 3 再 yield；随后以最多 256-byte chunk 在 4096-byte 上限内读取、增量计算 FNV-1a并验证非空 EOF，close 后再以 512-byte 上限读取 inode 17 `/etc/slopos/swww.env`。用户态以私有 `0x534c0001` syscall 提交包含两份实际 VFS hash 的 40-byte versioned desktop policy。kernel 只接受 PID 2，核对 magic/version/size/capability/reserved fields、当前 config bank hash、CPU/Memory range 与 wallpaper id，并要求上一代 policy 已实际应用才允许递增提交。
 
 PID 2 随后用 `0x534c0002` 把 event kind、`after_generation` 与 32-byte writable buffer交给 kernel，process table 记录 `Blocked`。desktop task 完成 provider/wallpaper apply 后发布 `policy-applied`；VFS config bank 完成 swap 后发布 `config-applied`。两类 event 各有单调 generation，即使 acknowledge 先于 runtime poll 到达也不会丢失。completion 验证 kind/generation/capability/reserved fields、复制到 user stack、把 PID 2 转成 `Runnable` 并恢复原 CR3/RIP/RSP/GPR。
 

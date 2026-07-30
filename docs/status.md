@@ -4,7 +4,7 @@
 
 | 规格范围 | 状态 | 当前证据与边界 |
 |---|---|---|
-| 原生图形桌面 | 部分实现 | QEMU 中三个 surface 已进入独立 workspace 的 niri 式 horizontal column strip；列宽稳定、edge scroll、bind focus/resize/close、workspace switch、window rule、titlebar drag viewport 与顶部 bar 已自动验证。PID 2 `/sbin/slop-shell` 已作为常驻服务从 VFS 读取 Waybar/swww 配置、连续发布 provider/wallpaper snapshot，并通过 `policy-applied`/`config-applied` 双向事件跨 reload 休眠与恢复；compositor、surface 与 renderer 仍是 kernel early mechanism，不是用户态 compositor。 |
+| 原生图形桌面 | 部分实现 | QEMU 中三个 surface 已进入独立 workspace 的 niri 式 horizontal column strip；列宽稳定、edge scroll、bind focus/resize/reorder/close、workspace switch、window rule、titlebar drag viewport 与顶部 bar 已自动验证。PID 2 `/sbin/slop-shell` 已作为常驻服务从 VFS 读取 Waybar/swww 配置、连续发布 provider/wallpaper snapshot，并通过 `policy-applied`/`config-applied` 双向事件跨 reload 休眠与恢复；compositor、surface 与 renderer 仍是 kernel early mechanism，不是用户态 compositor。 |
 | Rust 实现语言 | 已实现并验证（当前代码范围） | loader、kernel、UI、输入和脚本所对应的 SlopOS 源码均为 Rust；x86 汇编限于 port/interrupt/CR3/CPL transition 边界。 |
 | UEFI 引导 | 已实现并验证 | 独立 loader 加载 ELF kernel、Rust userspace ELF 校验副本、ACPI、GOP、bootstrap image、memory map，调用 `ExitBootServices` 并跳入内核；实际 PID 1 bytes 后续来自 ext4 root。 |
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；PID 1/2 的同步 `openat/read/write/close` 会保存各自 user frame、转为 Blocked 并返回 block task 异步等待 I/O，completion 再转为 Runnable、恢复对应 CR3/frame，而不是 busy-wait。100 Hz tick 还会在 CPL3 保存完整 interrupt frame并返回 block-task scheduler，kernel future 自身仍为 cooperative。动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
@@ -13,8 +13,8 @@
 | ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 VFS ELF 多块读取、fd 原位 write、五 tag block allocation/extent growth 和 inode 32/directory create→fd open→unlink transaction；两阶段重启验证 mount-time replay。mutation 仍是固定启动回归流程，btrfs 未实现。 |
 | VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 5 项宿主测试；QEMU 把 ext4 挂到 `/` 并取得两个实际 user image。PID 1/2 的独立 fd table 在交错执行中同时各自取得 fd 3 读取配置；PID 1 另以 `O_RDWR` + `lseek/write/read` 对 inode 31 完成跨两页的可逆 64-byte patch并显式 close。PID 2 每次有效 config generation 都重新 open/read/close Waybar 与 swww。kernel probe fd 另可 EOF 单块 append/truncate，并以读写模式打开刚创建的空文件。mount/backing object 仍是单一 block task 专用，用户 copy 限于已知 code/two-page stack mappings 与 256 bytes，尚非通用 POSIX VFS。 |
 | 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush。抢占产生的合法 cache 交错会改变 clean-boot 绝对请求数，测试核对 `requests = interrupts + 1` 且 top-half/queue interrupt 相等。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
-| 图形系统与 Wayland | 部分实现 | framebuffer renderer、niri 式滚动平铺/workspace/bind/rule/column resize、Waybar JSONC option/format + CSS 顶栏、swww 风格 daemon state/CLI/PNM/CPU transition 可用；PID 2 经 40-byte commit 连续发布 CPU/Memory 与 Aurora policy，再经两类 32-byte event 收到 policy/config 实际应用确认，26 项 shell + 5 项 protocol 测试及真实跨 reload service、workspace/规则/缩放/样式/换图/query/kill/restart 通过。仍无 Wayland wire/object/global/xdg、真实 Waybar hardware provider/完整 GTK CSS；常驻 PID 2 是 policy/provider，不是用户态 compositor、独立 bar surface 或 layer-shell client。 |
-| 声明式配置 | 部分实现 | niri KDL、Waybar JSONC/CSS 与 swww environment 按 user/system/fallback 顺序从 root VFS 发现；双 static bank 会先验证四份文本，再按 generation 原子发布。交互测试已验证 config generation 1→2 唤醒 PID 2、policy generation 2→3，以及非法 CSS 保留 generation 2 且不唤醒服务。仍无文件 watcher/inotify、普通配置编辑器、结构化 diff，配置发现/parser 也仍属于 kernel service。 |
+| 图形系统与 Wayland | 部分实现 | framebuffer renderer、niri 式滚动平铺/workspace/bind/rule/column resize/reorder、Waybar JSONC option/format + CSS 顶栏、swww 风格 daemon state/CLI/PNM/CPU transition 可用；PID 2 经 40-byte commit 连续发布 CPU/Memory 与 Aurora policy，再经两类 32-byte event 收到 policy/config 实际应用确认，27 项 shell + 5 项 protocol 测试及真实跨 reload service、workspace/规则/缩放/重排/样式/换图/query/kill/restart 通过。仍无 Wayland wire/object/global/xdg、真实 Waybar hardware provider/完整 GTK CSS；常驻 PID 2 是 policy/provider，不是用户态 compositor、独立 bar surface 或 layer-shell client。 |
+| 声明式配置 | 部分实现 | niri KDL、Waybar JSONC/CSS 与 swww environment 按 user/system/fallback 顺序从 root VFS 发现；双 static bank 会先验证四份文本，再按 generation 原子发布。交互测试已验证 config generation 1→2 唤醒 PID 2、policy generation 2→3，以及非法 CSS 保留 generation 2 且不唤醒服务；custom-config 回归验证 PID 2 对不同长度合法 Waybar override 的有界分块 hash 与连续发布。仍无文件 watcher/inotify、普通配置编辑器、结构化 diff，配置发现/parser 也仍属于 kernel service。 |
 | 文本编辑器 | 尚未实现 | kernel monitor 只编辑当前命令行，不是普通文本或配置文件编辑器。 |
 | `slopd` | 尚未实现 | 当前 `/sbin/slop-init` 只是固定 ABI probe，没有 unit、dependency graph、service manager 或 supervision。 |
 | eBPF | 部分实现 | 独立 `no_std` crate 提供 8-byte instruction decode、无分配 verifier、ALU64/前向 branch/512-byte stack/helper 子集解释器；10 项宿主测试与内核返回 42 均已验证。没有 ELF loader、map、program type、attach point、权限模型或 JIT。 |
@@ -29,12 +29,13 @@
 - 最后成功构建：2026-07-30，`make image`。
 - 最后成功启动：2026-07-30，QEMU 10.0.11 + OVMF 2025.02，`make test-boot`。
 - 最后成功交互测试：2026-07-30，`make test-interaction`。
+- 最后成功自定义桌面配置测试：2026-07-30，`make test-desktop-custom-config`。
 - 最后成功异常测试：2026-07-30，`make test-page-fault`。
 - 最后成功 journal recovery 测试：2026-07-30，`make test-journal-replay`。
 - 最后成功 eBPF 单元测试：2026-07-30，`make test-ebpf`，10 项。
 - 最后成功 ELF 单元测试：2026-07-30，`make test-elf`，10 项。
 - 最后成功 process 单元测试：2026-07-30，`make test-process`，6 项。
-- 最后成功 shell/protocol 单元测试：2026-07-30，`make test-shell`，31 项（shell 26 + desktop protocol 5）。
+- 最后成功 shell/protocol 单元测试：2026-07-30，`make test-shell`，32 项（shell 27 + desktop protocol 5）。
 - 最后成功 ACPI 单元测试：2026-07-30，`make test-acpi`，3 项。
 - 最后成功 PCI 单元测试：2026-07-30，`make test-pci`，3 项。
 - 最后成功 virtio 单元测试：2026-07-30，`make test-virtio`，4 项。
