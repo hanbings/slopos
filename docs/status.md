@@ -10,9 +10,9 @@
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
 | 进程/线程/调度 | 尚未实现 | 当前只有一个内核执行流；没有用户态、地址空间或 preemption。 |
 | 内存管理 | 部分实现 | kernel 解析 firmware descriptor stride，建立 frame allocator、自有四级页表并切换 CR3，建立 1 MiB kernel bump heap；frame/heap 读回与真实 vector-14 diagnostic 已验证。没有 user address space、细粒度页权限、COW 或 demand paging。 |
-| ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 fd 原位 data write，校验 JBD2 superblock，并按 flush 边界 stage/readback/restore 单块 descriptor/data/commit records。records 尚未通过 journal state/`needs_recovery` 激活；无 checkpoint/replay、allocation/metadata update，btrfs 未实现。 |
+| ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 fd 原位 write、JBD2 records stage 和 recovery/start 状态转换；两者仍是独立 probe，尚未组合成同一 active transaction/home checkpoint。无 crash replay、allocation/metadata update，btrfs 未实现。 |
 | VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 4 项宿主测试；QEMU 把 ext4 挂到 `/`，以 fd 3 分块读/seek，再复用读写 fd 3 在 offset 123 覆写/读回/恢复 73 bytes。仍是 block task 局部、root-only、固定 file size 状态，不是每进程 POSIX VFS。 |
-| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，69 个请求由 68 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
+| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，83 个请求由 82 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
 | 图形系统与 Wayland | 部分实现 | framebuffer renderer 和早期 window manager 可用；所有 Wayland wire/object/global/xdg 功能尚未实现。 |
 | 声明式配置 | 部分实现 | UI 中可原子切换一个内存主题预览；没有 parser、types、schema、module、diff、持久化或 rollback。 |
 | 文本编辑器 | 尚未实现 | kernel monitor 只编辑当前命令行，不是普通文本或配置文件编辑器。 |
