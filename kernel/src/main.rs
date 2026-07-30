@@ -266,8 +266,6 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     let user_image = unsafe {
         core::slice::from_raw_parts(boot_info.user_image.base as *const u8, user_image_size)
     };
-    process::run_probe(user_image);
-
     let mut desktop = Desktop::new(framebuffer.width(), framebuffer.height());
     desktop.render(&mut framebuffer);
     serialln(format_args!(
@@ -280,7 +278,7 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     executor::run(
         desktop.run(&mut framebuffer, input),
         timer::diagnostics_task(),
-        fs::mount_task(block_device),
+        fs::mount_task(block_device, user_image),
     )
 }
 

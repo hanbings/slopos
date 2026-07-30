@@ -60,7 +60,7 @@ struct SyscallFrame {
     user_rsp: u64,
 }
 
-pub fn run_probe(user_image: &[u8]) {
+pub fn run_probe(user_image: &[u8], source: &str, path: &str) {
     reset_process_table();
     let elf = slopos_elf::ElfFile::parse(user_image)
         .unwrap_or_else(|_| crate::fatal("boot user ELF failed validation"));
@@ -99,7 +99,7 @@ pub fn run_probe(user_image: &[u8]) {
         "SLOPOS-PROCESS: table initialized capacity={PROCESS_CAPACITY} pid={PID} state=ready fd_capacity={PROCESS_FD_CAPACITY} per_process_fds=true"
     ));
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={PID} source=boot format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frame={:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        "SLOPOS-PROCESS: pid={PID} source={source} path={path} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frame={:#x} code=user-readonly stack=user-writable kernel=supervisor",
         elf.entry(),
         elf.load_segment_count(),
         user_image.len(),

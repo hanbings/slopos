@@ -11,6 +11,7 @@ build:
 	$(CARGO) build --locked --release -p slopos-boot --target x86_64-unknown-uefi
 
 rootfs:
+	$(CARGO) build --locked --release -p slopos-init --target x86_64-unknown-none
 	./scripts/make-rootfs.sh
 
 image: build rootfs

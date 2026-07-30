@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 
+use core::cell::UnsafeCell;
 #[cfg(feature = "journal-replay-injection")]
 use core::future::pending;
 use core::ptr;
@@ -26,9 +27,9 @@ const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
 const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
 const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
-const ALLOCATION_PROBE_BLOCK: u64 = 103;
+const ALLOCATION_PROBE_BLOCK: u64 = 106;
 const CREATE_TRANSACTION_BLOCKS: usize = 5;
-const CREATE_PROBE_INODE: u32 = 30;
+const CREATE_PROBE_INODE: u32 = 32;
 const CREATE_PROBE_NAME: &[u8] = b"create-probe";
 const CREATE_PROBE_TIMESTAMP: u32 = 0x6a6a_9400;
 static ZERO_BLOCK: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
@@ -47,6 +48,9 @@ const WRITE_PROBE_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"write-probe
 const CREATE_PROBE_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", CREATE_PROBE_NAME];
 const ROOT_FILESYSTEM_ID: u16 = 1;
 const VFS_TEST_PATH: &[u8] = b"/etc/./slopos/../slopos/system.conf";
+const INIT_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-init"];
+const INIT_EXECUTABLE_DISPLAY: &str = "/sbin/slop-init";
+const INIT_EXECUTABLE_CAPACITY: usize = 8192;
 const NIRI_USER_PATH: [&[u8]; 5] = [b"home", b"slop", b".config", b"niri", b"config.kdl"];
 const NIRI_SYSTEM_PATH: [&[u8]; 3] = [b"etc", b"niri", b"config.kdl"];
 const NIRI_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"niri.kdl"];
@@ -62,6 +66,15 @@ const WAYBAR_STYLE_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"waybar.css"
 const SWWW_USER_ENV_PATH: [&[u8]; 5] = [b"home", b"slop", b".config", b"swww", b"env"];
 const SWWW_SYSTEM_ENV_PATH: [&[u8]; 3] = [b"etc", b"swww", b"env"];
 const SWWW_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"swww.env"];
+
+struct InitExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
+
+// The block task is the sole writer and invokes PID 1 synchronously before it
+// resumes filesystem work, so the executable bytes cannot be mutated in use.
+unsafe impl Sync for InitExecutableStorage {}
+
+static INIT_EXECUTABLE: InitExecutableStorage =
+    InitExecutableStorage(UnsafeCell::new([0; INIT_EXECUTABLE_CAPACITY]));
 
 #[derive(Clone, Copy)]
 struct ConfigCandidate {
@@ -134,7 +147,7 @@ const SWWW_CONFIG_CANDIDATES: &[ConfigCandidate] = &[
     },
 ];
 
-pub async fn mount_task(mut device: BlockDevice) -> ! {
+pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8]) -> ! {
     crate::serial::serialln(format_args!(
         "SLOPOS-VIRTIO: modern block queue ready size={} capacity_sectors={} flush={}",
         device.queue_size(),
@@ -160,6 +173,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
             ));
         }
     }
+    load_and_run_init(&mut mount, &mut device, boot_user_image).await;
     #[cfg(feature = "journal-replay-injection")]
     if mount.recovery.is_none() {
         let file = mount.open_file(&mut device, &WRITE_PROBE_PATH).await;
@@ -619,6 +633,46 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         let inject_invalid = crate::desktop_config::take_invalid_reload_request();
         load_and_publish_desktop_config(&mut mount, &mut device, false, inject_invalid).await;
     }
+}
+
+async fn load_and_run_init(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    boot_user_image: &[u8],
+) {
+    let executable = mount
+        .try_open_file(device, &INIT_EXECUTABLE_PATH)
+        .await
+        .unwrap_or_else(|| device.fail("root VFS init executable was not found"));
+    let executable_size = usize::try_from(executable.inode.size)
+        .unwrap_or_else(|_| device.fail("root VFS init executable exceeds address space"));
+    if executable_size == 0 || executable_size > INIT_EXECUTABLE_CAPACITY {
+        device.fail("root VFS init executable has an invalid size");
+    }
+    // SAFETY: the block task is the only writer and process execution below is
+    // synchronous; no filesystem operation overlaps the borrowed bytes.
+    let storage = unsafe { &mut *INIT_EXECUTABLE.0.get() };
+    storage.fill(0);
+    let mut copied = 0usize;
+    let mut logical_block = 0u32;
+    while copied < executable_size {
+        let bytes = mount
+            .read_file_block(device, &executable, logical_block)
+            .await;
+        let length = bytes.len().min(executable_size - copied);
+        storage[copied..copied + length].copy_from_slice(&bytes[..length]);
+        copied += length;
+        logical_block += 1;
+    }
+    let image = &storage[..executable_size];
+    if image != boot_user_image {
+        device.fail("root VFS init executable differs from the boot copy");
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VFS: executable loaded path={INIT_EXECUTABLE_DISPLAY} inode={} bytes={executable_size} blocks={logical_block} matches_boot=true",
+        executable.inode.number
+    ));
+    crate::process::run_probe(image, "vfs", INIT_EXECUTABLE_DISPLAY);
 }
 
 async fn load_and_publish_desktop_config(

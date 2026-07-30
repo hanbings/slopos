@@ -6,6 +6,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${repo_dir}/target/slopos-root.ext4"
 source_dir="${repo_dir}/rootfs"
+user_binary="${repo_dir}/target/x86_64-unknown-none/release/slopos-init"
 mke2fs=/usr/sbin/mke2fs
 debugfs=/usr/sbin/debugfs
 export E2FSPROGS_FAKE_TIME=1785369600
@@ -21,9 +22,15 @@ if [[ ! -d "${source_dir}" ]]; then
     echo "missing root filesystem source: ${source_dir}" >&2
     exit 1
 fi
+if [[ ! -f "${user_binary}" ]]; then
+    echo "missing root executable: ${user_binary}" >&2
+    exit 1
+fi
 
 mkdir -p "${repo_dir}/target"
 cp -a "${source_dir}/." "${staging_dir}/"
+mkdir -p "${staging_dir}/sbin"
+cp "${user_binary}" "${staging_dir}/sbin/slop-init"
 ln -s slopos-release "${staging_dir}/etc/current-release"
 cp "${repo_dir}/assets/niri-config.kdl" "${staging_dir}/etc/slopos/niri.kdl"
 cp "${repo_dir}/assets/waybar-config.jsonc" "${staging_dir}/etc/slopos/waybar.jsonc"
