@@ -10,6 +10,8 @@ mke2fs=/usr/sbin/mke2fs
 debugfs=/usr/sbin/debugfs
 export E2FSPROGS_FAKE_TIME=1785369600
 fixed_time=1785369600
+staging_dir="$(mktemp -d)"
+trap 'rm -rf -- "${staging_dir}"' EXIT
 
 if [[ ! -x "${mke2fs}" || ! -x "${debugfs}" ]]; then
     echo "missing build tools from Debian package e2fsprogs" >&2
@@ -21,6 +23,10 @@ if [[ ! -d "${source_dir}" ]]; then
 fi
 
 mkdir -p "${repo_dir}/target"
+cp -a "${source_dir}/." "${staging_dir}/"
+mkdir -p "${staging_dir}/usr/share/slopos"
+dd if=/dev/zero bs=1024 count=6 status=none \
+    | tr '\000' 'Z' >"${staging_dir}/usr/share/slopos/multiblock.bin"
 truncate -s 128M "${image}"
 "${mke2fs}" \
     -q \
@@ -30,7 +36,7 @@ truncate -s 128M "${image}"
     -L SLOPOS_ROOT \
     -U 534c4f50-4f53-4000-8000-000000000001 \
     -E lazy_itable_init=0,lazy_journal_init=0,root_owner=0:0 \
-    -d "${source_dir}" \
+    -d "${staging_dir}" \
     "${image}"
 "${debugfs}" \
     -w \
@@ -42,7 +48,7 @@ truncate -s 128M "${image}"
 # produces the same test image with the pinned e2fsprogs version.
 while IFS= read -r relative_path; do
     image_path="/${relative_path#./}"
-    source_path="${source_dir}/${relative_path#./}"
+    source_path="${staging_dir}/${relative_path#./}"
     if [[ -d "${source_path}" ]]; then
         inode_mode=040755
     elif [[ -x "${source_path}" ]]; then
@@ -64,6 +70,6 @@ while IFS= read -r relative_path; do
             -R "set_inode_field ${image_path} ${field_value}" \
             "${image}" >/dev/null 2>&1
     done
-done < <(cd "${source_dir}" && find . -mindepth 1 -print | LC_ALL=C sort)
+done < <(cd "${staging_dir}" && find . -mindepth 1 -print | LC_ALL=C sort)
 
 echo "created ${image}"

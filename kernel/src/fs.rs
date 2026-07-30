@@ -15,6 +15,7 @@ const EXPECTED_RELEASE: &[u8] = include_bytes!("../../rootfs/etc/slopos-release"
 const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/slopos/system.conf");
 const RELEASE_PATH: [&[u8]; 2] = [b"etc", b"slopos-release"];
 const CONFIGURATION_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"system.conf"];
+const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"multiblock.bin"];
 
 pub async fn mount_task(mut device: BlockDevice) -> ! {
     crate::serial::serialln(format_args!(
@@ -49,7 +50,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
 
     let release = mount.open_file(&mut device, &RELEASE_PATH).await;
     let release_size = {
-        let bytes = mount.read_file(&mut device, &release).await;
+        let bytes = mount.read_file_block(&mut device, &release, 0).await;
         if bytes != EXPECTED_RELEASE {
             device.fail("ext4 slopos-release content mismatch");
         }
@@ -58,7 +59,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
 
     let configuration = mount.open_file(&mut device, &CONFIGURATION_PATH).await;
     let configuration_size = {
-        let bytes = mount.read_file(&mut device, &configuration).await;
+        let bytes = mount.read_file_block(&mut device, &configuration, 0).await;
         if bytes != EXPECTED_SYSTEM_CONFIGURATION {
             device.fail("ext4 system.conf content mismatch");
         }
@@ -67,6 +68,25 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     crate::serial::serialln(format_args!(
         "SLOPOS-EXT4: async path read valid release_inode={} release_bytes={release_size} config_inode={} config_bytes={configuration_size} paths=/etc/slopos-release,/etc/slopos/system.conf",
         release.inode.number, configuration.inode.number
+    ));
+
+    let multiblock = mount.open_file(&mut device, &MULTIBLOCK_PATH).await;
+    if multiblock.inode.size != 6144 {
+        device.fail("ext4 multiblock file size mismatch");
+    }
+    let mut multiblock_bytes = 0usize;
+    for logical_block in 0..2 {
+        let bytes = mount
+            .read_file_block(&mut device, &multiblock, logical_block)
+            .await;
+        if bytes.iter().any(|byte| *byte != b'Z') {
+            device.fail("ext4 multiblock file content mismatch");
+        }
+        multiblock_bytes += bytes.len();
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: multiblock file valid inode={} bytes={multiblock_bytes} logical_blocks=2 path=/usr/share/slopos/multiblock.bin",
+        multiblock.inode.number
     ));
     let (interrupts, queue_interrupts) = crate::virtio::interrupt_counts();
     crate::serial::serialln(format_args!(
@@ -184,21 +204,38 @@ impl ReadOnlyMount {
         .unwrap_or_else(|_| device.fail("ext4 inode validation failed"))
     }
 
-    async fn read_file<'a>(&self, device: &'a mut BlockDevice, file: &ReadOnlyFile) -> &'a [u8] {
+    async fn read_file_block<'a>(
+        &self,
+        device: &'a mut BlockDevice,
+        file: &ReadOnlyFile,
+        logical_block: u32,
+    ) -> &'a [u8] {
+        let file_block_count = file
+            .inode
+            .size
+            .div_ceil(u64::from(self.superblock.block_size));
+        if u64::from(logical_block) >= file_block_count {
+            device.fail("ext4 file read is past end of file");
+        }
         let extent = file
             .inode
-            .first_extent()
-            .unwrap_or_else(|_| device.fail("ext4 file extent is unsupported"));
-        if file.inode.size > u64::from(self.superblock.block_size)
-            || extent.logical_block != 0
-            || extent.unwritten
-            || extent.physical_block >= self.superblock.block_count
-        {
+            .extent_for_logical_block(logical_block)
+            .unwrap_or_else(|_| device.fail("ext4 file extent is unsupported"))
+            .unwrap_or_else(|| device.fail("sparse ext4 file reads are unsupported"));
+        if extent.unwritten {
             device.fail("ext4 regular file extent is invalid");
         }
-        let sector = block_to_sector(device, &self.superblock, extent.physical_block);
+        let physical_block =
+            extent.physical_block + u64::from(logical_block - extent.logical_block);
+        if physical_block >= self.superblock.block_count {
+            device.fail("ext4 regular file block is outside the filesystem");
+        }
+        let sector = block_to_sector(device, &self.superblock, physical_block);
         device.read(sector, BLOCK_SIZE).await;
-        &device.data(BLOCK_SIZE)[..file.inode.size as usize]
+        let byte_offset = u64::from(logical_block) * u64::from(self.superblock.block_size);
+        let remaining = file.inode.size - byte_offset;
+        let length = remaining.min(u64::from(self.superblock.block_size)) as usize;
+        &device.data(BLOCK_SIZE)[..length]
     }
 
     fn directory_extent(&self, device: &BlockDevice, inode: &Inode) -> Extent {

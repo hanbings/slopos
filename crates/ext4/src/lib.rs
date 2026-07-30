@@ -377,6 +377,33 @@ impl Inode {
     }
 
     pub fn first_extent(&self) -> Result<Extent, ParseError> {
+        self.extent_at(0)
+    }
+
+    pub fn extent_for_logical_block(
+        &self,
+        logical_block: u32,
+    ) -> Result<Option<Extent>, ParseError> {
+        let count = self.extent_count()?;
+        let mut previous_end = 0u32;
+        for index in 0..count {
+            let extent = self.extent_at(index)?;
+            let end = extent
+                .logical_block
+                .checked_add(u32::from(extent.block_count))
+                .ok_or(ParseError::InvalidExtent)?;
+            if index != 0 && extent.logical_block < previous_end {
+                return Err(ParseError::InvalidExtent);
+            }
+            if logical_block >= extent.logical_block && logical_block < end {
+                return Ok(Some(extent));
+            }
+            previous_end = end;
+        }
+        Ok(None)
+    }
+
+    fn extent_count(&self) -> Result<usize, ParseError> {
         if self.flags & INODE_FLAG_EXTENTS == 0 {
             return Err(ParseError::InvalidExtent);
         }
@@ -392,15 +419,28 @@ impl Inode {
         if depth != 0 {
             return Err(ParseError::UnsupportedExtentDepth);
         }
-        let raw_length = read_u16(&self.extent_root, 16)?;
+        Ok(usize::from(entries))
+    }
+
+    fn extent_at(&self, index: usize) -> Result<Extent, ParseError> {
+        let count = self.extent_count()?;
+        if index >= count {
+            return Err(ParseError::InvalidExtent);
+        }
+        let offset = 12 + index * 12;
+        let raw_length = read_u16(&self.extent_root, offset + 4)?;
         let block_count = raw_length & 0x7fff;
         if block_count == 0 {
             return Err(ParseError::InvalidExtent);
         }
+        let physical_block = u64::from(read_u32(&self.extent_root, offset + 8)?)
+            | (u64::from(read_u16(&self.extent_root, offset + 6)?) << 32);
+        if physical_block.checked_add(u64::from(block_count)).is_none() {
+            return Err(ParseError::InvalidExtent);
+        }
         Ok(Extent {
-            logical_block: read_u32(&self.extent_root, 12)?,
-            physical_block: u64::from(read_u32(&self.extent_root, 20)?)
-                | (u64::from(read_u16(&self.extent_root, 18)?) << 32),
+            logical_block: read_u32(&self.extent_root, offset)?,
+            physical_block,
             block_count,
             unwritten: raw_length & 0x8000 != 0,
         })
@@ -837,6 +877,39 @@ mod tests {
         assert_eq!(
             Inode::parse(&inode, ROOT_INODE, &superblock),
             Err(ParseError::InvalidChecksum)
+        );
+    }
+
+    #[test]
+    fn maps_inline_extent_runs_and_holes() {
+        let superblock = Superblock::parse(&valid_superblock()).unwrap();
+        let inode_bytes = valid_root_inode(&superblock);
+        let mut inode = Inode::parse(&inode_bytes, ROOT_INODE, &superblock).unwrap();
+        inode.extent_root[2..4].copy_from_slice(&2u16.to_le_bytes());
+        inode.extent_root[16..18].copy_from_slice(&2u16.to_le_bytes());
+        inode.extent_root[24..28].copy_from_slice(&4u32.to_le_bytes());
+        inode.extent_root[28..30].copy_from_slice(&1u16.to_le_bytes());
+        inode.extent_root[30..32].copy_from_slice(&0u16.to_le_bytes());
+        inode.extent_root[32..36].copy_from_slice(&30u32.to_le_bytes());
+
+        assert_eq!(
+            inode.extent_for_logical_block(1).unwrap(),
+            Some(Extent {
+                logical_block: 0,
+                physical_block: 18,
+                block_count: 2,
+                unwritten: false
+            })
+        );
+        assert_eq!(inode.extent_for_logical_block(2).unwrap(), None);
+        assert_eq!(
+            inode.extent_for_logical_block(4).unwrap(),
+            Some(Extent {
+                logical_block: 4,
+                physical_block: 30,
+                block_count: 1,
+                unwritten: false
+            })
         );
     }
 }
