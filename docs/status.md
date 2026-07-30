@@ -4,7 +4,7 @@
 
 | 规格范围 | 状态 | 当前证据与边界 |
 |---|---|---|
-| 原生图形桌面 | 部分实现 | QEMU 中三个 surface 已进入独立 workspace 的 niri 式 horizontal column strip；列宽稳定、edge scroll、bind focus/resize/reorder/close、按索引或名称直接切换/移列、previous workspace 往返、Super+右键 pointer resize、workspace switch、window rule、titlebar drag viewport 与顶部 Waybar workspace 点击已自动验证。PID 2 `/sbin/slop-shell` 已作为常驻服务从 VFS 读取 Waybar/swww 配置、连续发布 provider/wallpaper snapshot，并通过 `policy-applied`/`config-applied` 双向事件跨 reload 休眠与恢复；compositor、surface 与 renderer 仍是 kernel early mechanism，不是用户态 compositor。 |
+| 原生图形桌面 | 部分实现 | QEMU 中三个 surface 已进入独立 workspace 的 niri 式 horizontal column strip；列宽稳定、edge scroll、bind focus/resize/reorder/close、按索引或名称直接切换/移列、previous workspace 往返、容量 4 内的动态尾部空 workspace、Super+右键 pointer resize、window rule、titlebar drag viewport 与顶部 Waybar workspace 点击已自动验证。PID 2 `/sbin/slop-shell` 已作为常驻服务从 VFS 读取 Waybar/swww 配置、连续发布 provider/wallpaper snapshot，并通过 `policy-applied`/`config-applied` 双向事件跨 reload 休眠与恢复；compositor、surface 与 renderer 仍是 kernel early mechanism，不是用户态 compositor。 |
 | Rust 实现语言 | 已实现并验证（当前代码范围） | loader、kernel、UI、输入和脚本所对应的 SlopOS 源码均为 Rust；x86 汇编限于 port/interrupt/CR3/CPL transition 边界。 |
 | UEFI 引导 | 已实现并验证 | 独立 loader 加载 ELF kernel、Rust userspace ELF 校验副本、ACPI、GOP、bootstrap image、memory map，调用 `ExitBootServices` 并跳入内核；实际 PID 1 bytes 后续来自 ext4 root。 |
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；PID 1/2 的同步 `openat/read/write/close` 会保存各自 user frame、转为 Blocked 并返回 block task 异步等待 I/O，completion 再转为 Runnable、恢复对应 CR3/frame，而不是 busy-wait。100 Hz tick 还会在 CPL3 保存完整 interrupt frame并返回 block-task scheduler，kernel future 自身仍为 cooperative。动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
@@ -47,4 +47,4 @@
 
 ## 下一项最高价值工作
 
-下一阶段以已验证的跨 runtime reload 常驻 PID 2 和双事件 lifecycle 为基础，建立通用 message queue/local socket 与共享 surface buffer，再逐步把 compositor/bar/wallpaper mechanism 移出 kernel；随后补齐动态 workspace、完整 action/rule/output/IPC，Waybar 真实 provider/Pango/action/完整 GTK CSS，以及 swww 任意 VFS image、PNG/JPEG/GIF、多 output 和真正的 layer-shell。通用进程主线仍需任意路径/多 `PT_LOAD` exec、通用 wait/signal、独立线程/kernel stack 与 SMP run queue。
+下一阶段以已验证的跨 runtime reload 常驻 PID 2 和双事件 lifecycle 为基础，建立通用 message queue/local socket 与共享 surface buffer，再逐步把 compositor/bar/wallpaper mechanism 移出 kernel；随后把有界动态 workspace 扩展到任意数量并补齐完整 action/rule/output/IPC，Waybar 真实 provider/Pango/action/完整 GTK CSS，以及 swww 任意 VFS image、PNG/JPEG/GIF、多 output 和真正的 layer-shell。通用进程主线仍需任意路径/多 `PT_LOAD` exec、通用 wait/signal、独立线程/kernel stack 与 SMP run queue。

@@ -246,6 +246,8 @@ grep -Fq "SLOPOS-NIRI: binding action=move-column-to-workspace changed=true work
 grep -Fq "SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=index value=2" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=index value=3" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: dynamic workspaces reason=move-column count=3->4 named=2 active=3 trailing_empty=true" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: dynamic workspaces reason=move-column count=4->3 named=2 active=1 trailing_empty=true" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=config" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=config" "${serial_log}"

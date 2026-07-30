@@ -1334,6 +1334,16 @@ impl Desktop {
                 }
             }
         };
+        if changed
+            && matches!(
+                action,
+                NiriAction::MoveColumnToWorkspaceUp
+                    | NiriAction::MoveColumnToWorkspaceDown
+                    | NiriAction::MoveColumnToWorkspace(_)
+            )
+        {
+            self.normalize_dynamic_workspaces("move-column");
+        }
         self.sync_focused_window();
         if changed
             && matches!(action, NiriAction::SetColumnWidth(_))
@@ -1409,12 +1419,37 @@ impl Desktop {
             .close_window(index as u32)
             .unwrap_or_else(|_| crate::fatal("niri close lost a tiled window"));
         self.windows[index].open = false;
+        self.normalize_dynamic_workspaces("close-window");
         serialln(format_args!(
             "SLOPOS-DESKTOP: window closed kind={} workspace={}",
             title(self.windows[index].kind),
             self.workspaces.active() + 1
         ));
         self.sync_focused_window();
+    }
+
+    fn normalize_dynamic_workspaces(&mut self, reason: &'static str) {
+        let before = self.workspaces.len();
+        if self
+            .workspaces
+            .normalize_dynamic(self.niri.workspaces.len())
+            .unwrap_or_else(|_| crate::fatal("niri dynamic workspace normalization failed"))
+        {
+            let after = self.workspaces.len();
+            let trailing_empty = self
+                .workspaces
+                .workspace_is_empty(after - 1)
+                .unwrap_or_else(|_| crate::fatal("niri trailing workspace disappeared"));
+            serialln(format_args!(
+                "SLOPOS-NIRI: dynamic workspaces reason={} count={}->{} named={} active={} trailing_empty={}",
+                reason,
+                before,
+                after,
+                self.niri.workspaces.len(),
+                self.workspaces.active() + 1,
+                trailing_empty
+            ));
+        }
     }
 
     fn terminal_focused(&self) -> bool {

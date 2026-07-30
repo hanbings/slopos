@@ -808,6 +808,14 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.previous
     }
 
+    pub fn workspace_is_empty(&self, workspace: usize) -> Result<bool, WorkspaceError> {
+        self.layouts
+            .get(workspace)
+            .filter(|_| workspace < self.count)
+            .map(ScrollLayout::is_empty)
+            .ok_or(WorkspaceError::InvalidWorkspace)
+    }
+
     pub fn config(&self) -> LayoutConfig {
         self.layouts[self.active].config()
     }
@@ -929,6 +937,41 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.previous = self.active;
         self.active = workspace;
         Ok(true)
+    }
+
+    pub fn normalize_dynamic(&mut self, persistent: usize) -> Result<bool, WorkspaceError> {
+        if persistent >= self.count {
+            return Err(WorkspaceError::InvalidCount);
+        }
+        let mut changed = false;
+        let mut workspace = persistent;
+        while workspace + 1 < self.count {
+            if self.layouts[workspace].is_empty() && self.active != workspace {
+                for index in workspace..self.count - 1 {
+                    self.layouts.swap(index, index + 1);
+                }
+                self.count -= 1;
+                if self.active > workspace {
+                    self.active -= 1;
+                }
+                if self.previous > workspace {
+                    self.previous -= 1;
+                } else if self.previous == workspace {
+                    self.previous = self.active;
+                }
+                changed = true;
+            } else {
+                workspace += 1;
+            }
+        }
+        if !self.layouts[self.count - 1].is_empty() && self.count < WORKSPACES {
+            if !self.layouts[self.count].is_empty() {
+                return Err(WorkspaceError::InvalidCount);
+            }
+            self.count += 1;
+            changed = true;
+        }
+        Ok(changed)
     }
 }
 
@@ -1116,7 +1159,7 @@ mod tests {
     #[test]
     fn switches_workspaces_and_moves_the_focused_column() {
         let mut workspaces =
-            WorkspaceSet::<3, 3, 1>::new(3, 1000, 700, 40, LayoutConfig::default()).unwrap();
+            WorkspaceSet::<4, 3, 1>::new(3, 1000, 700, 40, LayoutConfig::default()).unwrap();
         workspaces.open_window(0, 10).unwrap();
         workspaces.open_window(0, 20).unwrap();
         workspaces.focus_window(10).unwrap();
@@ -1145,5 +1188,17 @@ mod tests {
         assert!(workspaces.focus_workspace_down());
         assert!(!workspaces.focus_workspace_down());
         assert_eq!(workspaces.focused_window(), None);
+
+        workspaces.focus_workspace(1).unwrap();
+        assert!(workspaces.move_focused_to_workspace(2).unwrap());
+        assert!(workspaces.normalize_dynamic(2).unwrap());
+        assert_eq!(workspaces.len(), 4);
+        assert_eq!(workspaces.active(), 2);
+        assert!(workspaces.workspace_is_empty(3).unwrap());
+        assert!(workspaces.move_focused_to_workspace(1).unwrap());
+        assert!(workspaces.normalize_dynamic(2).unwrap());
+        assert_eq!(workspaces.len(), 3);
+        assert_eq!(workspaces.active(), 1);
+        assert!(workspaces.workspace_is_empty(2).unwrap());
     }
 }
