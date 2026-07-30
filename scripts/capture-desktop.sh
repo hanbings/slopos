@@ -42,6 +42,10 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "${ovmf_vars}"
     -monitor stdio \
     -no-reboot
 
+sed -i 's/\r$//' \
+    "${repo_dir}/evidence/capture-serial.log" \
+    "${repo_dir}/evidence/capture-uefi-debugcon.log"
+
 test -s "${repo_dir}/evidence/desktop.ppm"
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${repo_dir}/evidence/desktop.ppm" >"${repo_dir}/evidence/desktop.png"

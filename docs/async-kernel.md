@@ -8,6 +8,7 @@
 - 原子 ready bit queue；
 - 每 task RawWaker；
 - 100 Hz PIT interrupt 唤醒 timer future；
+- 同一 PIT tick 在 CPL3 且另有可运行 PID 时保存完整用户 interrupt frame并抢占到 block-task scheduler；两个方向都已由无 syscall TSC 窗口验证；
 - PS/2 IRQ 上半部读取/确认设备并写入固定容量 SPSC ring；
 - input future 在下半部解析扫描码和鼠标 packet；
 - virtio INTx top half 读取 ISR 并 wake block future；future 在下半部消费 used ring；
@@ -26,7 +27,7 @@
 6. bounded channel 和 request queue 提供 backpressure；满队列返回 pending，并由可用容量事件唤醒 producer。
 7. user thread 与 kernel async task 是不同调度实体。同步 syscall 只挂起调用 user thread，其内核 operation 由 async task/completion 推进。
 
-计划调度策略为每 CPU 公平队列加 work stealing；设备 affinity 和持锁 task 默认留在本 CPU。preemption timer 可以抢占 user thread，但 kernel future 的 poll 必须有预算并在边界 cooperative yield。跨 CPU wake 通过 IPI 通知目标 scheduler。
+当前单 CPU preemption timer 已能抢占 user thread，但 kernel future 的 poll 仍不被抢占。计划调度策略为每 CPU 公平队列加 work stealing；设备 affinity 和持锁 task 默认留在本 CPU，kernel poll 必须有预算并在边界 cooperative yield，跨 CPU wake 通过 IPI 通知目标 scheduler。
 
 计划 cancellation 语义：drop request future 只撤销尚未提交的请求；已经提交给硬件的请求进入 detached completion，资源直到 completion/timeout reset 后释放。返回用户可见结果只能发生一次。
 
