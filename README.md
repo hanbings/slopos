@@ -8,7 +8,7 @@ PID 1 由 `userspace/init` 独立构建为 `/slopos/init.elf`，UEFI loader 通�
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
-QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对复杂读取路径；读写 fd 3 除原位覆写外，还能从 EOF 4096 追加一整块：五 tag transaction 分配 block 99、把 inode 25 extent 增长到 8192，descriptor size/offset 同步推进，新增数据再经 fd 读回，最后 truncate/释放恢复。另一组 transaction 分配 inode 26、插入空文件 `/usr/share/slopos/create-probe`，以读写 fd 3 打开并验证 EOF，再 close/unlink。标准 clean boot 的 8-entry cache 记录 74 hit/69 miss/16 invalidation，共 447 个设备请求、446 次队列中断。两阶段 crash-injection 还会停在 allocation commit 后/home 前，再由普通 kernel 于下次 mount 重放、清理并继续进入桌面。当前 replay 支持最多八个 tag 的零-feature、连续且非 wrap transaction；这些 create/growth 操作仍是启动回归路径，没有通用可写 namespace 或 syscall。
+QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对复杂读取路径；读写 fd 3 除原位覆写外，还能从 EOF 4096 追加一整块：五 tag transaction 分配 block 103、把 inode 29 extent 增长到 8192，descriptor size/offset 同步推进，新增数据再经 fd 读回，最后 truncate/释放恢复。另一组 transaction 分配 inode 30、插入空文件 `/usr/share/slopos/create-probe`，以读写 fd 3 打开并验证 EOF，再 close/unlink。标准 clean boot 的 8-entry cache 记录 137 hit/73 miss/16 invalidation，共 451 个设备请求、450 次队列中断。两阶段 crash-injection 还会停在 allocation commit 后/home 前，再由普通 kernel 于下次 mount 重放、清理并继续进入桌面。当前 replay 支持最多八个 tag 的零-feature、连续且非 wrap transaction；这些 create/growth 操作仍是启动回归路径，没有通用可写 namespace 或 syscall。
 
 ![SlopOS scrolling-tile desktop](evidence/desktop.png)
 
@@ -24,12 +24,14 @@ QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk�
 - swww 式 daemon 状态、`img/query/kill` 命令、环境默认值与 CPU transition；
 - 两张可在运行时切换的嵌入式 P3/PNM 壁纸；
 - niri KDL、Waybar JSONC/CSS 与 swww 配置/状态机子集，共 25 项宿主测试；
+- root ext4 上按 XDG/系统/fallback 顺序发现四份桌面配置，parse-before-swap 后以双 bank generation 原子发布；
+- `RELOAD` 与 Config surface 可触发运行时重读，非法配置保留上一代完整桌面状态；
 - 键盘输入；
 - 可执行 `HELP`、`STATUS`、`ABOUT`、`CLEAR` 和 `SWWW ...` 的图形 kernel monitor；
 - 系统状态窗口；
 - 配置 surface。
 
-这些桌面功能目前仍在内核态。Waybar module 顺序/栏高/间距/format 与 CSS 样式已经配置化，但 provider 仍是固定 kernel 数据，没有完整 GTK CSS、Pango、action 或硬件 backend；swww 状态机也还不是独立进程或 Wayland layer-shell client，图片来源暂限两个编译时 PNM asset。完整兼容边界见 [docs/desktop-shell.md](docs/desktop-shell.md)，保守完成度见 [docs/status.md](docs/status.md)。
+这些桌面功能目前仍在内核态。niri、Waybar 与 swww 默认值已经从 root VFS 加载和原子重载，但系统内还没有普通配置编辑器或文件变更 watcher。Waybar provider 仍是固定 kernel 数据，没有完整 GTK CSS、Pango、action 或硬件 backend；swww 状态机也还不是独立进程或 Wayland layer-shell client，图片来源暂限两个编译时 PNM asset。完整兼容边界见 [docs/desktop-shell.md](docs/desktop-shell.md)，保守完成度见 [docs/status.md](docs/status.md)。
 
 ## 构建与运行
 
@@ -61,9 +63,9 @@ make test-journal-replay
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-elf` 的 10 项测试覆盖 ELF64 header、`PT_LOAD`、BSS、范围/对齐/重叠/W^X 与 entry validation，`make test-shell` 的 25 项测试覆盖 niri KDL workspace/bind/rule、Waybar JSONC option/format 与 CSS、swww CLI/daemon/PNM/transition 和滚动平铺状态机，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode 与 EOF growth。`make test-boot` 在 OVMF 中验证 ELF→CPL3 enter/trap/exit、niri/Waybar/swww 配置、上述硬件路径、447 次 virtio 请求及 446 次 INTx completion、fd overwrite/append/truncate、active transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 命令，验证 swww Sunset 换图、center transition、query、kill/restart、niri viewport 横拖、`Mod+Q` 与 `Mod+Down`，并确认 window rule 把 Config 放入 named workspace；`make test-page-fault` 在用户进程退出并恢复 kernel CR3 后核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、477 次请求/476 次 completion、桌面继续运行和宿主 fsck。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-elf` 的 10 项测试覆盖 ELF64 header、`PT_LOAD`、BSS、范围/对齐/重叠/W^X 与 entry validation，`make test-shell` 的 25 项测试覆盖 niri KDL workspace/bind/rule、Waybar JSONC option/format 与 CSS、swww CLI/daemon/PNM/transition 和滚动平铺状态机，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode 与 EOF growth。`make test-boot` 在 OVMF 中验证 ELF→CPL3 enter/trap/exit、niri/Waybar/swww 的 VFS 配置、上述硬件路径、451 次 virtio 请求及 450 次 INTx completion、fd overwrite/append/truncate、active transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 命令，验证桌面配置 generation 2 的原子重载与非法 CSS 回滚、swww Sunset 换图、center transition、query、kill/restart、niri viewport 横拖、`Mod+Q` 与 `Mod+Down`，并确认 window rule 把 Config 放入 named workspace；`make test-page-fault` 在用户进程退出并恢复 kernel CR3 后核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、495 次请求/494 次 completion、桌面继续运行和宿主 fsck。
 
-`make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；Tab 或 `Mod+左右` 沿 column strip 切换焦点，`Mod+上下` 切换 workspace，`Mod+Shift+上下` 移动 focused column，`Mod+Q` 或红色 `X` 关闭 tiled window，横拖标题栏滚动 viewport。
+`make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；`RELOAD` 重读四份 VFS 配置，Tab 或 `Mod+左右` 沿 column strip 切换焦点，`Mod+上下` 切换 workspace，`Mod+Shift+上下` 移动 focused column，`Mod+Q` 或红色 `X` 关闭 tiled window，横拖标题栏滚动 viewport。
 
 ## 设计边界
 

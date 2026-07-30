@@ -10,11 +10,11 @@
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
 | 进程/线程/调度 | 部分实现 | 独立 `userspace/init` ELF64 经 UEFI/BootInfo v2 和严格 `PT_LOAD` parser 装入，以独立 CR3、user code/stack page、CPL3、TSS `RSP0` 运行，并经 trap 执行 write/exit 后恢复 kernel continuation。仍无 process table、thread、scheduler、preemption、wait、signal 或资源回收。 |
 | 内存管理 | 部分实现 | kernel 解析 firmware descriptor stride，建立 frame allocator、自有四级页表并切换 CR3，建立 1 MiB kernel bump heap；PID 1 使用 private PML4、supervisor kernel mapping、user read-only code/user writable stack；frame/heap 读回与真实 vector-14 diagnostic 已验证。没有 NX、kernel section W^X、COW、demand paging 或回收。 |
-| ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 fd 原位 write、五 tag block allocation/extent growth 和 inode 26/directory create→fd open→unlink transaction；两阶段重启验证 mount-time replay。mutation 仍是固定启动回归流程，btrfs 未实现。 |
-| VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 5 项宿主测试；QEMU 把 ext4 挂到 `/`，fd 3 可读/seek/原位覆写、EOF 单块 append/truncate，并以读写模式打开刚创建的空文件。仍是 block task 局部、root-only 状态，不是可复用或每进程 POSIX VFS。 |
-| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，clean boot 的 447 个请求由 446 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
+| ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 fd 原位 write、五 tag block allocation/extent growth 和 inode 30/directory create→fd open→unlink transaction；两阶段重启验证 mount-time replay。mutation 仍是固定启动回归流程，btrfs 未实现。 |
+| VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 5 项宿主测试；QEMU 把 ext4 挂到 `/`，fd 3 可读/seek/原位覆写、EOF 单块 append/truncate，并以读写模式打开刚创建的空文件；block task 还从 root VFS 发现并读取四份桌面配置。fd/namespace 仍是 block task 局部、root-only 状态，不是可复用或每进程 POSIX VFS。 |
+| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，clean boot 的 451 个请求由 450 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
 | 图形系统与 Wayland | 部分实现 | framebuffer renderer、niri 式滚动平铺/workspace/bind/rule、Waybar JSONC option/format + CSS 顶栏、swww 风格 daemon state/CLI/PNM/CPU transition 可用；25 项 shell 测试与真实 workspace/规则/样式/换图/query/kill/restart 通过。仍无 Wayland wire/object/global/xdg、真实 Waybar hardware provider/完整 GTK CSS，壁纸服务也不是独立 layer-shell client。 |
-| 声明式配置 | 部分实现 | niri KDL 驱动 layout/workspace/bind/window-rule，Waybar JSONC 驱动 bar/module option/format，CSS 驱动 selector colors/box/border，`SWWW_TRANSITION*` 环境格式驱动壁纸默认值。仍是编译时 asset；没有 VFS/XDG live reload、diff/rollback。 |
+| 声明式配置 | 部分实现 | niri KDL、Waybar JSONC/CSS 与 swww environment 按 user/system/fallback 顺序从 root VFS 发现；双 static bank 会先验证四份文本，再按 generation 原子发布。交互测试已验证 generation 1→2 重载及非法 CSS 保留 generation 2。仍无文件 watcher/inotify、普通配置编辑器、结构化 diff 或跨进程配置服务。 |
 | 文本编辑器 | 尚未实现 | kernel monitor 只编辑当前命令行，不是普通文本或配置文件编辑器。 |
 | `slopd` | 尚未实现 | 没有用户态 init、unit、dependency graph 或 supervision。 |
 | eBPF | 部分实现 | 独立 `no_std` crate 提供 8-byte instruction decode、无分配 verifier、ALU64/前向 branch/512-byte stack/helper 子集解释器；10 项宿主测试与内核返回 42 均已验证。没有 ELF loader、map、program type、attach point、权限模型或 JIT。 |
@@ -45,4 +45,4 @@
 
 ## 下一项最高价值工作
 
-下一阶段继续桌面兼容主线：把 niri、Waybar JSONC/CSS 与 swww 三套编译时配置改为 VFS/XDG load/reload，并实现 parse-before-swap rollback。niri 侧随后需动态 workspace、完整 action/rule/output/IPC；Waybar 侧需真实 provider/Pango/action/完整 GTK CSS；swww 侧需任意 VFS image、PNG/JPEG/GIF、多 output 和真正的用户态 IPC/layer-shell。进程主线仍需多 `PT_LOAD`/VFS exec、`SYSCALL/SYSRET`、process table 与可恢复的 per-process context，并把 VFS fd 接入用户 syscall。
+下一阶段把早期同步 PID 1 probe 扩为可恢复的 process table/per-process context，并从临时 `int 0x80` 进入 `SYSCALL/SYSRET`，随后把 VFS fd 接入用户 syscall 与 VFS exec。桌面兼容主线还需动态 workspace、完整 action/rule/output/IPC，Waybar 真实 provider/Pango/action/完整 GTK CSS，以及 swww 任意 VFS image、PNG/JPEG/GIF、多 output 和真正的用户态 IPC/layer-shell。
