@@ -35,4 +35,6 @@ eBPF 的宿主边界测试由 `make test-ebpf` 执行；裸机证据是 `serial.
 
 ACPI parser 的宿主测试由 `make test-acpi` 执行。裸机日志记录 QEMU MADT 的 1 个 processor、1 个 IOAPIC、5 个 interrupt override，并记录硬件读取到的 LAPIC/IOAPIC ID、24 条 redirection 和 ISA route `2/1/12`；随后出现 timer Future 与 PS/2 交互事件，证明新路由实际收到了 IRQ。
 
-PCI 枚举器的宿主测试由 `make test-pci` 执行。裸机日志必须包含 QEMU q35 的设备总数和实际 virtio-blk BDF；当前证据为 `00:03.0`、device ID `1001`、vendor capability mask `0x3e`（configuration type 1–5）。这只证明发现和只读 capability 解析，尚不证明 virtqueue I/O。
+PCI 枚举器的宿主测试由 `make test-pci` 执行。裸机日志包含 QEMU q35 的设备总数和实际 virtio-blk BDF；当前证据为 `00:03.0`、device ID `1001`，完整 region 校验后的 capability mask `0x1e`（configuration type 1–4）。OVMF 分配的 modern BAR base 为 `0xc000000000`，因此 CR3 证据同时包含跨 PML4 slot 的 7 个 table frame。
+
+virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA：queue size 8，设备报告 131072 sectors，sector 0 末尾为 `55aa`。当前只证明一次 polling read，不证明异步 completion、写入或文件系统。
