@@ -489,6 +489,7 @@ impl Desktop {
             snapshot.memory_percentage,
             AURORA_PATH
         ));
+        crate::desktop_service::acknowledge_applied(snapshot.generation);
     }
 
     fn apply_config_update(&mut self, sources: crate::desktop_config::DesktopConfigSources) {

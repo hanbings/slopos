@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: 0BSD
 
+use core::future::Future;
+use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
+use core::task::{Context, Poll};
 use slopos_desktop_protocol::{
-    CAPABILITY_SWWW_POLICY, CAPABILITY_WAYBAR_PROVIDER, DesktopCommit, WALLPAPER_AURORA,
-    config_hash,
+    CAPABILITY_SWWW_POLICY, CAPABILITY_WAYBAR_PROVIDER, DesktopCommit, DesktopServiceEvent,
+    WALLPAPER_AURORA, config_hash,
 };
 
 const DESKTOP_SERVICE_PID: u32 = 2;
@@ -12,6 +15,7 @@ const EXPECTED_SWWW_HASH: u64 = config_hash(include_bytes!("../../assets/swww.en
 
 static STATE: AtomicU64 = AtomicU64::new(0);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+static APPLIED_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DesktopServiceSnapshot {
@@ -85,4 +89,42 @@ pub fn snapshot_is_valid(snapshot: DesktopServiceSnapshot) -> bool {
         && snapshot.cpu_usage <= 100
         && snapshot.memory_percentage <= 100
         && snapshot.wallpaper == WALLPAPER_AURORA
+}
+
+pub fn acknowledge_applied(generation: u64) {
+    let submitted = GENERATION.load(Ordering::Acquire);
+    if generation == 0 || generation != submitted {
+        crate::fatal("desktop service acknowledged an invalid policy generation");
+    }
+    if APPLIED_GENERATION
+        .compare_exchange(0, generation, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        crate::fatal("desktop service policy was acknowledged more than once");
+    }
+    crate::executor::wake_task(crate::executor::BLOCK_TASK);
+    crate::serial::serialln(format_args!(
+        "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation={generation} owner_pid={DESKTOP_SERVICE_PID} event=policy-applied wake=block-task"
+    ));
+}
+
+pub async fn next_applied_event(after_generation: u64) -> DesktopServiceEvent {
+    AppliedEvent { after_generation }.await
+}
+
+struct AppliedEvent {
+    after_generation: u64,
+}
+
+impl Future for AppliedEvent {
+    type Output = DesktopServiceEvent;
+
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        let generation = APPLIED_GENERATION.load(Ordering::Acquire);
+        if generation == 0 || generation <= self.after_generation {
+            Poll::Pending
+        } else {
+            Poll::Ready(DesktopServiceEvent::policy_applied(generation))
+        }
+    }
 }

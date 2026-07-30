@@ -64,6 +64,12 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2 capabilities=waybar-provider/swww-policy" \
     "${serial_log}"
+grep -Fq \
+    "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=1 owner_pid=2 event=policy-applied wake=block-task" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1" \
+    "${serial_log}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=1 to=2" "${serial_log}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=2 to=1" "${serial_log}"
 grep -Fq \

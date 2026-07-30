@@ -136,6 +136,12 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2 capabilities=waybar-provider/swww-policy" \
     "${replay_serial}"
+grep -Fq \
+    "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=1 owner_pid=2 event=policy-applied wake=block-task" \
+    "${replay_serial}"
+grep -Fq \
+    "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1" \
+    "${replay_serial}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=1 to=2" "${replay_serial}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=2 to=1" "${replay_serial}"
 grep -Fq \
@@ -219,7 +225,7 @@ sed -i 's/\r$//' \
 restore_clean_artifacts
 trap - EXIT
 clean_hash="$(sha256sum "${root_image}" | awk '{print $1}')"
-if [[ "${clean_hash}" != "f2325b414d20f77d123c8deaf208e06901bf5eb5a1218fdc12cf351198a75cde" ]]; then
+if [[ "${clean_hash}" != "f9ac024d2d136ac966d72d7a97b948864e4b413cfd1356ccad5a6f4c7c5829d6" ]]; then
     echo "journal replay cleanup did not restore the reproducible root image" >&2
     exit 1
 fi

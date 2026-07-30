@@ -755,6 +755,11 @@ async fn load_and_run_init(
                 crate::process::schedule_after_preemption(pid, tick, count)
             }
             crate::process::ProcessEvent::Waiting { pid } => crate::process::schedule_next(pid),
+            crate::process::ProcessEvent::DesktopWaiting(request) => {
+                let event =
+                    crate::desktop_service::next_applied_event(request.after_generation()).await;
+                crate::process::resume_desktop_wait(request, event)
+            }
             crate::process::ProcessEvent::Exited { pid } => {
                 release_exited_process_files(device, &mut open_files, pid);
                 exited_processes += 1;

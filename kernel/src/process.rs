@@ -4,7 +4,10 @@ use core::arch::x86_64::__cpuid;
 use core::arch::{asm, global_asm};
 use core::cell::UnsafeCell;
 use core::ptr;
-use slopos_desktop_protocol::{COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DesktopCommit};
+use slopos_desktop_protocol::{
+    COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit, DesktopServiceEvent,
+    EVENT_SIZE,
+};
 use slopos_process::{
     ProcessError, ProcessImage, ProcessState, ProcessTable, build_linux_initial_stack,
 };
@@ -15,7 +18,7 @@ const DESKTOP_PID: u32 = 2;
 pub const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
 const INIT_EXPECTED_SYSCALLS: u64 = 17;
-const DESKTOP_EXPECTED_SYSCALLS: u64 = 16;
+const DESKTOP_EXPECTED_SYSCALLS: u64 = 17;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
 const LINUX_AT_FDCWD: u64 = (-100i64) as u64;
@@ -168,6 +171,19 @@ struct WaitRequest {
 }
 
 #[derive(Clone, Copy)]
+pub struct DesktopWaitRequest {
+    pid: u32,
+    destination: u64,
+    after_generation: u64,
+}
+
+impl DesktopWaitRequest {
+    pub const fn after_generation(&self) -> u64 {
+        self.after_generation
+    }
+}
+
+#[derive(Clone, Copy)]
 enum PendingSyscall {
     OpenAt(OpenAtRequest),
     Read(ReadRequest),
@@ -175,6 +191,7 @@ enum PendingSyscall {
     Close(CloseRequest),
     Yield,
     Wait(WaitRequest),
+    DesktopWait(DesktopWaitRequest),
 }
 
 #[derive(Clone, Copy)]
@@ -186,6 +203,7 @@ pub enum ProcessEvent {
     Yielded { pid: u32 },
     Preempted { pid: u32, tick: u64, count: u64 },
     Waiting { pid: u32 },
+    DesktopWaiting(DesktopWaitRequest),
     Exited { pid: u32 },
 }
 
@@ -677,7 +695,7 @@ pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> Proces
                 crate::fatal("non-read completion carried output bytes");
             }
         }
-        PendingSyscall::Yield | PendingSyscall::Wait(_) => {
+        PendingSyscall::Yield | PendingSyscall::Wait(_) | PendingSyscall::DesktopWait(_) => {
             crate::fatal("scheduler syscall was sent through I/O completion")
         }
     }
@@ -695,6 +713,44 @@ pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> Proces
         .unwrap_or_else(|_| crate::fatal("process blocked-to-runnable transition failed"));
     crate::serial::serialln(format_args!(
         "SLOPOS-SCHED: pid={pid} state=blocked->runnable reason=io-complete"
+    ));
+    run_process(pid)
+}
+
+pub fn resume_desktop_wait(
+    request: DesktopWaitRequest,
+    event: DesktopServiceEvent,
+) -> ProcessEvent {
+    let pid = request.pid;
+    let pending = pending_syscall(pid)
+        .unwrap_or_else(|| crate::fatal("desktop event resume has no pending syscall"));
+    let PendingSyscall::DesktopWait(pending_request) = pending else {
+        crate::fatal("desktop event resumed a different pending syscall");
+    };
+    if pending_request.pid != request.pid
+        || pending_request.destination != request.destination
+        || pending_request.after_generation != request.after_generation
+        || event.validate().is_err()
+        || event.generation <= request.after_generation
+    {
+        crate::fatal("desktop event completion failed validation");
+    }
+    copy_to_user(pid, request.destination, &event.encode())
+        .unwrap_or_else(|| crate::fatal("desktop event destination became invalid"));
+    clear_pending_syscall(pid);
+    saved_syscall_frame_mut(pid).rax = 0;
+    let process = process_table()
+        .snapshot(pid)
+        .unwrap_or_else(|_| crate::fatal("desktop event process disappeared"));
+    if process.state != ProcessState::Blocked {
+        crate::fatal("only a blocked desktop service can receive an event");
+    }
+    process_table_mut()
+        .mark_runnable(pid)
+        .unwrap_or_else(|_| crate::fatal("desktop service blocked-to-runnable transition failed"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-SCHED: pid={pid} state=blocked->runnable reason=desktop-event event=policy-applied generation={}",
+        event.generation
     ));
     run_process(pid)
 }
@@ -1000,6 +1056,27 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             }
             0
         }
+        DESKTOP_WAIT_SYSCALL => {
+            if pid != DESKTOP_PID || frame.rsi != EVENT_SIZE as u64 || frame.rdx != 0 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            if !validate_user_range(pid, frame.rdi, EVENT_SIZE, true) {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let request = DesktopWaitRequest {
+                pid,
+                destination: frame.rdi,
+                after_generation: frame.rdx,
+            };
+            suspend_io_syscall(pid, frame, PendingSyscall::DesktopWait(request));
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=slopos-desktop-v1 entry=syscall return=kernel nr={DESKTOP_WAIT_SYSCALL} wait_event=policy-applied after_generation={} event_bytes={EVENT_SIZE} state=blocked origin=cpl3",
+                request.after_generation
+            ));
+            2
+        }
         LINUX_SYS_EXIT => {
             if frame.rdi > u64::from(u8::MAX) {
                 crate::fatal("user exit syscall status is invalid");
@@ -1061,6 +1138,9 @@ fn process_event_after_user(pid: u32) -> ProcessEvent {
         (ProcessState::Blocked, PendingSyscall::Close(request)) => ProcessEvent::Close(request),
         (ProcessState::Blocked, PendingSyscall::Wait(request)) => {
             ProcessEvent::Waiting { pid: request.pid }
+        }
+        (ProcessState::Blocked, PendingSyscall::DesktopWait(request)) => {
+            ProcessEvent::DesktopWaiting(request)
         }
         (ProcessState::Runnable, PendingSyscall::Yield) => ProcessEvent::Yielded { pid },
         _ => crate::fatal("process returned with an inconsistent scheduler state"),

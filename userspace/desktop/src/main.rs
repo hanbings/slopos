@@ -7,7 +7,8 @@ use core::arch::{asm, global_asm};
 use core::mem::size_of;
 use core::panic::PanicInfo;
 use slopos_desktop_protocol::{
-    COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DesktopCommit, WALLPAPER_AURORA, config_hash,
+    COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit, DesktopServiceEvent,
+    EVENT_POLICY_APPLIED, EVENT_SIZE, WALLPAPER_AURORA, config_hash,
 };
 
 const USER_ENTRY: u64 = 0x4000_0000;
@@ -105,13 +106,33 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
     {
         exit(8);
     }
+    let mut event_bytes = [0u8; EVENT_SIZE];
+    if syscall3(
+        DESKTOP_WAIT_SYSCALL,
+        event_bytes.as_mut_ptr() as u64,
+        EVENT_SIZE as u64,
+        0,
+    ) != 0
+    {
+        exit(9);
+    }
+    let Ok(event) = DesktopServiceEvent::decode(&event_bytes) else {
+        exit(10);
+    };
+    if event.kind != EVENT_POLICY_APPLIED || event.generation != 1 {
+        exit(11);
+    }
     let result = syscall3(
         SYS_WRITE,
         STDOUT,
         MESSAGE.as_ptr() as u64,
         MESSAGE.len() as u64,
     );
-    exit(if result == MESSAGE.len() as i64 { 0 } else { 9 })
+    exit(if result == MESSAGE.len() as i64 {
+        0
+    } else {
+        12
+    })
 }
 
 fn open(path: &[u8]) -> i64 {
@@ -324,5 +345,5 @@ fn exit(status: u64) -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
-    exit(10)
+    exit(13)
 }
