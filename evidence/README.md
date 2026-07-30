@@ -55,7 +55,7 @@ JBD2 宿主测试解析 big-endian v2 superblock，并拒绝 truncation、非法
 
 第五个 marker 证明 inode 25 所在 inode-table block 38 也作为 JBD2 home target：sequence 1 transaction 把 size/checksum 更新为 4095/valid，sequence 2 transaction 恢复 4096/valid，最终 journal sequence 为 3。两次 cache 失效后的 inode parser 均接受整块 metadata；测试回卷 sequence 后，固定 image hash 与 `e2fsck -fn` 再次证明完整恢复。
 
-第六个 marker 证明五 tag allocation transaction 同步覆盖 blocks 0/1/33/38/99。内核把 superblock/group free count 各减一、更新 block bitmap CRC32C 与 descriptor checksum、增长 inode size/i_blocks/extent，并从新 logical block 1 读回全 `G`；第二笔 transaction 释放并逐字节恢复。
+第六个 marker 证明 fd 3 的 append/truncate 与五 tag allocation transaction 同步覆盖 blocks 0/1/33/38/99。descriptor 在 EOF 4096 取得 4096-byte append window；内核把 superblock/group free count 各减一、更新 block bitmap CRC32C 与 descriptor checksum、增长 inode size/i_blocks/extent，并把 node size 扩为 8192、offset 推进到 EOF。新增 logical block 1 经普通 fd read 路径读回全 `G`；第二笔 transaction 释放 block，descriptor truncate 回 4096，五块逐字节恢复。
 
 第七个 marker 证明 create/unlink transaction 同步覆盖 blocks 0/1/36/38/83。全局/group 1 free inode 与 `itable_unused` 由 7→6，inode bitmap CRC、group checksum、inode 26 checksum 和 directory tail checksum 全部重算；正常 path walker 能打开 size 0 的 `create-probe`。第二笔 transaction 经共享 directory remover 与 inode-bitmap encoder 回到原始五块。最终固定 hash/fsck 排除 inode、目录项或计数泄漏。
 

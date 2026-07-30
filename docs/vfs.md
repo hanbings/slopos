@@ -19,4 +19,4 @@
 - 只有一个 root filesystem，没有 mount/unmount 生命周期或引用计数；
 - 只有 regular-file read/原位 write/seek/close，没有 directory fd、stat、dup、poll、mmap、owner/mode 权限或文件增长；
 - 没有 syscall，因此用户程序尚不能访问这些 fd；
-- fd write 只覆盖已有 initialized extent 中完整存在的 block；底层 ext4 已有 create/unlink 与 block growth probe，但尚未接到 VFS create/truncate/append API。
+- fd write 可覆写已有 initialized block；在 descriptor 位于 EOF 时还可取得 append window，由 ext4 五-home transaction 分配一个连续 block，随后更新 node size/offset并经同一 fd 读回。truncate probe 把 offset/size 与 block metadata 一起恢复。当前只支持单块增长；底层 create/unlink 尚未接到 VFS namespace API。

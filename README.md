@@ -6,7 +6,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
-QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对复杂读取路径，固定容量 VFS 通过 fd 3 读写已分配数据。内核校验 inode 8 的 JBD2 superblock，并以五 tag transaction 同步更新 superblock、group descriptor、bitmap、inode table 与 data/directory block：block 99 allocation 令 inode 25 的 extent 从 4096 增长到 8192 bytes；另一组 transaction 分配 inode 26、插入并打开空文件 `/usr/share/slopos/create-probe`，再 unlink。标准 clean boot 的 8-entry cache 记录 74 hit/69 miss/16 invalidation，共 447 个设备请求、446 次队列中断。两阶段 crash-injection 还会停在 allocation commit 后/home 前，再由普通 kernel 于下次 mount 重放、清理并继续进入桌面。当前 replay 支持最多八个 tag 的零-feature、连续且非 wrap transaction；create/growth 尚未接到 VFS fd API，也没有通用可写 namespace。
+QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对复杂读取路径；读写 fd 3 除原位覆写外，还能从 EOF 4096 追加一整块：五 tag transaction 分配 block 99、把 inode 25 extent 增长到 8192，descriptor size/offset 同步推进，新增数据再经 fd 读回，最后 truncate/释放恢复。另一组 transaction 分配 inode 26、插入并打开空文件 `/usr/share/slopos/create-probe`，再 unlink。标准 clean boot 的 8-entry cache 记录 74 hit/69 miss/16 invalidation，共 447 个设备请求、446 次队列中断。两阶段 crash-injection 还会停在 allocation commit 后/home 前，再由普通 kernel 于下次 mount 重放、清理并继续进入桌面。当前 replay 支持最多八个 tag 的零-feature、连续且非 wrap transaction；create 尚未接到 VFS descriptor API，也没有通用可写 namespace。
 
 ![SlopOS early interactive desktop](evidence/desktop.png)
 
@@ -49,7 +49,7 @@ make test-journal-replay
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 检查绝对路径、mount-prefix、fd offset 和 access mode。`make test-boot` 在 OVMF 中验证上述硬件路径、447 次 virtio 请求及 446 次 INTx completion、fd write、active data/metadata/allocation/create transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、477 次请求/476 次 completion、桌面继续运行和宿主 fsck。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode 与 EOF growth。`make test-boot` 在 OVMF 中验证上述硬件路径、447 次 virtio 请求及 446 次 INTx completion、fd overwrite/append/truncate、active transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、477 次请求/476 次 completion、桌面继续运行和宿主 fsck。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 
