@@ -16,7 +16,7 @@ replay_serial="${repo_dir}/evidence/journal-replay-serial.log"
 replay_debug="${repo_dir}/evidence/journal-replay-uefi-debugcon.log"
 replay_qemu="${repo_dir}/evidence/journal-replay-qemu.log"
 home_snapshot="${repo_dir}/target/journal-replay-homes.bin"
-home_blocks=(0 1 33 38 110)
+home_blocks=(0 1 33 38 111)
 
 restore_clean_artifacts() {
     "${cargo_bin}" build --locked --release \
@@ -80,21 +80,21 @@ if [[ ${injection_status} -ne 0 && ${injection_status} -ne 124 ]]; then
     exit "${injection_status}"
 fi
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=22928 blocks=6 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=25896 blocks=7 matches_boot=true" \
     "${injection_serial}"
 grep -Fq \
-    "SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/110 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5" \
+    "SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/111 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5" \
     "${injection_serial}"
 grep -Fq "needs_recovery" <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-grep -Eq "^Free blocks:[[:space:]]+61299$" \
+grep -Eq "^Free blocks:[[:space:]]+61298$" \
     <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-grep -Fq "Block 110 marked in use" \
-    <(/usr/sbin/debugfs -R "testb 110" "${root_image}" 2>/dev/null)
+grep -Fq "Block 111 marked in use" \
+    <(/usr/sbin/debugfs -R "testb 111" "${root_image}" 2>/dev/null)
 grep -Fq "Size: 8192" \
     <(/usr/sbin/debugfs -R "stat <31>" "${root_image}" 2>/dev/null)
 grep -Fq "Blockcount: 16" \
     <(/usr/sbin/debugfs -R "stat <31>" "${root_image}" 2>/dev/null)
-block_is_byte 110 71
+block_is_byte 111 71
 
 "${cargo_bin}" build --locked --release \
     -p slopos-kernel --target x86_64-unknown-none
@@ -123,7 +123,7 @@ if [[ ${replay_status} -ne 0 && ${replay_status} -ne 124 ]]; then
     exit "${replay_status}"
 fi
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=22928 blocks=6 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=25896 blocks=7 matches_boot=true" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-PROCESS: pid=1 source=vfs path=/sbin/slop-init format=elf64" \
@@ -132,13 +132,16 @@ grep -Fq \
     "SLOPOS-VFS: process read complete pid=1 fd=3 inode=18 offset=0 requested=76 bytes=76 async=true" \
     "${replay_serial}"
 grep -Fq \
+    "SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=16 bytes=16 async=true flushed=true" \
+    "${replay_serial}"
+grep -Fq \
     "SLOPOS-EXT4: journal recovery replayed sequence=1 start=1 tags=5 first_target_block=0 escaped=false home_readback=true next_sequence=2 records_cleared=true recovery=false" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-EXT4: journal superblock valid inode=8 physical_block=32801 blocks=4096 first=1 sequence=2 start=0" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-VIRTIO: bounded block sequence complete requests=509 max_in_flight=2 interrupts=508 queue_interrupts=508" \
+    "SLOPOS-VIRTIO: bounded block sequence complete requests=524 max_in_flight=2 interrupts=523 queue_interrupts=523" \
     "${replay_serial}"
 grep -Fq "SLOPOS-DESKTOP: interactive compositor loop entered windows=3" "${replay_serial}"
 if grep -Fq "FATAL" "${replay_serial}"; then
@@ -149,10 +152,10 @@ if /usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null | grep -Fq "needs_recovery"
     echo "journal replay did not clear the ext4 recovery flag" >&2
     exit 1
 fi
-grep -Eq "^Free blocks:[[:space:]]+61300$" \
+grep -Eq "^Free blocks:[[:space:]]+61299$" \
     <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-grep -Fq "Block 110 not in use" \
-    <(/usr/sbin/debugfs -R "testb 110" "${root_image}" 2>/dev/null)
+grep -Fq "Block 111 not in use" \
+    <(/usr/sbin/debugfs -R "testb 111" "${root_image}" 2>/dev/null)
 grep -Fq "Size: 4096" \
     <(/usr/sbin/debugfs -R "stat <31>" "${root_image}" 2>/dev/null)
 grep -Fq "Blockcount: 8" \
@@ -191,7 +194,7 @@ sed -i 's/\r$//' \
 restore_clean_artifacts
 trap - EXIT
 clean_hash="$(sha256sum "${root_image}" | awk '{print $1}')"
-if [[ "${clean_hash}" != "93ce639b52e260754294e752aa3d8c9fd5c11059e106dfced4f1540a97c5c6c5" ]]; then
+if [[ "${clean_hash}" != "a324677b1147c0c2463562c3a1ce4ae73cf916d1e566003ab95b5d5969e5df9f" ]]; then
     echo "journal replay cleanup did not restore the reproducible root image" >&2
     exit 1
 fi

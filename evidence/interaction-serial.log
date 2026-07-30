@@ -4,20 +4,20 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=413576
-SLOPOS-UEFI: kernel mapped 0x4000000..0x404e000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=422936
+SLOPOS-UEFI: kernel mapped 0x4000000..0x4050000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
-SLOPOS-UEFI: user ELF loaded bytes=22928 base=0xdf48000
+SLOPOS-UEFI: user ELF loaded bytes=25896 base=0xdf47000
 SLOPOS-UEFI: Boot Services exited descriptors=118
 SLOPOS-UEFI: transferring control to kernel
 SLOPOS-KERNEL: entry reached
 SLOPOS-KERNEL: boot info valid memory_descriptors=118
 SLOPOS-ACPI: XSDT MADT validated cpus=1 lapic=0xfee00000 ioapics=1 overrides=5 irq11=11/13
 SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
-SLOPOS-KERNEL: user ELF available base=0xdf48000 bytes=22928
+SLOPOS-KERNEL: user ELF available base=0xdf47000 bytes=25896
 SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
 SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
-SLOPOS-MM: frame allocator initialized regions=8 free_frames=52949 probe=0x100000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=52946 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
@@ -33,10 +33,11 @@ SLOPOS-ASYNC: executor entered tasks=3
 SLOPOS-VIRTIO: modern block queue ready size=8 capacity_sectors=524288 flush=true
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=22928 blocks=6 matches_boot=true
+SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=25896 blocks=7 matches_boot=true
 SLOPOS-PROCESS: table initialized capacity=4 pid=1 state=ready fd_capacity=8 per_process_fds=true
-SLOPOS-PROCESS: pid=1 source=vfs path=/sbin/slop-init format=elf64 entry=0x40000000 segments=1 file_bytes=22928 load_bytes=1008 memory_bytes=1008 address_space=0x21b000 user_code=0x40000000 user_stack=0x40002000 code_frame=0x21f000 stack_frame=0x220000 code=user-readonly stack=user-writable kernel=supervisor
-SLOPOS-SYSCALL: fast path ready instruction=syscall return=sysretq star=0x10000800000000 lstar=0x400139a fmask=0x47700 efer_sce=true
+SLOPOS-PROCESS: pid=1 source=vfs path=/sbin/slop-init format=elf64 entry=0x40000000 segments=1 file_bytes=25896 load_bytes=2160 memory_bytes=2160 address_space=0x21b000 user_code=0x40000000 user_stack=0x40002000 code_frame=0x21f000 stack_frame=0x220000 code=user-readonly stack=user-writable kernel=supervisor
+SLOPOS-PROCESS: pid=1 initial_stack abi=linux-x86_64 rsp=0x40001ec0 aligned=16 argc=2 argv0=/sbin/slop-init envc=3 auxv_pairs=9 bytes=320
+SLOPOS-SYSCALL: fast path ready instruction=syscall return=sysretq star=0x10000800000000 lstar=0x40013aa fmask=0x47700 efer_sce=true
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path=/etc/slopos/system.conf origin=cpl3
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-VFS: process open complete pid=1 fd=3 inode=18 bytes=76 access=readonly async=true path=/etc/slopos/system.conf
@@ -44,17 +45,37 @@ SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=0 read 
 SLOPOS-VFS: process read complete pid=1 fd=3 inode=18 offset=0 requested=76 bytes=76 async=true
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd=3 origin=cpl3
 SLOPOS-VFS: process close complete pid=1 fd=3 inode=18 async=false
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=2 path=/usr/share/slopos/write-probe.bin origin=cpl3
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-VFS: process open complete pid=1 fd=3 inode=31 bytes=4096 access=readwrite async=true path=/usr/share/slopos/write-probe.bin
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=16 origin=cpl3
+SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=16 bytes=16 async=true flushed=true
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=16 origin=cpl3
+SLOPOS-VFS: process read complete pid=1 fd=3 inode=31 offset=123 requested=16 bytes=16 async=true
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=16 origin=cpl3
+SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=16 bytes=16 async=true flushed=true
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=16 origin=cpl3
+SLOPOS-VFS: process read complete pid=1 fd=3 inode=31 offset=123 requested=16 bytes=16 async=true
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd=3 origin=cpl3
+SLOPOS-VFS: process close complete pid=1 fd=3 inode=31 async=false
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=18 origin=cpl3 result=18
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=60 exit status=0 origin=cpl3
-SLOPOS-PROCESS: pid=1 state=exited status=0 syscalls=5 retained=true kernel_return=true
+SLOPOS-PROCESS: pid=1 state=exited status=0 syscalls=15 retained=true kernel_return=true
 SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT block_size=4096 blocks=65536 inodes=32 groups=2 features=0x103c/0x22c2/0x46b
 SLOPOS-EXT4: root directory valid group_inode_table=37 inode=2 extent_block=39 entries=6 etc_inode=13 lost_found_inode=11 metadata_checksums=group/inode/directory
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-CONFIG: VFS load published initial=true generation=1 atomic=true paths=/etc/slopos/niri.kdl,/etc/slopos/waybar.jsonc,/etc/slopos/waybar.css,/etc/slopos/swww.env
-SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-CONFIG: reload applied generation=1 atomic=true niri=/etc/slopos/niri.kdl waybar=/etc/slopos/waybar.jsonc style=/etc/slopos/waybar.css swww=/etc/slopos/swww.env workspaces=3 module_configs=6 css_rules=12
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: async path read valid release_inode=21 release_bytes=40 config_inode=18 config_bytes=76 paths=/etc/slopos-release,/etc/slopos/system.conf
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -66,7 +87,7 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-EXT4: depth-one extent valid inode=27 leaf_block=96 logical_block=8 bytes=4096 metadata_checksum=valid path=/usr/share/slopos/deep-extent.bin
+SLOPOS-EXT4: depth-one extent valid inode=27 leaf_block=97 logical_block=8 bytes=4096 metadata_checksum=valid path=/usr/share/slopos/deep-extent.bin
 SLOPOS-EXT4: sparse read valid inode=27 logical_block=7 zero_bytes=4096
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -82,11 +103,11 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-VFS: writable descriptor valid fd=3 inode=31 physical_block=109 offset=123 bytes=73 writes=2 flushes=2 cache_invalidations=2 restored=true path=/usr/share/slopos/write-probe.bin
+SLOPOS-VFS: writable descriptor valid fd=3 inode=31 physical_block=110 offset=123 bytes=73 writes=2 flushes=2 cache_invalidations=2 restored=true path=/usr/share/slopos/write-probe.bin
 SLOPOS-EXT4: journal superblock valid inode=8 physical_block=32801 blocks=4096 first=1 sequence=1 start=0 users=1 features=0x0/0x0/0x0 uuid=match endian=big
-SLOPOS-EXT4: journal records staged sequence=1 target_block=109 descriptor_block=32802 data_block=32803 commit_block=32804 writes=6 flushes=3 verified=true restored=true active=false
+SLOPOS-EXT4: journal records staged sequence=1 target_block=110 descriptor_block=32802 data_block=32803 commit_block=32804 writes=6 flushes=3 verified=true restored=true active=false
 SLOPOS-EXT4: journal state transition recovery=true sequence=1 start=1 readback=valid checkpoint_start=0 restored=true transactions=0 writes=4 flushes=4
-SLOPOS-EXT4: active journal transaction valid sequence=1 target_block=109 recovery=true start=1 records=descriptor/data/commit replayable_readback=true home_checkpointed=true next_sequence=2 test_sequence_rewound=true restored=true writes=13 flushes=10
+SLOPOS-EXT4: active journal transaction valid sequence=1 target_block=110 recovery=true start=1 records=descriptor/data/commit replayable_readback=true home_checkpointed=true next_sequence=2 test_sequence_rewound=true restored=true writes=13 flushes=10
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -94,7 +115,7 @@ SLOPOS-EXT4: metadata journal transactions valid inode=31 inode_table_block=38 s
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-EXT4: fd append journal transactions valid fd=3 inode=31 block=110 bitmap_block=33 group_descriptor_block=1 inode_table_block=38 append_bytes=4096 size=4096/8192/4096 extent_blocks=1/2/1 checksums=superblock/group/bitmap/inode/data transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true
+SLOPOS-EXT4: fd append journal transactions valid fd=3 inode=31 block=111 bitmap_block=33 group_descriptor_block=1 inode_table_block=38 append_bytes=4096 size=4096/8192/4096 extent_blocks=1/2/1 checksums=superblock/group/bitmap/inode/data transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -102,13 +123,13 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-EXT4: VFS create journal transactions valid fd=3 inode=32 parent_inode=26 inode_bitmap_block=36 group_descriptor_block=1 inode_table_block=38 directory_block=94 free_inodes=1/0/1 size=0 access=readwrite checksums=superblock/group/bitmap/inode/directory transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true path=/usr/share/slopos/create-probe
-SLOPOS-FS: block cache entries=8 hits=136 misses=96 batched_pairs=1 invalidations=16
-SLOPOS-VIRTIO: bounded block sequence complete requests=474 max_in_flight=2 interrupts=473 queue_interrupts=473
-SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=473/473
-SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=473/473
+SLOPOS-EXT4: VFS create journal transactions valid fd=3 inode=32 parent_inode=26 inode_bitmap_block=36 group_descriptor_block=1 inode_table_block=38 directory_block=95 free_inodes=1/0/1 size=0 access=readwrite checksums=superblock/group/bitmap/inode/directory transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true path=/usr/share/slopos/create-probe
+SLOPOS-FS: block cache entries=8 hits=143 misses=107 batched_pairs=1 invalidations=18
+SLOPOS-VIRTIO: bounded block sequence complete requests=489 max_in_flight=2 interrupts=488 queue_interrupts=488
+SLOPOS-ASYNC: timer future completed tick=102 input_dropped=0 virtio_interrupts=488/488
+SLOPOS-ASYNC: timer future completed tick=602 input_dropped=0 virtio_interrupts=488/488
 SLOPOS-TERMINAL: command=STATUS
-SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=473/473
+SLOPOS-ASYNC: timer future completed tick=1102 input_dropped=0 virtio_interrupts=488/488
 SLOPOS-CONFIG: reload requested generation=1 accepted=true
 SLOPOS-TERMINAL: command=RELOAD
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -116,41 +137,41 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-CONFIG: VFS load published initial=false generation=2 atomic=true paths=/etc/slopos/niri.kdl,/etc/slopos/waybar.jsonc,/etc/slopos/waybar.css,/etc/slopos/swww.env
 SLOPOS-CONFIG: reload applied generation=2 atomic=true niri=/etc/slopos/niri.kdl waybar=/etc/slopos/waybar.jsonc style=/etc/slopos/waybar.css swww=/etc/slopos/swww.env workspaces=3 module_configs=6 css_rules=12
-SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=487/487
+SLOPOS-ASYNC: timer future completed tick=1602 input_dropped=0 virtio_interrupts=502/502
 SLOPOS-CONFIG: invalid reload requested generation=2 accepted=true
 SLOPOS-TERMINAL: command=RELOAD BAD
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-CONFIG: VFS load rejected initial=false error=invalid-waybar-style retained_generation=2
-SLOPOS-ASYNC: timer future completed tick=2101 input_dropped=0 virtio_interrupts=497/497
+SLOPOS-ASYNC: timer future completed tick=2102 input_dropped=0 virtio_interrupts=512/512
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=30
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE CENTER --TRANSITION-STEP 64
 SLOPOS-SWWW: transition complete type=center step=64 fps=30 frames=5
-SLOPOS-ASYNC: timer future completed tick=3029 input_dropped=0 virtio_interrupts=497/497
-SLOPOS-ASYNC: timer future completed tick=3101 input_dropped=0 virtio_interrupts=497/497
-SLOPOS-ASYNC: timer future completed tick=3601 input_dropped=0 virtio_interrupts=497/497
-SLOPOS-ASYNC: timer future completed tick=4101 input_dropped=0 virtio_interrupts=497/497
+SLOPOS-ASYNC: timer future completed tick=3017 input_dropped=0 virtio_interrupts=512/512
+SLOPOS-ASYNC: timer future completed tick=3102 input_dropped=0 virtio_interrupts=512/512
+SLOPOS-ASYNC: timer future completed tick=3602 input_dropped=0 virtio_interrupts=512/512
+SLOPOS-ASYNC: timer future completed tick=4102 input_dropped=0 virtio_interrupts=512/512
 SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM
 SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-SWWW: daemon stopped
 SLOPOS-TERMINAL: command=SWWW KILL
-SLOPOS-ASYNC: timer future completed tick=4613 input_dropped=0 virtio_interrupts=497/497
+SLOPOS-ASYNC: timer future completed tick=4613 input_dropped=0 virtio_interrupts=512/512
 SLOPOS-SWWW: daemon started
 SLOPOS-TERMINAL: command=SWWW-DAEMON
-SLOPOS-ASYNC: timer future completed tick=5101 input_dropped=0 virtio_interrupts=497/497
+SLOPOS-ASYNC: timer future completed tick=5102 input_dropped=0 virtio_interrupts=512/512
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE NONE
-SLOPOS-ASYNC: timer future completed tick=5601 input_dropped=0 virtio_interrupts=497/497
-SLOPOS-ASYNC: timer future completed tick=6101 input_dropped=0 virtio_interrupts=497/497
+SLOPOS-ASYNC: timer future completed tick=5602 input_dropped=0 virtio_interrupts=512/512
+SLOPOS-ASYNC: timer future completed tick=6102 input_dropped=0 virtio_interrupts=512/512
 SLOPOS-SHELL: view scrolled workspace=1 offset=48 gesture=titlebar-drag
 SLOPOS-DESKTOP: window moved kind=TERMINAL x=-32 y=56 layout=scrolling
 SLOPOS-DESKTOP: window closed kind=TERMINAL workspace=1
 SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main focused=1
 SLOPOS-DESKTOP: window closed kind=SYSTEM workspace=1
 SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main focused=-1
-SLOPOS-ASYNC: timer future completed tick=6601 input_dropped=0 virtio_interrupts=497/497
+SLOPOS-ASYNC: timer future completed tick=6602 input_dropped=0 virtio_interrupts=512/512
 SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2
 SLOPOS-DESKTOP: window closed kind=CONFIG workspace=2
 SLOPOS-NIRI: binding action=close-window changed=true workspace=2 name=config focused=-1
-SLOPOS-ASYNC: timer future completed tick=7101 input_dropped=0 virtio_interrupts=497/497
+SLOPOS-ASYNC: timer future completed tick=7102 input_dropped=0 virtio_interrupts=512/512

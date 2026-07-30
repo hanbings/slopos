@@ -2,9 +2,9 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=413456
-SLOPOS-UEFI: kernel mapped 0x4000000..0x404e000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=422936
+SLOPOS-UEFI: kernel mapped 0x4000000..0x4050000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
-SLOPOS-UEFI: user ELF loaded bytes=22928 base=0xdf48000
+SLOPOS-UEFI: user ELF loaded bytes=25896 base=0xdf47000
 SLOPOS-UEFI: Boot Services exited descriptors=118
 SLOPOS-UEFI: transferring control to kernel
