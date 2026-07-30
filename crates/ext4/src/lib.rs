@@ -410,7 +410,136 @@ const JOURNAL_TAG_ESCAPE: u16 = 0x0001;
 const JOURNAL_TAG_SAME_UUID: u16 = 0x0002;
 const JOURNAL_TAG_DELETED: u16 = 0x0004;
 const JOURNAL_TAG_LAST: u16 = 0x0008;
-const JOURNAL_TAG_SUPPORTED: u16 = JOURNAL_TAG_ESCAPE | JOURNAL_TAG_LAST;
+const JOURNAL_TAG_SUPPORTED: u16 = JOURNAL_TAG_ESCAPE | JOURNAL_TAG_SAME_UUID | JOURNAL_TAG_LAST;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JournalTag {
+    pub target_block: u32,
+    pub escaped: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JournalDescriptorBlock<'a> {
+    bytes: &'a [u8],
+    pub sequence: u32,
+    pub uuid: [u8; 16],
+    pub tag_count: usize,
+}
+
+impl<'a> JournalDescriptorBlock<'a> {
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, ParseError> {
+        if bytes.len() < 36 {
+            return Err(ParseError::Truncated);
+        }
+        if read_be_u32(bytes, 0)? != JOURNAL_MAGIC
+            || read_be_u32(bytes, 4)? != JOURNAL_DESCRIPTOR_BLOCK
+        {
+            return Err(ParseError::InvalidMagic);
+        }
+        let sequence = read_be_u32(bytes, 8)?;
+        if sequence == 0 {
+            return Err(ParseError::InvalidJournal);
+        }
+
+        let mut offset = 12;
+        let mut tag_count = 0;
+        let mut transaction_uuid = None;
+        loop {
+            let parsed = parse_journal_tag(bytes, offset, transaction_uuid)?;
+            if let Some(uuid) = parsed.uuid {
+                if let Some(expected) = transaction_uuid {
+                    if uuid != expected {
+                        return Err(ParseError::InvalidJournal);
+                    }
+                } else {
+                    transaction_uuid = Some(uuid);
+                }
+            }
+            tag_count += 1;
+            offset = parsed.next_offset;
+            if parsed.flags & JOURNAL_TAG_LAST != 0 {
+                break;
+            }
+        }
+        let uuid = transaction_uuid.ok_or(ParseError::InvalidJournal)?;
+        Ok(Self {
+            bytes,
+            sequence,
+            uuid,
+            tag_count,
+        })
+    }
+
+    pub fn tag(&self, index: usize) -> Result<JournalTag, ParseError> {
+        if index >= self.tag_count {
+            return Err(ParseError::InvalidJournal);
+        }
+        let mut offset = 12;
+        let mut transaction_uuid = None;
+        for current in 0..=index {
+            let parsed = parse_journal_tag(self.bytes, offset, transaction_uuid)?;
+            if let Some(uuid) = parsed.uuid {
+                transaction_uuid = Some(uuid);
+            }
+            if current == index {
+                return Ok(parsed.tag);
+            }
+            offset = parsed.next_offset;
+        }
+        Err(ParseError::InvalidJournal)
+    }
+}
+
+struct ParsedJournalTag {
+    tag: JournalTag,
+    flags: u16,
+    uuid: Option<[u8; 16]>,
+    next_offset: usize,
+}
+
+fn parse_journal_tag(
+    bytes: &[u8],
+    offset: usize,
+    transaction_uuid: Option<[u8; 16]>,
+) -> Result<ParsedJournalTag, ParseError> {
+    if offset.checked_add(8).ok_or(ParseError::InvalidJournal)? > bytes.len() {
+        return Err(ParseError::Truncated);
+    }
+    let checksum = read_be_u16(bytes, offset + 4)?;
+    let flags = read_be_u16(bytes, offset + 6)?;
+    if checksum != 0
+        || flags & JOURNAL_TAG_DELETED != 0
+        || flags & !JOURNAL_TAG_SUPPORTED != 0
+        || (transaction_uuid.is_none() && flags & JOURNAL_TAG_SAME_UUID != 0)
+    {
+        return Err(ParseError::InvalidJournal);
+    }
+    let mut next_offset = offset + 8;
+    let uuid = if flags & JOURNAL_TAG_SAME_UUID == 0 {
+        if next_offset
+            .checked_add(16)
+            .ok_or(ParseError::InvalidJournal)?
+            > bytes.len()
+        {
+            return Err(ParseError::Truncated);
+        }
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(&bytes[next_offset..next_offset + 16]);
+        next_offset += 16;
+        Some(uuid)
+    } else {
+        None
+    };
+    Ok(ParsedJournalTag {
+        tag: JournalTag {
+            target_block: read_be_u32(bytes, offset)?,
+            escaped: flags & JOURNAL_TAG_ESCAPE != 0,
+        },
+        flags,
+        uuid,
+        next_offset,
+    })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JournalDescriptor {
@@ -422,32 +551,16 @@ pub struct JournalDescriptor {
 
 impl JournalDescriptor {
     pub fn parse(bytes: &[u8]) -> Result<Self, ParseError> {
-        if bytes.len() < 36 {
-            return Err(ParseError::Truncated);
-        }
-        if read_be_u32(bytes, 0)? != JOURNAL_MAGIC
-            || read_be_u32(bytes, 4)? != JOURNAL_DESCRIPTOR_BLOCK
-        {
-            return Err(ParseError::InvalidMagic);
-        }
-        let sequence = read_be_u32(bytes, 8)?;
-        let checksum = read_be_u16(bytes, 16)?;
-        let flags = read_be_u16(bytes, 18)?;
-        if sequence == 0
-            || checksum != 0
-            || flags & JOURNAL_TAG_LAST == 0
-            || flags & (JOURNAL_TAG_SAME_UUID | JOURNAL_TAG_DELETED) != 0
-            || flags & !JOURNAL_TAG_SUPPORTED != 0
-        {
+        let descriptor = JournalDescriptorBlock::parse(bytes)?;
+        if descriptor.tag_count != 1 {
             return Err(ParseError::InvalidJournal);
         }
-        let mut uuid = [0u8; 16];
-        uuid.copy_from_slice(&bytes[20..36]);
+        let tag = descriptor.tag(0)?;
         Ok(Self {
-            sequence,
-            target_block: read_be_u32(bytes, 12)?,
-            escaped: flags & JOURNAL_TAG_ESCAPE != 0,
-            uuid,
+            sequence: descriptor.sequence,
+            target_block: tag.target_block,
+            escaped: tag.escaped,
+            uuid: descriptor.uuid,
         })
     }
 }
@@ -494,26 +607,103 @@ pub fn encode_single_block_journal_transaction(
     if sequence == 0 {
         return Err(ParseError::InvalidJournal);
     }
-    descriptor_block.fill(0);
-    journal_data_block.copy_from_slice(home_block);
-    commit_block.fill(0);
+    let escaped = encode_journal_data_block(journal_data_block, home_block)?;
+    encode_journal_descriptor_block(
+        descriptor_block,
+        sequence,
+        &[target_block],
+        &[escaped],
+        uuid,
+    )?;
+    encode_journal_commit_block(commit_block, sequence)?;
+    Ok(())
+}
 
-    write_be_u32(descriptor_block, 0, JOURNAL_MAGIC)?;
-    write_be_u32(descriptor_block, 4, JOURNAL_DESCRIPTOR_BLOCK)?;
-    write_be_u32(descriptor_block, 8, sequence)?;
-    write_be_u32(descriptor_block, 12, target_block)?;
-    write_be_u16(descriptor_block, 16, 0)?;
+pub fn encode_journal_data_block(
+    journal_data_block: &mut [u8],
+    home_block: &[u8],
+) -> Result<bool, ParseError> {
+    if journal_data_block.len() != home_block.len()
+        || home_block.len() < 1024
+        || !home_block.len().is_power_of_two()
+    {
+        return Err(ParseError::InvalidJournal);
+    }
+    journal_data_block.copy_from_slice(home_block);
     let escaped = home_block[..4] == JOURNAL_MAGIC.to_be_bytes();
-    let flags = JOURNAL_TAG_LAST | if escaped { JOURNAL_TAG_ESCAPE } else { 0 };
-    write_be_u16(descriptor_block, 18, flags)?;
-    descriptor_block[20..36].copy_from_slice(uuid);
     if escaped {
         journal_data_block[..4].fill(0);
     }
+    Ok(escaped)
+}
 
+pub fn encode_journal_descriptor_block(
+    descriptor_block: &mut [u8],
+    sequence: u32,
+    target_blocks: &[u32],
+    escaped_tags: &[bool],
+    uuid: &[u8; 16],
+) -> Result<(), ParseError> {
+    if descriptor_block.len() < 1024
+        || !descriptor_block.len().is_power_of_two()
+        || sequence == 0
+        || target_blocks.is_empty()
+        || target_blocks.len() != escaped_tags.len()
+    {
+        return Err(ParseError::InvalidJournal);
+    }
+    let encoded_size = 12usize
+        .checked_add(24)
+        .and_then(|size| {
+            target_blocks
+                .len()
+                .checked_sub(1)
+                .and_then(|remaining| remaining.checked_mul(8))
+                .and_then(|remaining| size.checked_add(remaining))
+        })
+        .ok_or(ParseError::InvalidJournal)?;
+    if encoded_size > descriptor_block.len() {
+        return Err(ParseError::InvalidJournal);
+    }
+
+    descriptor_block.fill(0);
+    write_be_u32(descriptor_block, 0, JOURNAL_MAGIC)?;
+    write_be_u32(descriptor_block, 4, JOURNAL_DESCRIPTOR_BLOCK)?;
+    write_be_u32(descriptor_block, 8, sequence)?;
+    let mut offset = 12;
+    for (index, (&target_block, &escaped)) in target_blocks.iter().zip(escaped_tags).enumerate() {
+        write_be_u32(descriptor_block, offset, target_block)?;
+        write_be_u16(descriptor_block, offset + 4, 0)?;
+        let mut flags = if escaped { JOURNAL_TAG_ESCAPE } else { 0 };
+        if index != 0 {
+            flags |= JOURNAL_TAG_SAME_UUID;
+        }
+        if index + 1 == target_blocks.len() {
+            flags |= JOURNAL_TAG_LAST;
+        }
+        write_be_u16(descriptor_block, offset + 6, flags)?;
+        offset += 8;
+        if index == 0 {
+            descriptor_block[offset..offset + 16].copy_from_slice(uuid);
+            offset += 16;
+        }
+    }
+    JournalDescriptorBlock::parse(descriptor_block)?;
+    Ok(())
+}
+
+pub fn encode_journal_commit_block(
+    commit_block: &mut [u8],
+    sequence: u32,
+) -> Result<(), ParseError> {
+    if commit_block.len() < 1024 || !commit_block.len().is_power_of_two() || sequence == 0 {
+        return Err(ParseError::InvalidJournal);
+    }
+    commit_block.fill(0);
     write_be_u32(commit_block, 0, JOURNAL_MAGIC)?;
     write_be_u32(commit_block, 4, JOURNAL_COMMIT_BLOCK)?;
     write_be_u32(commit_block, 8, sequence)?;
+    JournalCommit::parse(commit_block)?;
     Ok(())
 }
 
@@ -522,11 +712,26 @@ pub fn decode_journal_data_block(
     journal_data_block: &[u8],
     descriptor: &JournalDescriptor,
 ) -> Result<(), ParseError> {
+    decode_journal_tag_data(
+        output,
+        journal_data_block,
+        &JournalTag {
+            target_block: descriptor.target_block,
+            escaped: descriptor.escaped,
+        },
+    )
+}
+
+pub fn decode_journal_tag_data(
+    output: &mut [u8],
+    journal_data_block: &[u8],
+    tag: &JournalTag,
+) -> Result<(), ParseError> {
     if output.len() != journal_data_block.len() || output.len() < 4 {
         return Err(ParseError::InvalidJournal);
     }
     output.copy_from_slice(journal_data_block);
-    if descriptor.escaped {
+    if tag.escaped {
         output[..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
     }
     Ok(())
@@ -1526,6 +1731,66 @@ mod tests {
             Ok(parsed_descriptor)
         );
         assert_eq!(decoded, home);
+    }
+
+    #[test]
+    fn round_trips_multiple_journal_descriptor_tags() {
+        let mut descriptor = [0u8; 4096];
+        let mut first_data = [0u8; 4096];
+        let mut second_data = [0u8; 4096];
+        let mut third_data = [0u8; 4096];
+        let mut commit = [0u8; 4096];
+        let first_home = [b'A'; 4096];
+        let mut second_home = [b'B'; 4096];
+        let third_home = [b'C'; 4096];
+        second_home[..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
+        let escaped = [
+            encode_journal_data_block(&mut first_data, &first_home).unwrap(),
+            encode_journal_data_block(&mut second_data, &second_home).unwrap(),
+            encode_journal_data_block(&mut third_data, &third_home).unwrap(),
+        ];
+        let uuid = [0x53; 16];
+        encode_journal_descriptor_block(&mut descriptor, 11, &[33, 38, 99], &escaped, &uuid)
+            .unwrap();
+        encode_journal_commit_block(&mut commit, 11).unwrap();
+
+        let parsed = JournalDescriptorBlock::parse(&descriptor).unwrap();
+        assert_eq!(parsed.sequence, 11);
+        assert_eq!(parsed.uuid, uuid);
+        assert_eq!(parsed.tag_count, 3);
+        assert_eq!(
+            parsed.tag(0),
+            Ok(JournalTag {
+                target_block: 33,
+                escaped: false,
+            })
+        );
+        assert_eq!(
+            parsed.tag(1),
+            Ok(JournalTag {
+                target_block: 38,
+                escaped: true,
+            })
+        );
+        assert_eq!(
+            parsed.tag(2),
+            Ok(JournalTag {
+                target_block: 99,
+                escaped: false,
+            })
+        );
+        assert_eq!(parsed.tag(3), Err(ParseError::InvalidJournal));
+        assert_eq!(JournalCommit::parse(&commit).unwrap().sequence, 11);
+
+        let mut decoded = [0u8; 4096];
+        decode_journal_tag_data(&mut decoded, &second_data, &parsed.tag(1).unwrap()).unwrap();
+        assert_eq!(decoded, second_home);
+        assert_eq!(first_data, first_home);
+        assert_eq!(third_data, third_home);
+        assert_eq!(
+            JournalDescriptor::parse(&descriptor),
+            Err(ParseError::InvalidJournal)
+        );
     }
 
     #[test]
