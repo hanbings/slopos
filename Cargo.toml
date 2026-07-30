@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "boot",
+    "crates/boot-protocol",
+    "kernel",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "0BSD"
+authors = ["kaisai <agent@hanbings.io>"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = false

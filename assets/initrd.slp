@@ -1,0 +1,5 @@
+SLOPOS_INITRD_V1
+name=SlopOS bootstrap image
+profile=interactive-desktop
+shell=kernel-monitor
+notice=This bootstrap image is a temporary early-boot format, not the ext4 root filesystem.

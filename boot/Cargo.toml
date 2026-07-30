@@ -1,0 +1,14 @@
+[package]
+name = "slopos-boot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "slopos-boot"
+path = "src/main.rs"
+
+[dependencies]
+slopos-boot-protocol = { path = "../crates/boot-protocol" }
+uefi-raw = "=0.13.0"
