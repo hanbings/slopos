@@ -3,7 +3,7 @@
 #![no_std]
 
 pub const BOOT_INFO_MAGIC: u64 = 0x534c_4f50_4f53_4249;
-pub const BOOT_INFO_VERSION: u32 = 1;
+pub const BOOT_INFO_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -45,6 +45,13 @@ pub struct InitrdInfo {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
+pub struct UserImageInfo {
+    pub base: u64,
+    pub size: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct KernelImageInfo {
     pub physical_start: u64,
     pub physical_end: u64,
@@ -61,5 +68,6 @@ pub struct BootInfo {
     pub memory_map: MemoryMapInfo,
     pub acpi_rsdp: u64,
     pub initrd: InitrdInfo,
+    pub user_image: UserImageInfo,
     pub kernel: KernelImageInfo,
 }

@@ -45,6 +45,8 @@ block_is_byte() {
 
 mkdir -p "${repo_dir}/evidence"
 "${cargo_bin}" build --locked --release \
+    -p slopos-init --target x86_64-unknown-none
+"${cargo_bin}" build --locked --release \
     -p slopos-kernel --target x86_64-unknown-none \
     --features journal-replay-injection
 "${cargo_bin}" build --locked --release \

@@ -11,7 +11,7 @@ use core::panic::PanicInfo;
 use core::ptr;
 use slopos_boot_protocol::{
     BOOT_INFO_MAGIC, BOOT_INFO_VERSION, BootInfo, FramebufferInfo, InitrdInfo, KernelImageInfo,
-    MemoryMapInfo, PixelFormat as BootPixelFormat,
+    MemoryMapInfo, PixelFormat as BootPixelFormat, UserImageInfo,
 };
 use uefi_raw::protocol::console::{
     GraphicsOutputModeInformation, GraphicsOutputProtocol, GraphicsPixelFormat,
@@ -68,6 +68,25 @@ static INITRD_PATH: &[u16] = &[
     b's' as u16,
     b'l' as u16,
     b'p' as u16,
+    0,
+];
+static USER_IMAGE_PATH: &[u16] = &[
+    b'\\' as u16,
+    b's' as u16,
+    b'l' as u16,
+    b'o' as u16,
+    b'p' as u16,
+    b'o' as u16,
+    b's' as u16,
+    b'\\' as u16,
+    b'i' as u16,
+    b'n' as u16,
+    b'i' as u16,
+    b't' as u16,
+    b'.' as u16,
+    b'e' as u16,
+    b'l' as u16,
+    b'f' as u16,
     0,
 ];
 
@@ -140,6 +159,17 @@ unsafe fn loader_main(image_handle: Handle, system_table: *mut SystemTable) -> !
         initrd.size, initrd.base
     ));
 
+    let user_image_file = unsafe { read_boot_file(boot_services, image_handle, USER_IMAGE_PATH) }
+        .unwrap_or_else(|message| fatal(message));
+    let user_image = UserImageInfo {
+        base: user_image_file.base,
+        size: user_image_file.size as u64,
+    };
+    serialln(format_args!(
+        "SLOPOS-UEFI: user ELF loaded bytes={} base={:#x}",
+        user_image.size, user_image.base
+    ));
+
     let boot_info_address = unsafe {
         allocate_pages(
             boot_services,
@@ -168,6 +198,7 @@ unsafe fn loader_main(image_handle: Handle, system_table: *mut SystemTable) -> !
             },
             acpi_rsdp,
             initrd,
+            user_image,
             kernel,
         })
     };
