@@ -2,8 +2,14 @@
 
 #![no_std]
 
+mod wallpaper;
 mod waybar;
 
+pub use wallpaper::{
+    ImgRequest, MAX_WALLPAPER_PATH, PpmError, PpmImage, ResizeMode, SwwwCommand, SwwwDaemonError,
+    SwwwDefaults, SwwwParseError, TransitionOptions, TransitionType, WallpaperDaemon,
+    WallpaperQuery, parse_ppm, parse_swww_command, parse_swww_environment, transition_pixel,
+};
 pub use waybar::{
     BarConfigError, BarModuleList, BarPosition, MAX_BAR_MODULES, WaybarConfig, parse_waybar_config,
 };
