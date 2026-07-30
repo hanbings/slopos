@@ -25,7 +25,7 @@ SlopOS 构建同时产生两个磁盘：
 - symlink inode type、零 block fast-link 条件与 inode 内 1–60 byte target；
 - variable-length directory entry、directory checksum tail 与按字节名称查找。
 
-17 项宿主测试覆盖高 32-bit count、动态 inode/descriptor size、bad magic、非法 geometry、truncation、五类 checksum corruption、extent length/index/depth、fast symlink、未知 incompat feature、dirty state、htree 拒绝，以及 big-endian JBD2 superblock/feature 边界和单块 transaction round-trip/corruption。当前只接受镜像实际用到的 ext4 incompat bits：`filetype`、`extent`、`64bit`、`flex_bg`、`metadata_csum_seed`；需要 journal replay 的脏盘不会继续。
+19 项宿主测试覆盖高 32-bit count、动态 inode/descriptor size、bad magic、非法 geometry、truncation、checksum corruption、extent tree、fast symlink、未知 feature、dirty state、htree 拒绝，以及 big-endian JBD2 superblock/transaction。新增状态测试会置位 ext4 `needs_recovery`、重算 CRC32C，并确认普通 parser 拒绝；清除后整个 superblock 逐字节恢复。JBD2 `s_sequence/s_start` 更新器同样验证 active→checkpointed→原始状态的 big-endian round-trip。
 
 裸机路径选择第二个 virtio-blk 设备（第一个仍是 ESP）。superblock 报告 65536 blocks、32 inodes、2 groups；group 0/1 inode table 分别是 block 37/38。component walker 打开 inode 24（group 1）并成对预取它的两个数据块；随后打开 inode 21，从 root index 读取 leaf block 85，校验 metadata checksum，由第五个 extent 映射 physical block 92，并把 logical block 7 的 hole 返回为 4096 个零。在 inode 22 的 8192-byte 线性目录中，walker 于 logical block 1 找到指向 inode 23 的 `tail-29`。最后读取 inode 14 内的 `slopos-release`，回到同一父目录定位 inode 17。VFS fd 路径再次以 chunk/seek 读取 inode 16。
 
@@ -33,7 +33,7 @@ inode 25 是 4096-byte write probe，映射到 physical block 98。内核先通�
 
 JBD2 journal 位于隐藏 inode 8，size 16 MiB，单一 initialized extent 映射 filesystem block 32801–36896。内核校验 inode checksum/extent 后按 [Linux ext4 JBD2 文档](https://www.kernel.org/doc/html/latest/filesystems/ext4/journal.html) 以 big-endian 解析首块：v2 superblock、4096-byte block、maxlen 4096、first 1、sequence 1、start 0、users 1、UUID 与 ext4 相同，feature words 全零。`start=0` 单独并不证明 journal clean；当前只证明生成镜像的 journal 几何属于 writer 将支持的边界，尚未扫描/replay transaction。
 
-共享 crate 还能无分配地编码/解析当前零-feature 格式的单块 transaction：一个含 UUID、target block、`LAST_TAG`/可选 `ESCAPE` 的 descriptor block，一个 journal data block，以及同 sequence 的 commit block。宿主 round-trip 会覆盖 home block 以 JBD2 magic 开头时的 escape/restore，并拒绝 `SAME_UUID` 首 tag、零 sequence、错误尺寸和损坏 header。编码器尚未负责磁盘发布顺序、journal superblock 状态、ext4 `needs_recovery` 或 checkpoint。
+共享 crate 还能无分配地编码/解析当前零-feature 格式的单块 transaction：一个含 UUID、target block、`LAST_TAG`/可选 `ESCAPE` 的 descriptor block，一个 journal data block，以及同 sequence 的 commit block。宿主 round-trip 会覆盖 home block 以 JBD2 magic 开头时的 escape/restore，并拒绝 `SAME_UUID` 首 tag、零 sequence、错误尺寸和损坏 header。状态更新器能安全修改 JBD2 superblock 与 ext4 recovery bit，但内核尚未把这些更新与 record/home-block ordering 组合成 active checkpoint。
 
 裸机随后确认 journal logical blocks 1–3 初始全零，把 target physical block 98、sequence 1 的 descriptor/data/commit 写到 physical blocks 32802/32803/32804。descriptor 与 data 完成后 flush，commit 完成后再次 flush；三个 record 再经独立 DMA readback 与内存编码逐字节比较。最后写回三个零块并第三次 flush，宿主确认 image hash 恢复且 `e2fsck` 通过。此阶段故意不修改 JBD2 superblock 或 ext4 recovery bit，marker 因此报告 `active=false`；它证明 record layout/ordering/persistence，不证明崩溃 replay。连同清理共完成 69 个请求、68 次 queue interrupt。
 

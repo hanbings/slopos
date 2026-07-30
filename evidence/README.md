@@ -43,7 +43,7 @@ ext4 parser 测试由 `make test-ext4` 执行。裸机日志证明 4096-byte blo
 
 `write-probe.bin` 是 inode 25 / physical block 98。裸机日志证明 `ReadWrite` fd 3 在 offset 123 两次处理 73-byte payload，ext4 层执行两次整块 read-modify-write、两次 flush、两次 cache invalidation 及 flush 后 fd 读回，随后恢复原始全 `P` 内容。固定 metadata 后，e2fsprogs 1.47.2 镜像 SHA-256 为 `4aeb38e91e7436b303569e9bd48145e01458dcc513f8db230f20b90a5d4a1fe2`；启动测试后的 hash 相同且 `e2fsck -fn` 通过。这只证明已分配数据块的有界原位写，不证明 ext4 metadata/journal 写路径。
 
-JBD2 宿主测试解析 big-endian v2 superblock，并拒绝 truncation、非法 geometry 和未知 feature；另有 round-trip/corruption 测试覆盖单 target descriptor、data escape/restore 和 commit header。裸机 marker 证明 journal inode 8 的单一 extent 从 physical block 32801 开始，superblock 报告 4096 blocks、first 1、sequence 1、start 0、users 1、零 feature words，UUID 与 ext4 匹配。它不证明 journal clean、磁盘 transaction replay 或 commit。
+JBD2 宿主测试解析 big-endian v2 superblock，并拒绝 truncation、非法 geometry 和未知 feature；round-trip/corruption 测试覆盖 descriptor/data/commit，状态测试覆盖 ext4 recovery-bit CRC32C 恢复与 JBD2 sequence/start 转换。裸机 marker 证明 journal inode 8 的单一 extent 从 physical block 32801 开始，superblock 报告 4096 blocks、first 1、sequence 1、start 0、users 1、零 feature words，UUID 与 ext4 匹配。它不证明 journal clean 或 replay。
 
 第二个裸机 marker 证明 sequence 1 / target block 98 的 descriptor/data/commit records 被写到 32802–32804；descriptor+data 和 commit 分别由 flush 隔开，三块读回一致，之后清零恢复。marker 明确带 `active=false`，因为尚未写 journal state 或 ext4 recovery bit。
 

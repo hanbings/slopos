@@ -34,7 +34,7 @@
 - 最后成功 ACPI 单元测试：2026-07-30，`make test-acpi`，3 项。
 - 最后成功 PCI 单元测试：2026-07-30，`make test-pci`，3 项。
 - 最后成功 virtio 单元测试：2026-07-30，`make test-virtio`，4 项。
-- 最后成功 ext4 单元测试：2026-07-30，`make test-ext4`，17 项。
+- 最后成功 ext4 单元测试：2026-07-30，`make test-ext4`，19 项。
 - 最后成功 VFS 单元测试：2026-07-30，`make test-vfs`，4 项。
 - 已验证的 kernel entry：`0x04000000`。
 - 已验证 GOP mode：1024×768，stride 1024。
