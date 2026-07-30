@@ -6,6 +6,7 @@ members = [
     "crates/boot-protocol",
     "crates/ext4",
     "crates/pci",
+    "crates/vfs",
     "crates/virtio",
     "ebpf",
     "kernel",

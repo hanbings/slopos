@@ -41,11 +41,16 @@ dependencies = [
  "slopos-ebpf",
  "slopos-ext4",
  "slopos-pci",
+ "slopos-vfs",
  "slopos-virtio",
 ]
 
 [[package]]
 name = "slopos-pci"
+version = "0.1.0"
+
+[[package]]
+name = "slopos-vfs"
 version = "0.1.0"
 
 [[package]]

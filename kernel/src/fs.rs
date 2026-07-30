@@ -7,6 +7,7 @@ use slopos_ext4::{
     DirectoryBlock, Extent, ExtentNode, GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode,
     ROOT_INODE, SUPERBLOCK_SIZE, Superblock, validate_path_component,
 };
+use slopos_vfs::{AbsolutePath, FileDescriptorTable, FileNode, MountTable};
 
 use crate::virtio::BlockDevice;
 
@@ -23,6 +24,8 @@ const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"multiblock.b
 const DEEP_EXTENT_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"deep-extent.bin"];
 const CROSS_BLOCK_PATH: [&[u8]; 5] = [b"usr", b"share", b"slopos", b"large-directory", b"tail-29"];
 const SYMLINK_PATH: [&[u8]; 2] = [b"etc", b"current-release"];
+const ROOT_FILESYSTEM_ID: u16 = 1;
+const VFS_TEST_PATH: &[u8] = b"/etc/./slopos/../slopos/system.conf";
 
 pub async fn mount_task(mut device: BlockDevice) -> ! {
     crate::serial::serialln(format_args!(
@@ -164,6 +167,87 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         symlink_bytes.len()
     ));
 
+    let root_path =
+        AbsolutePath::parse(b"/").unwrap_or_else(|_| device.fail("VFS root path is invalid"));
+    let path = AbsolutePath::parse(VFS_TEST_PATH)
+        .unwrap_or_else(|_| device.fail("VFS test path is invalid"));
+    let mut namespace = MountTable::<4>::new();
+    namespace
+        .mount(&root_path, ROOT_FILESYSTEM_ID)
+        .unwrap_or_else(|_| device.fail("VFS root mount failed"));
+    let resolution = namespace
+        .resolve(&path)
+        .unwrap_or_else(|_| device.fail("VFS path had no mount"));
+    if resolution.filesystem_id != ROOT_FILESYSTEM_ID || resolution.matched_components != 0 {
+        device.fail("VFS root mount resolution mismatch");
+    }
+    let vfs_file = mount
+        .open_file(
+            &mut device,
+            &path.components()[resolution.matched_components..],
+        )
+        .await;
+    let mut descriptors = FileDescriptorTable::<8>::new();
+    let fd = descriptors
+        .open(FileNode {
+            filesystem_id: resolution.filesystem_id,
+            node_id: u64::from(vfs_file.inode.number),
+            size: vfs_file.inode.size,
+        })
+        .unwrap_or_else(|_| device.fail("VFS file descriptor allocation failed"));
+    let mut vfs_bytes = [0u8; EXPECTED_SYSTEM_CONFIGURATION.len()];
+    let mut copied = 0;
+    let mut chunk_reads = 0;
+    while copied < vfs_bytes.len() {
+        let end = (copied + 17).min(vfs_bytes.len());
+        let read = read_descriptor(
+            &mut mount,
+            &mut device,
+            &mut descriptors,
+            fd,
+            &vfs_file,
+            &mut vfs_bytes[copied..end],
+        )
+        .await;
+        if read != end - copied {
+            device.fail("VFS descriptor returned a short read");
+        }
+        copied = end;
+        chunk_reads += 1;
+    }
+    if vfs_bytes != EXPECTED_SYSTEM_CONFIGURATION {
+        device.fail("VFS descriptor content mismatch");
+    }
+    descriptors
+        .seek(fd, 7)
+        .unwrap_or_else(|_| device.fail("VFS descriptor seek failed"));
+    let mut seek_bytes = [0u8; 11];
+    if read_descriptor(
+        &mut mount,
+        &mut device,
+        &mut descriptors,
+        fd,
+        &vfs_file,
+        &mut seek_bytes,
+    )
+    .await
+        != seek_bytes.len()
+        || seek_bytes != EXPECTED_SYSTEM_CONFIGURATION[7..18]
+    {
+        device.fail("VFS seek/read result mismatch");
+    }
+    descriptors
+        .close(fd)
+        .unwrap_or_else(|_| device.fail("VFS descriptor close failed"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VFS: namespace valid mounts={} root_fs={} fd={fd} inode={} bytes={} chunk_reads={chunk_reads} seek_offset=7 seek_bytes={}",
+        namespace.len(),
+        resolution.filesystem_id,
+        vfs_file.inode.number,
+        vfs_bytes.len(),
+        seek_bytes.len()
+    ));
+
     crate::serial::serialln(format_args!(
         "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={}",
         mount.cache.hits, mount.cache.misses, mount.cache.batched_pairs
@@ -182,6 +266,48 @@ struct ReadOnlyMount {
     superblock: Superblock,
     group0: GroupDescriptor,
     cache: BlockCache,
+}
+
+async fn read_descriptor(
+    mount: &mut ReadOnlyMount,
+    device: &mut BlockDevice,
+    descriptors: &mut FileDescriptorTable<8>,
+    fd: u32,
+    file: &ReadOnlyFile,
+    output: &mut [u8],
+) -> usize {
+    let window = descriptors
+        .read_window(fd, output.len())
+        .unwrap_or_else(|_| device.fail("VFS descriptor read window failed"));
+    if window.node.filesystem_id != ROOT_FILESYSTEM_ID
+        || window.node.node_id != u64::from(file.inode.number)
+    {
+        device.fail("VFS descriptor vnode mismatch");
+    }
+    let mut copied = 0usize;
+    while copied < window.length {
+        let copied_offset = u64::try_from(copied)
+            .unwrap_or_else(|_| device.fail("VFS read offset conversion failed"));
+        let absolute_offset = window
+            .offset
+            .checked_add(copied_offset)
+            .unwrap_or_else(|| device.fail("VFS read offset overflow"));
+        let block_size = u64::try_from(BLOCK_SIZE)
+            .unwrap_or_else(|_| device.fail("VFS block size conversion failed"));
+        let logical_block = u32::try_from(absolute_offset / block_size)
+            .unwrap_or_else(|_| device.fail("VFS file block index overflow"));
+        let block_offset = usize::try_from(absolute_offset % block_size)
+            .unwrap_or_else(|_| device.fail("VFS block offset conversion failed"));
+        let block = mount.read_file_block(device, file, logical_block).await;
+        let length = (window.length - copied).min(block.len() - block_offset);
+        output[copied..copied + length]
+            .copy_from_slice(&block[block_offset..block_offset + length]);
+        copied += length;
+    }
+    descriptors
+        .advance(fd, copied)
+        .unwrap_or_else(|_| device.fail("VFS descriptor offset advance failed"));
+    copied
 }
 
 impl ReadOnlyMount {
