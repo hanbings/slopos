@@ -99,6 +99,16 @@ monitor_type() {
     sleep 1
     echo "mouse_button 0"
     sleep 1
+    echo "sendkey meta_l-2 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-workspace-number.ppm"
+    echo "sendkey meta_l-1 50"
+    sleep 1
+    echo "sendkey meta_l-ctrl-3 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-move-workspace-number.ppm"
+    echo "sendkey meta_l-ctrl-1 50"
+    sleep 1
     echo "mouse_move -22 -64"
     sleep 1
     echo "mouse_button 1"
@@ -215,6 +225,10 @@ grep -Fq "SLOPOS-DESKTOP: column reordered kind=TERMINAL x=496 direction=move-co
 grep -Fq "SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-column-right changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 name=config focused=2" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=3 name=<empty> focused=0" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=608 delta=96 gesture=mod-right-drag" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=512 delta=-96 gesture=mod-right-drag" "${serial_log}"
 grep -Fq \
@@ -235,6 +249,8 @@ test -s "${repo_dir}/evidence/window-moved.ppm"
 test -s "${repo_dir}/evidence/window-resized.ppm"
 test -s "${repo_dir}/evidence/column-reordered.ppm"
 test -s "${repo_dir}/evidence/mouse-resized.ppm"
+test -s "${repo_dir}/evidence/niri-workspace-number.ppm"
+test -s "${repo_dir}/evidence/niri-move-workspace-number.ppm"
 test -s "${repo_dir}/evidence/waybar-workspace-click.ppm"
 test -s "${repo_dir}/evidence/workspace-config.ppm"
 test -s "${repo_dir}/evidence/wallpaper-only.ppm"
@@ -257,6 +273,10 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/column-reordered.png"
     pnmtopng "${repo_dir}/evidence/mouse-resized.ppm" \
         >"${repo_dir}/evidence/mouse-resized.png"
+    pnmtopng "${repo_dir}/evidence/niri-workspace-number.ppm" \
+        >"${repo_dir}/evidence/niri-workspace-number.png"
+    pnmtopng "${repo_dir}/evidence/niri-move-workspace-number.ppm" \
+        >"${repo_dir}/evidence/niri-move-workspace-number.png"
     pnmtopng "${repo_dir}/evidence/waybar-workspace-click.ppm" \
         >"${repo_dir}/evidence/waybar-workspace-click.png"
     pnmtopng "${repo_dir}/evidence/workspace-config.ppm" \

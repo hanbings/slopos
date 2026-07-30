@@ -53,8 +53,10 @@ pub enum NiriAction {
     MoveColumnRight,
     FocusWorkspaceUp,
     FocusWorkspaceDown,
+    FocusWorkspace(u8),
     MoveColumnToWorkspaceUp,
     MoveColumnToWorkspaceDown,
+    MoveColumnToWorkspace(u8),
     SetColumnWidth(ColumnWidthChange),
     CloseWindow,
 }
@@ -422,8 +424,12 @@ impl<'a> ShellConfigParser<'a> {
             "move-column-right" => NiriAction::MoveColumnRight,
             "focus-workspace-up" => NiriAction::FocusWorkspaceUp,
             "focus-workspace-down" => NiriAction::FocusWorkspaceDown,
+            "focus-workspace" => NiriAction::FocusWorkspace(self.parse_workspace_index()?),
             "move-column-to-workspace-up" => NiriAction::MoveColumnToWorkspaceUp,
             "move-column-to-workspace-down" => NiriAction::MoveColumnToWorkspaceDown,
+            "move-column-to-workspace" => {
+                NiriAction::MoveColumnToWorkspace(self.parse_workspace_index()?)
+            }
             "set-column-width" => {
                 let KdlToken::String(width) = self.next() else {
                     return Err(NiriConfigError::InvalidBinding);
@@ -433,6 +439,16 @@ impl<'a> ShellConfigParser<'a> {
             "close-window" => NiriAction::CloseWindow,
             _ => return Err(NiriConfigError::InvalidBinding),
         })
+    }
+
+    fn parse_workspace_index(&mut self) -> Result<u8, NiriConfigError> {
+        let KdlToken::Word(index) = self.next() else {
+            return Err(NiriConfigError::InvalidBinding);
+        };
+        u8::try_from(parse_decimal_u16(index)?)
+            .ok()
+            .filter(|index| *index != 0)
+            .ok_or(NiriConfigError::InvalidBinding)
     }
 
     fn expect_left_brace(&mut self) -> Result<(), NiriConfigError> {
@@ -876,6 +892,8 @@ mod tests {
                 Mod+Shift+Left { move-column-left; }
                 Mod+Shift+Right { move-column-right; }
                 Mod+Shift+Down repeat=false { move-column-to-workspace-down; }
+                Mod+1 { focus-workspace 1; }
+                Mod+Ctrl+2 { move-column-to-workspace 2; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
                 Mod+Q { close-window; }
@@ -897,7 +915,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 7);
+        assert_eq!(config.bindings.len(), 9);
         assert_eq!(
             config
                 .bindings
@@ -924,6 +942,19 @@ mod tests {
                 BindingKey::Down
             ),
             Some(NiriAction::MoveColumnToWorkspaceDown)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'1')),
+            Some(NiriAction::FocusWorkspace(1))
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::Character(b'2')
+            ),
+            Some(NiriAction::MoveColumnToWorkspace(2))
         );
         assert_eq!(
             config
@@ -980,6 +1011,10 @@ mod tests {
             r#"binds { Mod+Equal { set-column-width "-0"; } }"#,
             r#"binds { Mod+Equal { set-column-width "12.5%"; } }"#,
             r#"binds { Mod+Equal { set-column-width "70000"; } }"#,
+            r#"binds { Mod+1 { focus-workspace 0; } }"#,
+            r#"binds { Mod+1 { focus-workspace 256; } }"#,
+            r#"binds { Mod+1 { focus-workspace "main"; } }"#,
+            r#"binds { Mod+1 { move-column-to-workspace; } }"#,
         ] {
             assert_eq!(
                 parse_niri_shell_config(input),

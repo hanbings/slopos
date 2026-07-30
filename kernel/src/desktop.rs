@@ -1292,6 +1292,14 @@ impl Desktop {
             NiriAction::MoveColumnRight => self.workspaces.move_column_right(),
             NiriAction::FocusWorkspaceUp => self.workspaces.focus_workspace_up(),
             NiriAction::FocusWorkspaceDown => self.workspaces.focus_workspace_down(),
+            NiriAction::FocusWorkspace(workspace) => self
+                .workspaces
+                .focus_workspace(
+                    usize::from(workspace)
+                        .saturating_sub(1)
+                        .min(self.workspaces.len() - 1),
+                )
+                .unwrap_or_else(|_| crate::fatal("niri focus-workspace failed")),
             NiriAction::MoveColumnToWorkspaceUp => {
                 let active = self.workspaces.active();
                 active > 0
@@ -1308,6 +1316,14 @@ impl Desktop {
                         .move_focused_to_workspace(active + 1)
                         .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-down failed"))
             }
+            NiriAction::MoveColumnToWorkspace(workspace) => self
+                .workspaces
+                .move_focused_to_workspace(
+                    usize::from(workspace)
+                        .saturating_sub(1)
+                        .min(self.workspaces.len() - 1),
+                )
+                .unwrap_or_else(|_| crate::fatal("niri move-to-workspace failed")),
             NiriAction::SetColumnWidth(change) => self
                 .workspaces
                 .change_focused_column_width(change)
@@ -1493,8 +1509,10 @@ const fn action_name(action: NiriAction) -> &'static str {
         NiriAction::MoveColumnRight => "move-column-right",
         NiriAction::FocusWorkspaceUp => "focus-workspace-up",
         NiriAction::FocusWorkspaceDown => "focus-workspace-down",
+        NiriAction::FocusWorkspace(_) => "focus-workspace",
         NiriAction::MoveColumnToWorkspaceUp => "move-column-to-workspace-up",
         NiriAction::MoveColumnToWorkspaceDown => "move-column-to-workspace-down",
+        NiriAction::MoveColumnToWorkspace(_) => "move-column-to-workspace",
         NiriAction::SetColumnWidth(_) => "set-column-width",
         NiriAction::CloseWindow => "close-window",
     }
