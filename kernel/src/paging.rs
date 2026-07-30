@@ -97,9 +97,12 @@ pub fn install(framebuffer: FramebufferInfo, mmio_ranges: &[MmioRange]) -> Pagin
     }
 }
 
-pub fn create_user_address_space(image: &[u8]) -> UserAddressSpace {
-    if image.is_empty() || image.len() > PAGE_SIZE as usize {
-        crate::fatal("user image does not fit one page");
+pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressSpace {
+    if image.is_empty()
+        || memory_size != PAGE_SIZE
+        || image.len() > usize::try_from(memory_size).unwrap_or(0)
+    {
+        crate::fatal("user ELF segment does not fit one page");
     }
     let active_root = current_root();
     let root = table_frame();

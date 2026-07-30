@@ -10,6 +10,9 @@ const LINUX_SYS_EXIT: u64 = 60;
 const USER_MESSAGE_OFFSET: usize = 0x80;
 const USER_MESSAGE: &[u8] = b"SLOPOS user write\n";
 const USER_MESSAGE_ADDRESS: u64 = crate::paging::USER_CODE_BASE + USER_MESSAGE_OFFSET as u64;
+const USER_ELF_PROGRAM_OFFSET: usize = 0x1000;
+const USER_ELF_LOAD_SIZE: usize = USER_MESSAGE_OFFSET + USER_MESSAGE.len();
+const USER_ELF_SIZE: usize = USER_ELF_PROGRAM_OFFSET + USER_ELF_LOAD_SIZE;
 const USER_PROGRAM: [u8; 58] = [
     0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1 (write)
     0xbf, 0x01, 0x00, 0x00, 0x00, // mov edi, 1 (stdout)
@@ -30,22 +33,71 @@ const USER_PROGRAM: [u8; 58] = [
 
 static SYSCALL_STATE: AtomicU8 = AtomicU8::new(0);
 
-const fn user_image() -> [u8; 4096] {
-    let mut image = [0u8; 4096];
+const fn user_elf() -> [u8; USER_ELF_SIZE] {
+    let mut image = [0u8; USER_ELF_SIZE];
+    image[0] = 0x7f;
+    image[1] = b'E';
+    image[2] = b'L';
+    image[3] = b'F';
+    image[4] = 2; // ELFCLASS64
+    image[5] = 1; // ELFDATA2LSB
+    image[6] = 1; // EV_CURRENT
+    put_u16(&mut image, 16, 2); // ET_EXEC
+    put_u16(&mut image, 18, 62); // EM_X86_64
+    put_u32(&mut image, 20, 1); // EV_CURRENT
+    put_u64(&mut image, 24, crate::paging::USER_CODE_BASE);
+    put_u64(&mut image, 32, 64); // e_phoff
+    put_u16(&mut image, 52, 64); // e_ehsize
+    put_u16(&mut image, 54, 56); // e_phentsize
+    put_u16(&mut image, 56, 1); // e_phnum
+
+    put_u32(&mut image, 64, 1); // PT_LOAD
+    put_u32(&mut image, 68, slopos_elf::PF_R | slopos_elf::PF_X);
+    put_u64(&mut image, 72, USER_ELF_PROGRAM_OFFSET as u64);
+    put_u64(&mut image, 80, crate::paging::USER_CODE_BASE);
+    put_u64(&mut image, 88, crate::paging::USER_CODE_BASE);
+    put_u64(&mut image, 96, USER_ELF_LOAD_SIZE as u64);
+    put_u64(&mut image, 104, 4096);
+    put_u64(&mut image, 112, 4096);
+
     let mut index = 0;
     while index < USER_PROGRAM.len() {
-        image[index] = USER_PROGRAM[index];
+        image[USER_ELF_PROGRAM_OFFSET + index] = USER_PROGRAM[index];
         index += 1;
     }
     index = 0;
     while index < USER_MESSAGE.len() {
-        image[USER_MESSAGE_OFFSET + index] = USER_MESSAGE[index];
+        image[USER_ELF_PROGRAM_OFFSET + USER_MESSAGE_OFFSET + index] = USER_MESSAGE[index];
         index += 1;
     }
     image
 }
 
-static USER_IMAGE: [u8; 4096] = user_image();
+const fn put_u16(image: &mut [u8; USER_ELF_SIZE], offset: usize, value: u16) {
+    let bytes = value.to_le_bytes();
+    image[offset] = bytes[0];
+    image[offset + 1] = bytes[1];
+}
+
+const fn put_u32(image: &mut [u8; USER_ELF_SIZE], offset: usize, value: u32) {
+    let bytes = value.to_le_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        image[offset + index] = bytes[index];
+        index += 1;
+    }
+}
+
+const fn put_u64(image: &mut [u8; USER_ELF_SIZE], offset: usize, value: u64) {
+    let bytes = value.to_le_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        image[offset + index] = bytes[index];
+        index += 1;
+    }
+}
+
+static USER_ELF: [u8; USER_ELF_SIZE] = user_elf();
 
 #[repr(C)]
 struct SyscallFrame {
@@ -73,9 +125,32 @@ struct SyscallFrame {
 
 pub fn run_probe() {
     SYSCALL_STATE.store(0, Ordering::Release);
-    let address_space = crate::paging::create_user_address_space(&USER_IMAGE);
+    let elf = slopos_elf::ElfFile::parse(&USER_ELF)
+        .unwrap_or_else(|_| crate::fatal("embedded user ELF failed validation"));
+    if elf.load_segment_count() != 1 {
+        crate::fatal("embedded user ELF has an unexpected PT_LOAD count");
+    }
+    let segment = elf
+        .load_segments()
+        .next()
+        .unwrap_or_else(|| crate::fatal("embedded user ELF has no PT_LOAD segment"));
+    if segment.virtual_address() != crate::paging::USER_CODE_BASE
+        || segment.memory_size() != 4096
+        || !segment.readable()
+        || segment.writable()
+        || !segment.executable()
+    {
+        crate::fatal("embedded user ELF segment policy mismatch");
+    }
+    let address_space =
+        crate::paging::create_user_address_space(segment.data(), segment.memory_size());
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={PID} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frame={:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        "SLOPOS-PROCESS: pid={PID} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frame={:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        elf.entry(),
+        elf.load_segment_count(),
+        USER_ELF.len(),
+        segment.file_size(),
+        segment.memory_size(),
         address_space.root,
         crate::paging::USER_CODE_BASE,
         crate::paging::USER_STACK_TOP,
@@ -87,7 +162,7 @@ pub fn run_probe() {
     unsafe {
         slopos_enter_user(
             address_space.root,
-            crate::paging::USER_CODE_BASE,
+            elf.entry(),
             crate::paging::USER_STACK_TOP,
         );
     }

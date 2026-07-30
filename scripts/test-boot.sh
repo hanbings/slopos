@@ -73,7 +73,7 @@ required_markers=(
     "SLOPOS-KERNEL: framebuffer ownership accepted"
     "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
     "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized"
-    "SLOPOS-PROCESS: pid=1 address_space="
+    "SLOPOS-PROCESS: pid=1 format=elf64 entry=0x40000000 segments=1 file_bytes=4242 load_bytes=146 memory_bytes=4096 address_space="
     "user_code=0x40000000 user_stack=0x40002000"
     "code=user-readonly stack=user-writable kernel=supervisor"
     "SLOPOS-SYSCALL: pid=1 abi=x86_64 trap=int80 nr=1 write fd=1 bytes=18 cpl=3 result=18"
