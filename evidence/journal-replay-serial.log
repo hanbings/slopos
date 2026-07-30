@@ -26,6 +26,7 @@ SLOPOS-DESKTOP: interactive compositor loop entered windows=3
 SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
 SLOPOS-ASYNC: executor entered tasks=3
 SLOPOS-VIRTIO: modern block queue ready size=8 capacity_sectors=524288 flush=true
+SLOPOS-EXT4: journal recovery replayed sequence=1 start=1 target_block=98 escaped=false home_readback=true next_sequence=2 records_cleared=true recovery=false
 SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT block_size=4096 blocks=65536 inodes=32 groups=2 features=0x103c/0x22c2/0x46b
 SLOPOS-EXT4: root directory valid group_inode_table=37 inode=2 extent_block=39 entries=5 etc_inode=13 lost_found_inode=11 metadata_checksums=group/inode/directory
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -55,18 +56,17 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-VFS: writable descriptor valid fd=3 inode=25 physical_block=98 offset=123 bytes=73 writes=2 flushes=2 cache_invalidations=2 restored=true path=/usr/share/slopos/write-probe.bin
-SLOPOS-EXT4: journal superblock valid inode=8 physical_block=32801 blocks=4096 first=1 sequence=1 start=0 users=1 features=0x0/0x0/0x0 uuid=match endian=big
-SLOPOS-EXT4: journal records staged sequence=1 target_block=98 descriptor_block=32802 data_block=32803 commit_block=32804 writes=6 flushes=3 verified=true restored=true active=false
-SLOPOS-EXT4: journal state transition recovery=true sequence=1 start=1 readback=valid checkpoint_start=0 restored=true transactions=0 writes=4 flushes=4
-SLOPOS-EXT4: active journal transaction valid sequence=1 target_block=98 recovery=true start=1 records=descriptor/data/commit replayable_readback=true home_checkpointed=true next_sequence=2 test_sequence_rewound=true restored=true writes=13 flushes=10
+SLOPOS-EXT4: journal superblock valid inode=8 physical_block=32801 blocks=4096 first=1 sequence=2 start=0 users=1 features=0x0/0x0/0x0 uuid=match endian=big
+SLOPOS-EXT4: journal records staged sequence=2 target_block=98 descriptor_block=32802 data_block=32803 commit_block=32804 writes=6 flushes=3 verified=true restored=true active=false
+SLOPOS-EXT4: journal state transition recovery=true sequence=2 start=1 readback=valid checkpoint_start=0 restored=true transactions=0 writes=4 flushes=4
+SLOPOS-EXT4: active journal transaction valid sequence=2 target_block=98 recovery=true start=1 records=descriptor/data/commit replayable_readback=true home_checkpointed=true next_sequence=3 test_sequence_rewound=true restored=true writes=13 flushes=10
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-EXT4: metadata journal transactions valid inode=25 inode_table_block=38 size=4095/4096 checksums=valid transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true writes=23 flushes=17
-SLOPOS-FS: block cache entries=8 hits=64 misses=54 batched_pairs=1 invalidations=5
-SLOPOS-VIRTIO: bounded block sequence complete requests=193 max_in_flight=2 interrupts=192 queue_interrupts=192
-SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=192/192
-SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=192/192
-SLOPOS-TERMINAL: command=STATUS
-SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=192/192
-SLOPOS-DESKTOP: window moved kind=TERMINAL x=152 y=153
+SLOPOS-EXT4: metadata journal transactions valid inode=25 inode_table_block=38 size=4095/4096 checksums=valid transactions=2 sequences=2/3 final_sequence=4 test_sequence_rewound=true restored=true writes=23 flushes=17
+SLOPOS-FS: block cache entries=8 hits=71 misses=49 batched_pairs=1 invalidations=6
+SLOPOS-VIRTIO: bounded block sequence complete requests=205 max_in_flight=2 interrupts=204 queue_interrupts=204
+SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=204/204
+SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=204/204
+SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=204/204
+SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=204/204
