@@ -19,11 +19,11 @@ binds {
     Mod+Ctrl+1 { move-column-to-workspace 1; }
     Mod+Ctrl+2 { move-column-to-workspace 2; }
     Mod+Ctrl+3 { move-column-to-workspace 3; }
-    Mod+M { focus-workspace "main"; }
-    Mod+C { focus-workspace "config"; }
+    Mod+Alt+M { focus-workspace "main"; }
+    Mod+Alt+C { focus-workspace "config"; }
     Mod+Tab { focus-workspace-previous; }
-    Mod+Ctrl+M { move-column-to-workspace "main"; }
-    Mod+Ctrl+C { move-column-to-workspace "config"; }
+    Mod+Ctrl+Alt+M { move-column-to-workspace "main"; }
+    Mod+Ctrl+Alt+C { move-column-to-workspace "config"; }
     Mod+K { focus-window-up; }
     Mod+J { focus-window-down; }
     Mod+Ctrl+K { move-window-up; }
@@ -39,6 +39,7 @@ binds {
     Mod+Ctrl+Shift+R { switch-preset-window-height; }
     Mod+Ctrl+R { reset-window-height; }
     Mod+F { maximize-column; }
+    Mod+C { center-column; }
     Mod+Q { close-window; }
 }
 

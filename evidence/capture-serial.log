@@ -24,7 +24,7 @@ SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
 SLOPOS-KERNEL: framebuffer ownership accepted 1024x768
 SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed wheel=true
 SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized timer_hz=100 lapic_id=0 ioapic_id=0 redirections=24 routes=2/1/12/10
-SLOPOS-SHELL: config loaded niri_workspaces=3 named=2 binds=35 rules=1 active_columns=2 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4 module_configs=6 css_rules=12
+SLOPOS-SHELL: config loaded niri_workspaces=3 named=2 binds=36 rules=1 active_columns=2 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4 module_configs=6 css_rules=12
 SLOPOS-WAYBAR: formats active workspace={value} window={title} cpu="CPU {usage}%" memory="MEM {percentage}%" intervals=5/10/30/60 css=foreground/background/padding/margin/border-bottom
 SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry=1024x768 image=awaiting-user-policy transition=simple step=2 fps=30 policy_owner=user-service
 SLOPOS-DESKTOP: interactive compositor loop entered windows=3

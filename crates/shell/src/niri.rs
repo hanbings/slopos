@@ -75,6 +75,7 @@ pub enum NiriAction<'a> {
     SwitchPresetWindowHeight,
     SwitchPresetWindowHeightBack,
     MaximizeColumn,
+    CenterColumn,
     SetColumnWidth(ColumnWidthChange),
     SetWindowHeight(ColumnWidthChange),
     ResetWindowHeight,
@@ -489,6 +490,7 @@ impl<'a> ShellConfigParser<'a> {
             "switch-preset-window-height" => NiriAction::SwitchPresetWindowHeight,
             "switch-preset-window-height-back" => NiriAction::SwitchPresetWindowHeightBack,
             "maximize-column" => NiriAction::MaximizeColumn,
+            "center-column" => NiriAction::CenterColumn,
             "set-column-width" => {
                 let KdlToken::String(width) = self.next() else {
                     return Err(NiriConfigError::InvalidBinding);
@@ -970,6 +972,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].toggle_maximize_focused_column()
     }
 
+    pub fn center_focused_column(&mut self) -> bool {
+        self.layouts[self.active].center_focused_column()
+    }
+
     pub fn view_offset(&self) -> i32 {
         self.layouts[self.active].view_offset()
     }
@@ -1082,8 +1088,8 @@ mod tests {
                 Mod+Shift+Down repeat=false { move-column-to-workspace-down; }
                 Mod+1 { focus-workspace 1; }
                 Mod+Ctrl+2 { move-column-to-workspace 2; }
-                Mod+C { focus-workspace "config"; }
-                Mod+Ctrl+M { move-column-to-workspace "main"; }
+                Mod+Alt+C { focus-workspace "config"; }
+                Mod+Ctrl+Alt+M { move-column-to-workspace "main"; }
                 Mod+Tab { focus-workspace-previous; }
                 Mod+K { focus-window-up; }
                 Mod+J { focus-window-down; }
@@ -1101,6 +1107,7 @@ mod tests {
                 Mod+Ctrl+Alt+R { switch-preset-window-height-back; }
                 Mod+Ctrl+R { reset-window-height; }
                 Mod+F { maximize-column; }
+                Mod+C { center-column; }
                 Mod+Q { close-window; }
             }
             window-rule {
@@ -1120,7 +1127,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 26);
+        assert_eq!(config.bindings.len(), 27);
         assert_eq!(
             config
                 .bindings
@@ -1211,13 +1218,22 @@ mod tests {
             config
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Character(b'C')),
+            Some(NiriAction::CenterColumn)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::ALT),
+                BindingKey::Character(b'C')
+            ),
             Some(NiriAction::FocusWorkspace(WorkspaceReference::Name(
                 "config"
             )))
         );
         assert_eq!(
             config.bindings.action(
-                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingModifiers::MOD
+                    .with(BindingModifiers::CTRL)
+                    .with(BindingModifiers::ALT),
                 BindingKey::Character(b'M')
             ),
             Some(NiriAction::MoveColumnToWorkspace(WorkspaceReference::Name(

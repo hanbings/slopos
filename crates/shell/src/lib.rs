@@ -650,6 +650,18 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         true
     }
 
+    pub fn center_focused_column(&mut self) -> bool {
+        if self.column_count == 0 {
+            return false;
+        }
+        let start = self.column_start(self.focused_column);
+        let end = start + i32::from(self.effective_column_width(self.focused_column));
+        let centered = (start + end) / 2 - i32::from(self.output_width) / 2;
+        let changed = centered != self.view_offset;
+        self.view_offset = centered;
+        changed
+    }
+
     pub fn switch_preset_window_height(&mut self) -> bool {
         self.switch_preset_window_height_in_direction(false)
     }
@@ -1459,6 +1471,8 @@ mod tests {
         assert!(layout.view_offset() > 0);
         assert!(layout.focus_column_left());
         assert_eq!(layout.view_offset(), 0);
+        assert!(layout.center_focused_column());
+        assert_eq!(layout.tile_rect(1).unwrap().x, 200);
         assert!(layout.focus_column_right());
         assert!(layout.tile_rect(2).unwrap().x + 600 <= 1000);
     }
