@@ -6,7 +6,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
-QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对两个配置文件，并读取位于 inode group 1 的 6144-byte 多块文件；8-entry read cache 命中 18 次，把设备 DMA/INTx/Future 请求降到 15 次。当前还没有全局 VFS namespace、mount table 或 fd。
+QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对两个配置文件，并读取位于 inode group 1 的 6144-byte 多块文件；8-entry read cache 命中 20 次，把设备 DMA 请求降到 15 次，其中一个双请求批次验证了两个同时在途的 descriptor chain。当前还没有全局 VFS namespace、mount table 或 fd。
 
 ![SlopOS early interactive desktop](evidence/desktop.png)
 
@@ -47,7 +47,7 @@ make test-page-fault
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 和 block descriptor chain，`make test-ext4` 检查 superblock/group/inode/extent/directory parser、checksum 与安全拒绝。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、自有 CR3/heap、eBPF、ACPI、PCI、block cache、15 次 virtio DMA/INTx completion、跨 group inode 与多块文件读取、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 和可偏移 block descriptor chain，`make test-ext4` 检查 superblock/group/inode/extent/directory parser、checksum 与安全拒绝。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、自有 CR3/heap、eBPF、ACPI、PCI、block cache、15 次 virtio DMA 请求及 14 次 INTx completion、跨 group inode、多块文件批量读取、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 

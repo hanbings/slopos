@@ -9,15 +9,15 @@
 3. 以 16-bit PCI command write 启用 memory space 与 bus mastering，并禁用当前未处理的 INTx；
 4. reset device，设置 `ACKNOWLEDGE`/`DRIVER`；
 5. 只协商 `VIRTIO_F_VERSION_1`，核验 `FEATURES_OK`；
-6. 为 queue 0 选择 8-entry split ring，分别分配并清零 descriptor、available、used、control、data frame；
+6. 为 queue 0 选择 8-entry split ring，分别分配并清零 descriptor、available、used frame，并为两个请求槽各分配 control/data frame；
 7. 写入 queue physical address，启用 queue 和 `DRIVER_OK`；
-8. 安装 vector `0x2b` 的 IOAPIC route 后，由 block task 向 available ring 发布 header/data/status 三 descriptor chain；
+8. 安装 vector `0x2b` 的 IOAPIC route 后，由 block task 向 available ring 发布 header/data/status 三 descriptor chain；两个固定槽分别占用 descriptor `0..2` 与 `3..5`；
 9. 按 capability 的 notify multiplier 写 queue notify；
 10. INTx top half 读取 ISR、累计 queue interrupt、wake block task 并发 local APIC EOI；
-11. transport Future 检查递增 used index 与 block status；独立 fs mount task 在每次 completion 后复用 chain，完成 metadata、path walk 和 file data 读取。
+11. transport Future 检查目标 used index 与各槽 block status；独立 fs mount task 可等待一个请求，或一次发布两个 chain 并在二者全部完成后复用槽。
 
-共享 `slopos-virtio` crate 对 split-ring byte layout、power-of-two queue size 和三 descriptor block-read chain 做宿主单元测试。文件系统的 8-entry cache 把 32 次 block lookup 中的 18 次变为内存命中；另加未缓存的 superblock，裸机 `make test-boot` 验证 15 次实际 DMA/INTx/ISR/Future completion。当前 root disk 为 256 MiB，即 524288 个 512-byte sector。
+共享 `slopos-virtio` crate 对 split-ring byte layout、power-of-two queue size，以及从任意合法 head 开始的三 descriptor block-read chain 做宿主单元测试。文件系统以一个双块 cache prefetch 实际同时发布两个请求；8-entry cache 最终记录 20 hit/14 miss。另加未缓存的 superblock，裸机 `make test-boot` 验证 15 次 DMA 请求由 14 次 INTx/ISR/Future completion 唤醒完成。当前 root disk 为 256 MiB，即 524288 个 512-byte sector。
 
 q35 的 slot 3 INTA 映射到 PIRQ H。当前 OVMF 仍把 PIRQ H 路由到 legacy IRQ11，MADT 对 IRQ11 指定 GSI 11、flags 13；内核按这一 firmware route 配置 active-high level entry。请求必须在 entry unmask 之后提交，否则完成边沿可能在接管期间丢失。
 
-限制：只支持 queue 0 和单 in-flight 的顺序只读请求；queue/cache frame 永久占用，没有 descriptor free list。没有 MSI-X、通用 PIRQ/ACPI `_PRT` parser、并发请求、写入、flush、discard、topology、cache invalidation/writeback 或 timeout。
+限制：只支持 queue 0、两个固定请求槽和只读请求；尚无通用 descriptor free list、任意生产者并发或 backpressure。queue/cache frame 永久占用。没有 MSI-X、通用 PIRQ/ACPI `_PRT` parser、写入、flush、discard、topology、cache invalidation/writeback、timeout 或错误恢复。

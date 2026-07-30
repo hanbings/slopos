@@ -54,9 +54,9 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `crates/pci` 通过 `ConfigAccess` trait 把枚举逻辑与硬件访问分离，扫描完整 bus/device/function 空间，识别 multifunction header，以 visited mask 避免 capability 链环，并解码 BAR 与 virtio vendor capability region。内核后端使用 PCI configuration mechanism 1 的 `0xcf8/0xcfc` port，并以 16-bit command write 启用 memory space/bus master 而不误清 status。
 
-`virtio.rs` 走 modern PCI transport，只协商 `VIRTIO_F_VERSION_1`，为 queue 0 分配独立 descriptor/available/used/control/data frame，并以三 descriptor chain 发出只读 sector 请求。INTx top half 只读取并清除 ISR、累计计数、wake block task 和 EOI；Future 在下半部检查递增 used index 与 status，再复用同一 chain 发出下一次请求。共享 `crates/virtio` 负责可宿主测试的 split-ring layout 与 descriptor 构造。
+`virtio.rs` 走 modern PCI transport，只协商 `VIRTIO_F_VERSION_1`，为 queue 0 分配独立 descriptor/available/used frame，并建立两个各有 control/data frame 的请求槽。每个槽占三个 descriptor；单请求或双请求批次都只在 descriptor 与 available entries 完成后一次发布 index。INTx top half 只读取并清除 ISR、累计计数、wake block task 和 EOI；Future 在下半部等待目标 used index 并检查各槽 status。共享 `crates/virtio` 负责可宿主测试的 split-ring layout 与可偏移 descriptor 构造。
 
-构建产生两个 disk：64 MiB FAT32 ESP 只供 UEFI loader，256 MiB `SLOPOS_ROOT` ext4 image 作为独立 root disk。`virtio.rs` 只负责 transport、DMA ring、IRQ completion 与有界 block buffer；`fs.rs` 持有 `ReadOnlyMount`/`ReadOnlyFile` 和 8-entry FIFO read cache，cache frame 由物理 allocator 提供。inode table、group descriptor 和重复目录 block 命中时不发 DMA，但 parser/checksum 仍照常执行。QEMU 镜像有 2 个 group，inode 20 实际走 group 1/inode table 38。
+构建产生两个 disk：64 MiB FAT32 ESP 只供 UEFI loader，256 MiB `SLOPOS_ROOT` ext4 image 作为独立 root disk。`virtio.rs` 只负责 transport、DMA ring、IRQ completion 与两个有界 block buffer；`fs.rs` 持有 `ReadOnlyMount`/`ReadOnlyFile` 和 8-entry FIFO read cache，cache frame 由物理 allocator 提供。inode table、group descriptor 和重复目录 block 命中时不发 DMA，但 parser/checksum 仍照常执行；两个全 miss 的连续文件块可经一次 available-index 发布成对预取。QEMU 镜像有 2 个 group，inode 20 实际走 group 1/inode table 38。
 
 `executor.rs` 当前固定运行 input、timer、block 三个 pinned future，以原子 ready mask 作为 task queue，以 RawWaker 标识 task，并在空闲时执行 race-free `cli` 检查和 `sti; hlt`。它仍缺动态 task arena、timer wheel、cancellation、async lock 和 SMP。
 
