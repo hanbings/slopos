@@ -46,35 +46,41 @@ pub enum BindingKey {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NiriAction {
+pub enum WorkspaceReference<'a> {
+    Index(u8),
+    Name(&'a str),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NiriAction<'a> {
     FocusColumnLeft,
     FocusColumnRight,
     MoveColumnLeft,
     MoveColumnRight,
     FocusWorkspaceUp,
     FocusWorkspaceDown,
-    FocusWorkspace(u8),
+    FocusWorkspace(WorkspaceReference<'a>),
     MoveColumnToWorkspaceUp,
     MoveColumnToWorkspaceDown,
-    MoveColumnToWorkspace(u8),
+    MoveColumnToWorkspace(WorkspaceReference<'a>),
     SetColumnWidth(ColumnWidthChange),
     CloseWindow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NiriBinding {
+pub struct NiriBinding<'a> {
     pub modifiers: BindingModifiers,
     pub key: BindingKey,
-    pub action: NiriAction,
+    pub action: NiriAction<'a>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NiriBindingList {
-    entries: [Option<NiriBinding>; MAX_NIRI_BINDINGS],
+pub struct NiriBindingList<'a> {
+    entries: [Option<NiriBinding<'a>>; MAX_NIRI_BINDINGS],
     length: usize,
 }
 
-impl NiriBindingList {
+impl<'a> NiriBindingList<'a> {
     const fn empty() -> Self {
         Self {
             entries: [None; MAX_NIRI_BINDINGS],
@@ -90,7 +96,7 @@ impl NiriBindingList {
         self.length == 0
     }
 
-    pub fn action(self, modifiers: BindingModifiers, key: BindingKey) -> Option<NiriAction> {
+    pub fn action(self, modifiers: BindingModifiers, key: BindingKey) -> Option<NiriAction<'a>> {
         self.entries[..self.length]
             .iter()
             .flatten()
@@ -98,7 +104,7 @@ impl NiriBindingList {
             .map(|binding| binding.action)
     }
 
-    fn push(&mut self, binding: NiriBinding) -> Result<(), NiriConfigError> {
+    fn push(&mut self, binding: NiriBinding<'a>) -> Result<(), NiriConfigError> {
         if self.length == self.entries.len() {
             return Err(NiriConfigError::TooManyBindings);
         }
@@ -223,7 +229,7 @@ impl<'a> NiriWindowRuleList<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NiriShellConfig<'a> {
     pub workspaces: NamedWorkspaceList<'a>,
-    pub bindings: NiriBindingList,
+    pub bindings: NiriBindingList<'a>,
     pub window_rules: NiriWindowRuleList<'a>,
 }
 
@@ -234,6 +240,27 @@ impl Default for NiriShellConfig<'_> {
             bindings: NiriBindingList::empty(),
             window_rules: NiriWindowRuleList::empty(),
         }
+    }
+}
+
+impl NiriShellConfig<'_> {
+    fn validate_workspace_references(self) -> Result<(), NiriConfigError> {
+        for binding in self.bindings.entries[..self.bindings.length]
+            .iter()
+            .flatten()
+        {
+            let reference = match binding.action {
+                NiriAction::FocusWorkspace(reference)
+                | NiriAction::MoveColumnToWorkspace(reference) => reference,
+                _ => continue,
+            };
+            if let WorkspaceReference::Name(name) = reference
+                && self.workspaces.index_of(name).is_none()
+            {
+                return Err(NiriConfigError::InvalidBinding);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -288,7 +315,10 @@ impl<'a> ShellConfigParser<'a> {
                 }
                 KdlToken::LeftBrace => self.skip_block()?,
                 KdlToken::RightBrace => return Err(NiriConfigError::UnexpectedToken),
-                KdlToken::End => return Ok(config),
+                KdlToken::End => {
+                    config.validate_workspace_references()?;
+                    return Ok(config);
+                }
                 KdlToken::EndNode => {}
             }
         }
@@ -333,7 +363,10 @@ impl<'a> ShellConfigParser<'a> {
         }
     }
 
-    fn parse_bindings(&mut self, bindings: &mut NiriBindingList) -> Result<(), NiriConfigError> {
+    fn parse_bindings(
+        &mut self,
+        bindings: &mut NiriBindingList<'a>,
+    ) -> Result<(), NiriConfigError> {
         loop {
             match self.next_non_end() {
                 KdlToken::RightBrace => return Ok(()),
@@ -416,7 +449,7 @@ impl<'a> ShellConfigParser<'a> {
         }
     }
 
-    fn parse_action(&mut self, value: &str) -> Result<NiriAction, NiriConfigError> {
+    fn parse_action(&mut self, value: &str) -> Result<NiriAction<'a>, NiriConfigError> {
         Ok(match value {
             "focus-column-left" => NiriAction::FocusColumnLeft,
             "focus-column-right" => NiriAction::FocusColumnRight,
@@ -424,11 +457,11 @@ impl<'a> ShellConfigParser<'a> {
             "move-column-right" => NiriAction::MoveColumnRight,
             "focus-workspace-up" => NiriAction::FocusWorkspaceUp,
             "focus-workspace-down" => NiriAction::FocusWorkspaceDown,
-            "focus-workspace" => NiriAction::FocusWorkspace(self.parse_workspace_index()?),
+            "focus-workspace" => NiriAction::FocusWorkspace(self.parse_workspace_reference()?),
             "move-column-to-workspace-up" => NiriAction::MoveColumnToWorkspaceUp,
             "move-column-to-workspace-down" => NiriAction::MoveColumnToWorkspaceDown,
             "move-column-to-workspace" => {
-                NiriAction::MoveColumnToWorkspace(self.parse_workspace_index()?)
+                NiriAction::MoveColumnToWorkspace(self.parse_workspace_reference()?)
             }
             "set-column-width" => {
                 let KdlToken::String(width) = self.next() else {
@@ -441,14 +474,18 @@ impl<'a> ShellConfigParser<'a> {
         })
     }
 
-    fn parse_workspace_index(&mut self) -> Result<u8, NiriConfigError> {
-        let KdlToken::Word(index) = self.next() else {
-            return Err(NiriConfigError::InvalidBinding);
-        };
-        u8::try_from(parse_decimal_u16(index)?)
-            .ok()
-            .filter(|index| *index != 0)
-            .ok_or(NiriConfigError::InvalidBinding)
+    fn parse_workspace_reference(&mut self) -> Result<WorkspaceReference<'a>, NiriConfigError> {
+        match self.next() {
+            KdlToken::Word(index) => u8::try_from(parse_decimal_u16(index)?)
+                .ok()
+                .filter(|index| *index != 0)
+                .map(WorkspaceReference::Index)
+                .ok_or(NiriConfigError::InvalidBinding),
+            KdlToken::String(name) if !name.is_empty() && name.len() <= 64 => {
+                Ok(WorkspaceReference::Name(name))
+            }
+            _ => Err(NiriConfigError::InvalidBinding),
+        }
     }
 
     fn expect_left_brace(&mut self) -> Result<(), NiriConfigError> {
@@ -894,6 +931,8 @@ mod tests {
                 Mod+Shift+Down repeat=false { move-column-to-workspace-down; }
                 Mod+1 { focus-workspace 1; }
                 Mod+Ctrl+2 { move-column-to-workspace 2; }
+                Mod+C { focus-workspace "config"; }
+                Mod+Ctrl+M { move-column-to-workspace "main"; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
                 Mod+Q { close-window; }
@@ -915,7 +954,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 9);
+        assert_eq!(config.bindings.len(), 11);
         assert_eq!(
             config
                 .bindings
@@ -947,14 +986,33 @@ mod tests {
             config
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Character(b'1')),
-            Some(NiriAction::FocusWorkspace(1))
+            Some(NiriAction::FocusWorkspace(WorkspaceReference::Index(1)))
         );
         assert_eq!(
             config.bindings.action(
                 BindingModifiers::MOD.with(BindingModifiers::CTRL),
                 BindingKey::Character(b'2')
             ),
-            Some(NiriAction::MoveColumnToWorkspace(2))
+            Some(NiriAction::MoveColumnToWorkspace(
+                WorkspaceReference::Index(2)
+            ))
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'C')),
+            Some(NiriAction::FocusWorkspace(WorkspaceReference::Name(
+                "config"
+            )))
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::Character(b'M')
+            ),
+            Some(NiriAction::MoveColumnToWorkspace(WorkspaceReference::Name(
+                "main"
+            )))
         );
         assert_eq!(
             config
@@ -1004,6 +1062,12 @@ mod tests {
             parse_niri_shell_config("binds { Mod+Q { explode-window; } }"),
             Err(NiriConfigError::InvalidBinding)
         );
+        assert!(
+            parse_niri_shell_config(
+                r#"binds { Mod+L { focus-workspace "later"; } } workspace "later""#
+            )
+            .is_ok()
+        );
         for input in [
             r#"binds { Mod+Equal { set-column-width "0%"; } }"#,
             r#"binds { Mod+Equal { set-column-width "101%"; } }"#,
@@ -1013,7 +1077,8 @@ mod tests {
             r#"binds { Mod+Equal { set-column-width "70000"; } }"#,
             r#"binds { Mod+1 { focus-workspace 0; } }"#,
             r#"binds { Mod+1 { focus-workspace 256; } }"#,
-            r#"binds { Mod+1 { focus-workspace "main"; } }"#,
+            r#"binds { Mod+1 { focus-workspace ""; } }"#,
+            r#"binds { Mod+1 { focus-workspace "missing"; } } workspace "main""#,
             r#"binds { Mod+1 { move-column-to-workspace; } }"#,
         ] {
             assert_eq!(

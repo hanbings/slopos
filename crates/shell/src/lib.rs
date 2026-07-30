@@ -10,8 +10,8 @@ mod waybar_style;
 pub use niri::{
     BindingKey, BindingModifiers, MAX_NIRI_BINDINGS, MAX_NIRI_WINDOW_RULES, MAX_NIRI_WORKSPACES,
     NamedWorkspace, NamedWorkspaceList, NiriAction, NiriBinding, NiriBindingList, NiriConfigError,
-    NiriShellConfig, NiriWindowRule, NiriWindowRuleList, WorkspaceError, WorkspaceSet,
-    parse_niri_shell_config,
+    NiriShellConfig, NiriWindowRule, NiriWindowRuleList, WorkspaceError, WorkspaceReference,
+    WorkspaceSet, parse_niri_shell_config,
 };
 pub use wallpaper::{
     ClearRequest, ImgRequest, MAX_WALLPAPER_PATH, PpmError, PpmImage, ResizeMode, SwwwCommand,

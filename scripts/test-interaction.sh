@@ -109,6 +109,16 @@ monitor_type() {
     echo "screendump ${repo_dir}/evidence/niri-move-workspace-number.ppm"
     echo "sendkey meta_l-ctrl-1 50"
     sleep 1
+    echo "sendkey meta_l-c 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-workspace-name.ppm"
+    echo "sendkey meta_l-m 50"
+    sleep 1
+    echo "sendkey meta_l-ctrl-c 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-move-workspace-name.ppm"
+    echo "sendkey meta_l-ctrl-m 50"
+    sleep 1
     echo "mouse_move -22 -64"
     sleep 1
     echo "mouse_button 1"
@@ -229,6 +239,12 @@ grep -Fq "SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 n
 grep -Fq "SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=3 name=<empty> focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=index value=2" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=index value=3" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=config" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=config" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=main" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=608 delta=96 gesture=mod-right-drag" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=512 delta=-96 gesture=mod-right-drag" "${serial_log}"
 grep -Fq \
@@ -251,6 +267,8 @@ test -s "${repo_dir}/evidence/column-reordered.ppm"
 test -s "${repo_dir}/evidence/mouse-resized.ppm"
 test -s "${repo_dir}/evidence/niri-workspace-number.ppm"
 test -s "${repo_dir}/evidence/niri-move-workspace-number.ppm"
+test -s "${repo_dir}/evidence/niri-workspace-name.ppm"
+test -s "${repo_dir}/evidence/niri-move-workspace-name.ppm"
 test -s "${repo_dir}/evidence/waybar-workspace-click.ppm"
 test -s "${repo_dir}/evidence/workspace-config.ppm"
 test -s "${repo_dir}/evidence/wallpaper-only.ppm"
@@ -277,6 +295,10 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-workspace-number.png"
     pnmtopng "${repo_dir}/evidence/niri-move-workspace-number.ppm" \
         >"${repo_dir}/evidence/niri-move-workspace-number.png"
+    pnmtopng "${repo_dir}/evidence/niri-workspace-name.ppm" \
+        >"${repo_dir}/evidence/niri-workspace-name.png"
+    pnmtopng "${repo_dir}/evidence/niri-move-workspace-name.ppm" \
+        >"${repo_dir}/evidence/niri-move-workspace-name.png"
     pnmtopng "${repo_dir}/evidence/waybar-workspace-click.ppm" \
         >"${repo_dir}/evidence/waybar-workspace-click.png"
     pnmtopng "${repo_dir}/evidence/workspace-config.ppm" \

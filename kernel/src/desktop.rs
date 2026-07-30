@@ -9,8 +9,8 @@ use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
     BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers, NiriAction,
     NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle, SwwwCommand, SwwwDaemonError,
-    SwwwDefaults, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceSet, format_bar_text,
-    parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
+    SwwwDefaults, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference, WorkspaceSet,
+    format_bar_text, parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
     parse_swww_environment, parse_waybar_config, parse_waybar_style, transition_pixel,
 };
 
@@ -1284,7 +1284,7 @@ impl Desktop {
         self.active = index;
     }
 
-    fn execute_niri_action(&mut self, action: NiriAction) {
+    fn execute_niri_action(&mut self, action: NiriAction<'static>) {
         let changed = match action {
             NiriAction::FocusColumnLeft => self.workspaces.focus_column_left(),
             NiriAction::FocusColumnRight => self.workspaces.focus_column_right(),
@@ -1292,14 +1292,12 @@ impl Desktop {
             NiriAction::MoveColumnRight => self.workspaces.move_column_right(),
             NiriAction::FocusWorkspaceUp => self.workspaces.focus_workspace_up(),
             NiriAction::FocusWorkspaceDown => self.workspaces.focus_workspace_down(),
-            NiriAction::FocusWorkspace(workspace) => self
-                .workspaces
-                .focus_workspace(
-                    usize::from(workspace)
-                        .saturating_sub(1)
-                        .min(self.workspaces.len() - 1),
-                )
-                .unwrap_or_else(|_| crate::fatal("niri focus-workspace failed")),
+            NiriAction::FocusWorkspace(reference) => {
+                let workspace = self.resolve_workspace_reference(reference);
+                self.workspaces
+                    .focus_workspace(workspace)
+                    .unwrap_or_else(|_| crate::fatal("niri focus-workspace failed"))
+            }
             NiriAction::MoveColumnToWorkspaceUp => {
                 let active = self.workspaces.active();
                 active > 0
@@ -1316,14 +1314,12 @@ impl Desktop {
                         .move_focused_to_workspace(active + 1)
                         .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-down failed"))
             }
-            NiriAction::MoveColumnToWorkspace(workspace) => self
-                .workspaces
-                .move_focused_to_workspace(
-                    usize::from(workspace)
-                        .saturating_sub(1)
-                        .min(self.workspaces.len() - 1),
-                )
-                .unwrap_or_else(|_| crate::fatal("niri move-to-workspace failed")),
+            NiriAction::MoveColumnToWorkspace(reference) => {
+                let workspace = self.resolve_workspace_reference(reference);
+                self.workspaces
+                    .move_focused_to_workspace(workspace)
+                    .unwrap_or_else(|_| crate::fatal("niri move-to-workspace failed"))
+            }
             NiriAction::SetColumnWidth(change) => self
                 .workspaces
                 .change_focused_column_width(change)
@@ -1373,6 +1369,35 @@ impl Desktop {
                 .map(|window| window as i32)
                 .unwrap_or(-1)
         ));
+        match action {
+            NiriAction::FocusWorkspace(reference)
+            | NiriAction::MoveColumnToWorkspace(reference) => match reference {
+                WorkspaceReference::Index(index) => serialln(format_args!(
+                    "SLOPOS-NIRI: workspace target action={} kind=index value={}",
+                    action_name(action),
+                    index
+                )),
+                WorkspaceReference::Name(name) => serialln(format_args!(
+                    "SLOPOS-NIRI: workspace target action={} kind=name value={}",
+                    action_name(action),
+                    name
+                )),
+            },
+            _ => {}
+        }
+    }
+
+    fn resolve_workspace_reference(&self, reference: WorkspaceReference<'_>) -> usize {
+        match reference {
+            WorkspaceReference::Index(workspace) => usize::from(workspace)
+                .saturating_sub(1)
+                .min(self.workspaces.len() - 1),
+            WorkspaceReference::Name(name) => self
+                .niri
+                .workspaces
+                .index_of(name)
+                .unwrap_or_else(|| crate::fatal("validated niri workspace name disappeared")),
+        }
     }
 
     fn close_window(&mut self, index: usize) {
@@ -1501,7 +1526,7 @@ const fn binding_key(key: Key) -> Option<BindingKey> {
     })
 }
 
-const fn action_name(action: NiriAction) -> &'static str {
+const fn action_name(action: NiriAction<'_>) -> &'static str {
     match action {
         NiriAction::FocusColumnLeft => "focus-column-left",
         NiriAction::FocusColumnRight => "focus-column-right",
