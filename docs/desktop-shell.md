@@ -16,6 +16,21 @@ SlopOS 桌面以 niri、Waybar 和 swww 的用户习惯作为兼容目标，但�
 KDL parser 当前从 `assets/niri-config.kdl` 读取以下 niri 同名子集：
 
 ```kdl
+workspace "main"
+workspace "config" { open-on-output "SLOPOS-1" }
+
+binds {
+    Mod+Left { focus-column-left; }
+    Mod+Down { focus-workspace-down; }
+    Mod+Shift+Down { move-column-to-workspace-down; }
+    Mod+Q { close-window; }
+}
+
+window-rule {
+    match app-id="slopos-config"
+    open-on-workspace "config"
+}
+
 layout {
     gaps 16
     center-focused-column "never"
@@ -32,9 +47,11 @@ layout {
 }
 ```
 
-parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。8 项 layout 测试覆盖配置拒绝边界、open/focus/scroll/stack/close 和稳定列宽。设计语义依据 [niri 默认配置](https://github.com/YaLTeR/niri/blob/main/resources/default-config.kdl)、[Layout 配置文档](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Layout) 与 [Design Principles](https://github.com/YaLTeR/niri/wiki/Development%3A-Design-Principles)。
+parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。workspace 状态机为每个 workspace 保留独立 column strip；named workspace 后附加一个空 workspace。window rule 按出现顺序叠加，后匹配规则可覆盖先前的 `open-on-workspace`。bind chord 支持 `Mod`、`Ctrl`、`Shift`、`Alt` 与方向键、PageUp/PageDown、Return、Tab、Escape、单字符；当前 action 集为 focus column/workspace、move column to workspace 与 close window。
 
-当前 kernel desktop 用三个固定 surface 作为三列，Tab 沿列切换，鼠标标题栏横拖滚动 strip。尚未实现 workspace、多 output、floating/tabbed column、window rule、bind、animation、overview、IPC、live reload、Wayland surface 或普通用户 client。配置也尚未按 niri 的 `$XDG_CONFIG_HOME/niri/config.kdl` → `~/.config/niri/config.kdl` → `/etc/niri/config.kdl` 顺序从 VFS 加载。
+8 项 layout 测试和 3 项 workspace/bind/rule 测试覆盖配置拒绝边界、open/focus/scroll/stack/close、稳定列宽、workspace switch/move 与规则顺序。设计语义依据 [niri 默认配置](https://github.com/YaLTeR/niri/blob/main/resources/default-config.kdl)、[Layout 配置文档](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Layout)、[Key Bindings](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Key-Bindings) 与 [Window Rules](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Window-Rules)。
+
+当前 kernel desktop 用三个固定 surface 演示这些行为：Terminal/System 位于 `main`，Config 的 `app-id` 规则把它放到 `config`；顶部 workspace module 显示 active index。PS/2 parser 跟踪 Super/Ctrl/Shift/Alt 与扩展方向键，使 KDL bind 实际驱动桌面。尚未实现动态 workspace 创建/销毁、完整 niri action/XKB 命名、multi-output、floating/tabbed column、复杂 match、animation、overview、IPC、live reload、Wayland surface 或普通用户 client。配置也尚未按 niri 的 `$XDG_CONFIG_HOME/niri/config.kdl` → `~/.config/niri/config.kdl` → `/etc/niri/config.kdl` 顺序从 VFS 加载。
 
 ## Waybar 式顶部栏
 
@@ -56,6 +73,6 @@ JSONC parser 支持 `//` 与 `/* */` comment、trailing comma、未知 nested mo
 - `assets/swww.env` 以同名 `SWWW_TRANSITION*` 变量提供 boot 默认值；
 - `none`、`simple`、`fade`、`left/right/top/bottom`、`center/outer`、`any/random` transition。
 
-两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart 与 `none` 重设。7 项 swww/PNM 测试加上 8 项 layout 与 3 项 Waybar 测试，共 18 项。
+两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart 与 `none` 重设。7 项 swww/PNM、11 项 niri layout/shell 与 3 项 Waybar 测试，共 21 项。
 
 命令与 transition 语义依据 [swww 官方 README](https://github.com/LGFae/swww)。当前不是独立用户进程或 Unix socket，也没有 Wayland layer-shell、多 output、VFS 任意路径、PNG/JPEG/GIF decode、animated image cache、frame callback/timing、transition position/bezier/wave/grow 或 damage tracking。同步 framebuffer renderer 为限制最坏 CPU 时间，会把极小 step 最多采样成 17 帧，因此不声称二进制或动画时序完全兼容 swww。

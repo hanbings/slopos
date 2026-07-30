@@ -6,13 +6,15 @@
 |---|---|---|
 | `serial.log` | `make test-boot` | OVMF/UEFI、ELF、`ExitBootServices`、XSDT/MADT、memory、CPL3 PID 1、eBPF、PCI/virtio INTx、ext4、async 与桌面循环 |
 | `uefi-debugcon.log` | `make test-boot` | loader 独立 debugcon 日志 |
-| `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`，鼠标横拖 tiled titlebar 并滚动 viewport |
+| `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`/swww，鼠标横拖 viewport，Super bind 关闭窗口/切换 workspace |
 | `page-fault-serial.log` | `make test-page-fault` | 自有页表的未映射访问、vector 14、error、RIP、CR2 与 fatal boundary |
 | `journal-injection-serial.log` | `make test-journal-replay` phase 1 | commit 已 flush、home 尚未 checkpoint 的 dirty disk |
 | `journal-replay-serial.log` | `make test-journal-replay` phase 2 | 普通 kernel mount-time replay、清理、继续完整启动 |
 | `desktop.png` | `scripts/capture-desktop.sh` | niri 式 column strip 与 Waybar 式顶部三区域 |
 | `terminal-status.png` | `make test-interaction` | 图形终端对键盘命令的实际响应 |
 | `window-moved.png` | `make test-interaction` | titlebar drag 后 terminal 离屏、后续 column 进入 viewport |
+| `workspace-config.png` | `make test-interaction` | `slopos-config` window rule 与 `Mod+Down` 切入 named workspace |
+| `wallpaper-switched.png` / `wallpaper-only.png` | `make test-interaction` | Sunset transition 后的窗口背景，以及关闭全部 tile 后的完整壁纸 |
 | `qemu-test.log` | `make test-boot` | QEMU stderr/stdout；正常测试通常为空 |
 
 核心启动命令由 `scripts/test-boot.sh` 固定，等价参数为：
@@ -37,7 +39,7 @@ qemu-system-x86_64
 
 ELF parser 的宿主测试由 `make test-elf` 执行。10 项测试验证 ELF64 little-endian/x86-64/`ET_EXEC` header、program-header table、`PT_LOAD` data/BSS view，并拒绝 truncation、越界、`p_filesz > p_memsz`、非法 alignment/congruence、重叠 segment、W+X 与不属于 executable segment 的 entry。parser 无分配且 `no_std`；section header 与 dynamic linking 不参与当前装载。
 
-shell 状态机由 `make test-shell` 验证。8 项 layout 测试覆盖 niri KDL、稳定 strip coordinate、focus/scroll/stack/close；3 项 Waybar 测试覆盖 JSONC 与 module list；7 项 swww 测试覆盖 CLI/environment parse、daemon lifecycle/output、P3/PNM 边界、两个嵌入式 asset 和 transition mask/blend。裸机 marker 记录 niri/Waybar 配置及 `SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry=1024x768 ... transition=simple step=32 fps=30`。交互日志再记录 Sunset `img`、5 帧 center transition、返回当前 image 的 `query`、kill/restart、无 transition 换图、titlebar drag 与三列 close。`desktop.png`/`terminal-status.png` 是 Aurora，`wallpaper-switched.png` 是 Sunset，`window-moved.png` 同时显示 Sunset 和横移后的三列，`wallpaper-only.png` 显示关闭所有 tile 后仍由 Waybar 覆盖的完整壁纸。它不证明完整 niri/Waybar、独立 swww process、Wayland layer-shell 或其他图片格式。
+shell 状态机由 `make test-shell` 验证。8 项 layout 测试覆盖 niri KDL、稳定 strip coordinate、focus/scroll/stack/close；3 项 niri shell 测试覆盖 named workspace、bind/rule parse/reject、ordered override 和跨 workspace move；3 项 Waybar 测试覆盖 JSONC 与 module list；7 项 swww 测试覆盖 CLI/environment parse、daemon lifecycle/output、P3/PNM 边界、两个嵌入式 asset 和 transition mask/blend。裸机 marker 记录 3 个 workspace、7 个 bind、1 个 rule、niri/Waybar 配置及 `SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry=1024x768 ... transition=simple step=32 fps=30`。交互日志再记录 Sunset `img`、5 帧 center transition、返回当前 image 的 `query`、kill/restart、无 transition 换图、titlebar drag、两次 workspace 1 close、`Mod+Down` 切入 `config` 与 workspace 2 close。`desktop.png`/`terminal-status.png` 是 Aurora，`wallpaper-switched.png` 是 Sunset，`window-moved.png` 显示 Sunset 和横移后的 main columns，`workspace-config.png` 显示 window rule 放置的 Config 及 active workspace 2，`wallpaper-only.png` 显示关闭所有 tile 后仍由 Waybar 覆盖的完整壁纸。它不证明完整 niri/Waybar、独立 swww process、Wayland layer-shell 或其他图片格式。
 
 eBPF 的宿主边界测试由 `make test-ebpf` 执行；裸机证据是 `serial.log` 中的 `SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42`。它只证明文档所列子集，不证明 map、attach point 或 Linux eBPF 兼容性。
 

@@ -4,7 +4,7 @@
 - IDT 已有关键 exception diagnostic gate，但 double fault 仍没有独立 IST，page fault 只能诊断并停止，不能 demand-page。
 - executor 固定为三个 task，没有 spawn、task ownership、cancellation 或 timer wheel。
 - framebuffer 渲染是全屏重绘，没有 damage tracking、double buffering 或 virtio-gpu。
-- 三个 surface 已使用 niri 式滚动 column layout，但仍全部在 ring 0；没有 Wayland client、workspace/multi-output、floating/tabbed layout、window rule、bind、animation、overview 或 IPC。
+- 三个 surface 已使用 niri 式滚动 column layout，并有固定容量 workspace、bind 与 `app-id`→workspace rule，但仍全部在 ring 0；没有 Wayland client、动态 workspace、multi-output、floating/tabbed layout、完整 rule/action、animation、overview 或 IPC。
 - niri KDL、Waybar JSONC 与 swww environment 默认值来自编译时 asset，尚未按 XDG/VFS 路径 live reload。顶部栏 provider 仍固定且没有 module option/CSS/action/per-output。swww 风格状态机只解码两个 embedded P3/PNM，运行在 kernel desktop 内；没有独立 IPC/layer-shell process、任意 VFS image、常见压缩格式、animated image、多 output 或精确帧时序。
 - `initrd.slp` 仍不是文件系统；独立 ext4 disk 已有 fd 原位写与严格单块 EOF append/truncate、最多八 tag 的 active JBD2 transaction、block/inode allocation、线性目录 create→fd open→unlink 和启动时 replay。scanner 当前只接受零 feature、单个非 wrap transaction；mutation 仍是启动回归流程，尚无可复用 namespace API/syscall、多块或非连续 growth、revoke、多 transaction、通用权限或 btrfs。
 - 已有 frame allocator、自有 early page table、bump heap 和一个同步 PID 1 user address space，但没有回收、process table、thread、scheduler、preemption 或通用 syscall/VFS 接口。
