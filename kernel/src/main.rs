@@ -13,6 +13,7 @@ mod heap;
 mod interrupts;
 mod memory;
 mod paging;
+mod pci;
 mod ps2;
 mod serial;
 mod timer;
@@ -138,6 +139,25 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     ));
 
     verify_ebpf_runtime();
+
+    let pci_inventory = pci::discover();
+    if pci_inventory.overflowed {
+        fatal("PCI inventory capacity exhausted");
+    }
+    let virtio_count = pci_inventory.virtio_devices().count();
+    let virtio_block = pci_inventory
+        .find_virtio_block()
+        .unwrap_or_else(|| fatal("QEMU virtio block device was not enumerated"));
+    serialln(format_args!(
+        "SLOPOS-PCI: mechanism1 devices={} virtio={} block={:02x}:{:02x}.{} id={:04x} caps={:#x}",
+        pci_inventory.len(),
+        virtio_count,
+        virtio_block.address.bus,
+        virtio_block.address.device,
+        virtio_block.address.function,
+        virtio_block.device_id,
+        virtio_block.virtio_capability_mask
+    ));
 
     let mut framebuffer = match Framebuffer::new(boot_info.framebuffer) {
         Some(framebuffer) => framebuffer,

@@ -4,6 +4,7 @@ members = [
     "boot",
     "crates/acpi",
     "crates/boot-protocol",
+    "crates/pci",
     "ebpf",
     "kernel",
 ]
