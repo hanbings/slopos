@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 
 pub const MAX_BAR_MODULES: usize = 16;
+pub const MAX_BAR_MODULE_CONFIGS: usize = 24;
+pub const MAX_BAR_TEXT: usize = 96;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BarPosition {
@@ -50,6 +52,76 @@ impl<'a> BarModuleList<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BarModuleConfig<'a> {
+    pub name: &'a str,
+    pub format: Option<&'a str>,
+    pub format_alt: Option<&'a str>,
+    pub format_disconnected: Option<&'a str>,
+    pub interval: Option<u16>,
+    pub tooltip: Option<bool>,
+    pub min_length: Option<u16>,
+    pub max_length: Option<u16>,
+}
+
+impl<'a> BarModuleConfig<'a> {
+    const fn empty(name: &'a str) -> Self {
+        Self {
+            name,
+            format: None,
+            format_alt: None,
+            format_disconnected: None,
+            interval: None,
+            tooltip: None,
+            min_length: None,
+            max_length: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BarModuleConfigList<'a> {
+    entries: [Option<BarModuleConfig<'a>>; MAX_BAR_MODULE_CONFIGS],
+    length: usize,
+}
+
+impl<'a> BarModuleConfigList<'a> {
+    const fn empty() -> Self {
+        Self {
+            entries: [None; MAX_BAR_MODULE_CONFIGS],
+            length: 0,
+        }
+    }
+
+    pub const fn len(self) -> usize {
+        self.length
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.length == 0
+    }
+
+    pub fn get(self, name: &str) -> Option<BarModuleConfig<'a>> {
+        self.entries[..self.length]
+            .iter()
+            .flatten()
+            .find(|module| module.name == name)
+            .copied()
+    }
+
+    fn push(&mut self, module: BarModuleConfig<'a>) -> Result<(), BarConfigError> {
+        if self.get(module.name).is_some() {
+            return Err(BarConfigError::DuplicateField);
+        }
+        if self.length == self.entries.len() {
+            return Err(BarConfigError::TooManyModuleConfigs);
+        }
+        self.entries[self.length] = Some(module);
+        self.length += 1;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WaybarConfig<'a> {
     pub position: BarPosition,
     pub height: u16,
@@ -57,6 +129,7 @@ pub struct WaybarConfig<'a> {
     pub modules_left: BarModuleList<'a>,
     pub modules_center: BarModuleList<'a>,
     pub modules_right: BarModuleList<'a>,
+    pub module_configs: BarModuleConfigList<'a>,
 }
 
 impl Default for WaybarConfig<'_> {
@@ -68,6 +141,7 @@ impl Default for WaybarConfig<'_> {
             modules_left: BarModuleList::empty(),
             modules_center: BarModuleList::empty(),
             modules_right: BarModuleList::empty(),
+            module_configs: BarModuleConfigList::empty(),
         }
     }
 }
@@ -80,7 +154,127 @@ pub enum BarConfigError {
     InvalidPosition,
     InvalidNumber,
     InvalidModule,
+    InvalidModuleOption,
     TooManyModules,
+    TooManyModuleConfigs,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarFormatError {
+    TooLong,
+    InvalidPlaceholder,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BarFormatValue<'a> {
+    pub name: &'a str,
+    pub value: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BarText {
+    bytes: [u8; MAX_BAR_TEXT],
+    length: usize,
+}
+
+impl BarText {
+    const fn empty() -> Self {
+        Self {
+            bytes: [0; MAX_BAR_TEXT],
+            length: 0,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        // SAFETY: format_bar_text only copies UTF-8 template/value byte slices.
+        unsafe { core::str::from_utf8_unchecked(&self.bytes[..self.length]) }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.length
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+
+    pub fn truncate(&mut self, length: usize) {
+        self.length = self.length.min(length);
+        while self.length > 0 && core::str::from_utf8(&self.bytes[..self.length]).is_err() {
+            self.length -= 1;
+        }
+    }
+
+    pub fn pad_to(&mut self, length: usize) -> Result<(), BarFormatError> {
+        while self.length < length {
+            self.push_bytes(b" ")?;
+        }
+        Ok(())
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) -> Result<(), BarFormatError> {
+        let end = self
+            .length
+            .checked_add(bytes.len())
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or(BarFormatError::TooLong)?;
+        self.bytes[self.length..end].copy_from_slice(bytes);
+        self.length = end;
+        Ok(())
+    }
+}
+
+pub fn format_bar_text(
+    template: &str,
+    default: &str,
+    values: &[BarFormatValue<'_>],
+) -> Result<BarText, BarFormatError> {
+    let mut output = BarText::empty();
+    let bytes = template.as_bytes();
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        if bytes[offset] == b'{' {
+            let close = bytes[offset + 1..]
+                .iter()
+                .position(|byte| *byte == b'}')
+                .map(|relative| offset + 1 + relative)
+                .ok_or(BarFormatError::InvalidPlaceholder)?;
+            let placeholder = &template[offset + 1..close];
+            let (name, alignment) = placeholder
+                .split_once(':')
+                .map_or((placeholder, None), |(name, alignment)| {
+                    (name, Some(alignment))
+                });
+            let value = if name.is_empty() {
+                default
+            } else {
+                values
+                    .iter()
+                    .find(|value| value.name == name)
+                    .map(|value| value.value)
+                    .ok_or(BarFormatError::InvalidPlaceholder)?
+            };
+            if let Some(width) = alignment.and_then(|alignment| alignment.strip_prefix('>')) {
+                let width = parse_usize(width).ok_or(BarFormatError::InvalidPlaceholder)?;
+                for _ in value.len()..width {
+                    output.push_bytes(b" ")?;
+                }
+            } else if alignment.is_some() {
+                return Err(BarFormatError::InvalidPlaceholder);
+            }
+            output.push_bytes(value.as_bytes())?;
+            offset = close + 1;
+        } else if bytes[offset] == b'}' {
+            return Err(BarFormatError::InvalidPlaceholder);
+        } else {
+            let start = offset;
+            while offset < bytes.len() && !matches!(bytes[offset], b'{' | b'}') {
+                offset += 1;
+            }
+            output.push_bytes(&bytes[start..offset])?;
+        }
+    }
+    Ok(output)
 }
 
 pub fn parse_waybar_config(input: &str) -> Result<WaybarConfig<'_>, BarConfigError> {
@@ -97,7 +291,8 @@ enum Token<'a> {
     Comma,
     String(&'a str),
     Number(&'a str),
-    Literal,
+    Bool(bool),
+    Null,
     Invalid,
     End,
 }
@@ -129,9 +324,9 @@ impl<'a> JsonLexer<'a> {
             b',' => Token::Comma,
             b'"' => return self.string(),
             b'-' | b'0'..=b'9' => return self.number(),
-            b't' if self.consume_literal(b"true") => return Token::Literal,
-            b'f' if self.consume_literal(b"false") => return Token::Literal,
-            b'n' if self.consume_literal(b"null") => return Token::Literal,
+            b't' if self.consume_literal(b"true") => return Token::Bool(true),
+            b'f' if self.consume_literal(b"false") => return Token::Bool(false),
+            b'n' if self.consume_literal(b"null") => return Token::Null,
             _ => Token::Invalid,
         };
         self.offset += 1;
@@ -287,7 +482,11 @@ impl<'a> JsonParser<'a> {
                             mark_once(&mut fields, Self::RIGHT)?;
                             config.modules_right = self.module_list()?;
                         }
-                        _ => self.skip_value()?,
+                        _ => {
+                            if let Some(module) = self.module_config_value(name)? {
+                                config.module_configs.push(module)?;
+                            }
+                        }
                     }
                     match self.next() {
                         Token::Comma => {}
@@ -328,11 +527,102 @@ impl<'a> JsonParser<'a> {
         }
     }
 
+    fn module_config_value(
+        &mut self,
+        name: &'a str,
+    ) -> Result<Option<BarModuleConfig<'a>>, BarConfigError> {
+        let token = self.next();
+        if token != Token::LeftBrace {
+            self.push(token);
+            self.skip_value()?;
+            return Ok(None);
+        }
+        let mut module = BarModuleConfig::empty(name);
+        let mut fields = 0u8;
+        let mut supported = false;
+        loop {
+            match self.next() {
+                Token::RightBrace => break,
+                Token::String(option) => {
+                    self.expect(Token::Colon)?;
+                    match option {
+                        "format" => {
+                            mark_once(&mut fields, 1 << 0)?;
+                            module.format = Some(self.module_format_value()?);
+                            supported = true;
+                        }
+                        "format-alt" => {
+                            mark_once(&mut fields, 1 << 1)?;
+                            module.format_alt = Some(self.module_format_value()?);
+                            supported = true;
+                        }
+                        "format-disconnected" => {
+                            mark_once(&mut fields, 1 << 2)?;
+                            module.format_disconnected = Some(self.module_format_value()?);
+                            supported = true;
+                        }
+                        "interval" => {
+                            mark_once(&mut fields, 1 << 3)?;
+                            let interval = self.u16_value()?;
+                            if interval == 0 {
+                                return Err(BarConfigError::InvalidModuleOption);
+                            }
+                            module.interval = Some(interval);
+                            supported = true;
+                        }
+                        "tooltip" => {
+                            mark_once(&mut fields, 1 << 4)?;
+                            module.tooltip = Some(self.bool_value()?);
+                            supported = true;
+                        }
+                        "min-length" => {
+                            mark_once(&mut fields, 1 << 5)?;
+                            module.min_length = Some(self.u16_value()?);
+                            supported = true;
+                        }
+                        "max-length" => {
+                            mark_once(&mut fields, 1 << 6)?;
+                            module.max_length = Some(self.u16_value()?);
+                            supported = true;
+                        }
+                        _ => self.skip_value()?,
+                    }
+                    match self.next() {
+                        Token::Comma => {}
+                        Token::RightBrace => break,
+                        token => {
+                            self.push(token);
+                            return Err(BarConfigError::UnexpectedToken);
+                        }
+                    }
+                }
+                Token::End => return Err(BarConfigError::UnexpectedEnd),
+                _ => return Err(BarConfigError::UnexpectedToken),
+            }
+        }
+        if module
+            .min_length
+            .zip(module.max_length)
+            .is_some_and(|(minimum, maximum)| minimum > maximum)
+        {
+            return Err(BarConfigError::InvalidModuleOption);
+        }
+        Ok(supported.then_some(module))
+    }
+
+    fn module_format_value(&mut self) -> Result<&'a str, BarConfigError> {
+        let value = self.string_value()?;
+        if value.len() > MAX_BAR_TEXT {
+            return Err(BarConfigError::InvalidModuleOption);
+        }
+        Ok(value)
+    }
+
     fn skip_value(&mut self) -> Result<(), BarConfigError> {
         match self.next() {
             Token::LeftBrace => self.skip_container(Token::RightBrace),
             Token::LeftBracket => self.skip_container(Token::RightBracket),
-            Token::String(_) | Token::Number(_) | Token::Literal => Ok(()),
+            Token::String(_) | Token::Number(_) | Token::Bool(_) | Token::Null => Ok(()),
             Token::End => Err(BarConfigError::UnexpectedEnd),
             _ => Err(BarConfigError::UnexpectedToken),
         }
@@ -371,6 +661,14 @@ impl<'a> JsonParser<'a> {
             Token::String(value) => Ok(value),
             Token::End => Err(BarConfigError::UnexpectedEnd),
             _ => Err(BarConfigError::UnexpectedToken),
+        }
+    }
+
+    fn bool_value(&mut self) -> Result<bool, BarConfigError> {
+        match self.next() {
+            Token::Bool(value) => Ok(value),
+            Token::End => Err(BarConfigError::UnexpectedEnd),
+            _ => Err(BarConfigError::InvalidModuleOption),
         }
     }
 
@@ -422,12 +720,28 @@ fn mark_once(fields: &mut u8, field: u8) -> Result<(), BarConfigError> {
     Ok(())
 }
 
+fn parse_usize(value: &str) -> Option<usize> {
+    if value.is_empty() {
+        return None;
+    }
+    let mut parsed = 0usize;
+    for byte in value.bytes() {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        parsed = parsed
+            .checked_mul(10)?
+            .checked_add(usize::from(byte - b'0'))?;
+    }
+    Some(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parses_waybar_jsonc_modules_and_ignores_module_options() {
+    fn parses_waybar_jsonc_modules_and_common_module_options() {
         let config = parse_waybar_config(
             r#"
             {
@@ -440,7 +754,12 @@ mod tests {
                 "modules-right": ["network", "cpu", "memory", "clock",],
                 "clock": {
                     "format": "{:%H:%M}",
-                    "tooltip": false
+                    "format-alt": "UTC",
+                    "interval": 60,
+                    "tooltip": false,
+                    "min-length": 3,
+                    "max-length": 12,
+                    "calendar": { "mode": "month" }
                 },
             }
             "#,
@@ -462,6 +781,13 @@ mod tests {
         assert_eq!(right.next(), Some("memory"));
         assert_eq!(right.next(), Some("clock"));
         assert_eq!(right.next(), None);
+        let clock = config.module_configs.get("clock").unwrap();
+        assert_eq!(clock.format, Some("{:%H:%M}"));
+        assert_eq!(clock.format_alt, Some("UTC"));
+        assert_eq!(clock.interval, Some(60));
+        assert_eq!(clock.tooltip, Some(false));
+        assert_eq!(clock.min_length, Some(3));
+        assert_eq!(clock.max_length, Some(12));
     }
 
     #[test]
@@ -493,6 +819,32 @@ mod tests {
                 }"#
             ),
             Err(BarConfigError::TooManyModules)
+        );
+        assert_eq!(
+            parse_waybar_config(r#"{ "clock": { "interval": 0 } }"#),
+            Err(BarConfigError::InvalidModuleOption)
+        );
+        assert_eq!(
+            parse_waybar_config(r#"{ "clock": { "min-length": 8, "max-length": 4 } }"#),
+            Err(BarConfigError::InvalidModuleOption)
+        );
+    }
+
+    #[test]
+    fn formats_named_default_and_right_aligned_replacements() {
+        let text = format_bar_text(
+            "CPU {usage:>2}% {}",
+            "OK",
+            &[BarFormatValue {
+                name: "usage",
+                value: "7",
+            }],
+        )
+        .unwrap();
+        assert_eq!(text.as_str(), "CPU  7% OK");
+        assert_eq!(
+            format_bar_text("{missing}", "", &[]),
+            Err(BarFormatError::InvalidPlaceholder)
         );
     }
 }

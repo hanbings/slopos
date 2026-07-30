@@ -6,10 +6,11 @@ use crate::framebuffer::{
 use crate::ps2::{Controller, InputEvent, Key, KeyEvent, KeyModifiers, MouseEvent};
 use crate::serial::serialln;
 use slopos_shell::{
-    BarPosition, BindingKey, BindingModifiers, NiriAction, NiriShellConfig, PpmImage, ResizeMode,
-    SwwwCommand, SwwwDaemonError, SwwwDefaults, WallpaperDaemon, WaybarConfig, WorkspaceSet,
+    BarFormatValue, BarPosition, BarText, BindingKey, BindingModifiers, NiriAction,
+    NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle, SwwwCommand, SwwwDaemonError,
+    SwwwDefaults, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceSet, format_bar_text,
     parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
-    parse_swww_environment, parse_waybar_config, transition_pixel,
+    parse_swww_environment, parse_waybar_config, parse_waybar_style, transition_pixel,
 };
 
 const WINDOW_COUNT: usize = 3;
@@ -17,6 +18,7 @@ const WORKSPACE_CAPACITY: usize = 4;
 const TITLE_HEIGHT: i32 = 30;
 const NIRI_CONFIG: &str = include_str!("../../assets/niri-config.kdl");
 const WAYBAR_CONFIG: &str = include_str!("../../assets/waybar-config.jsonc");
+const WAYBAR_STYLE: &str = include_str!("../../assets/waybar-style.css");
 const SWWW_ENVIRONMENT: &str = include_str!("../../assets/swww.env");
 const AURORA_PPM: &str = include_str!("../../assets/wallpapers/aurora.ppm");
 const SUNSET_PPM: &str = include_str!("../../assets/wallpapers/sunset.ppm");
@@ -47,6 +49,7 @@ pub struct Desktop {
     workspaces: WorkspaceSet<WORKSPACE_CAPACITY, WINDOW_COUNT, 1>,
     niri: NiriShellConfig<'static>,
     bar: WaybarConfig<'static>,
+    bar_style: WaybarStyle<'static>,
     swww_defaults: SwwwDefaults,
     wallpaper: WallpaperDaemon,
     active: usize,
@@ -71,6 +74,8 @@ impl Desktop {
             .unwrap_or_else(|_| crate::fatal("niri shell config failed validation"));
         let bar = parse_waybar_config(WAYBAR_CONFIG)
             .unwrap_or_else(|_| crate::fatal("Waybar JSONC config failed validation"));
+        let bar_style = parse_waybar_style(WAYBAR_STYLE)
+            .unwrap_or_else(|_| crate::fatal("Waybar CSS failed validation"));
         let swww_defaults = parse_swww_environment(SWWW_ENVIRONMENT)
             .unwrap_or_else(|_| crate::fatal("swww environment defaults failed validation"));
         parse_ppm(AURORA_PPM).unwrap_or_else(|_| crate::fatal("aurora PPM failed validation"));
@@ -155,6 +160,7 @@ impl Desktop {
             workspaces,
             niri,
             bar,
+            bar_style,
             swww_defaults,
             wallpaper,
             active: 0,
@@ -169,7 +175,7 @@ impl Desktop {
             alternate_theme: false,
         };
         serialln(format_args!(
-            "SLOPOS-SHELL: config loaded niri_workspaces={} named={} binds={} rules={} active_columns=2 gaps={} default_width=50% center=never waybar_position=top height={} spacing={} modules={}/{}/{}",
+            "SLOPOS-SHELL: config loaded niri_workspaces={} named={} binds={} rules={} active_columns=2 gaps={} default_width=50% center=never waybar_position=top height={} spacing={} modules={}/{}/{} module_configs={} css_rules={}",
             desktop.workspaces.len(),
             desktop.niri.workspaces.len(),
             desktop.niri.bindings.len(),
@@ -179,7 +185,16 @@ impl Desktop {
             desktop.bar.spacing,
             desktop.bar.modules_left.len(),
             desktop.bar.modules_center.len(),
-            desktop.bar.modules_right.len()
+            desktop.bar.modules_right.len(),
+            desktop.bar.module_configs.len(),
+            desktop.bar_style.len()
+        ));
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: formats active workspace={{value}} window={{title}} cpu=\"CPU {{usage}}%\" memory=\"MEM {{percentage}}%\" intervals={}/{}/{}/{} css=foreground/background/padding/margin/border-bottom",
+            desktop.module_interval("network"),
+            desktop.module_interval("cpu"),
+            desktop.module_interval("memory"),
+            desktop.module_interval("clock")
         ));
         let wallpaper = desktop
             .wallpaper
@@ -316,15 +331,20 @@ impl Desktop {
     fn render_bar(&self, framebuffer: &mut Framebuffer) {
         let bar_height = i32::from(self.bar.height);
         let baseline = ((bar_height - 7) / 2).max(2);
-        framebuffer.rect(0, 0, self.screen_width, bar_height, PANEL);
+        let bar_style = self.bar_style.resolve(
+            "window#waybar",
+            ResolvedWaybarStyle::new(WHITE, Some(PANEL)),
+        );
+        if let Some(background) = bar_style.background {
+            framebuffer.rect(0, 0, self.screen_width, bar_height, background);
+        }
         framebuffer.rect(10, 7, 26, 26, self.accent());
         framebuffer.text(18, 14, "S", WHITE, 2);
 
         let mut left_x = 47;
         for module in self.bar.modules_left.iter() {
-            let text = self.bar_module_text(module);
-            framebuffer.text(left_x, baseline, text, WHITE, 1);
-            left_x += text_width(text) + i32::from(self.bar.spacing);
+            left_x += self.render_bar_module(framebuffer, module, left_x, baseline, bar_height)
+                + i32::from(self.bar.spacing);
         }
 
         let mut center_width = 0;
@@ -332,13 +352,12 @@ impl Desktop {
             if center_width != 0 {
                 center_width += i32::from(self.bar.spacing);
             }
-            center_width += text_width(self.bar_module_text(module));
+            center_width += self.bar_module_width(module);
         }
         let mut center_x = (self.screen_width - center_width) / 2;
         for module in self.bar.modules_center.iter() {
-            let text = self.bar_module_text(module);
-            framebuffer.text(center_x, baseline, text, WHITE, 1);
-            center_x += text_width(text) + i32::from(self.bar.spacing);
+            center_x += self.render_bar_module(framebuffer, module, center_x, baseline, bar_height)
+                + i32::from(self.bar.spacing);
         }
 
         let mut right_width = 0;
@@ -346,32 +365,169 @@ impl Desktop {
             if right_width != 0 {
                 right_width += i32::from(self.bar.spacing);
             }
-            right_width += text_width(self.bar_module_text(module));
+            right_width += self.bar_module_width(module);
         }
         let mut right_x = self.screen_width - right_width - 12;
         for module in self.bar.modules_right.iter() {
-            let text = self.bar_module_text(module);
-            framebuffer.text(right_x, baseline, text, GREEN, 1);
-            right_x += text_width(text) + i32::from(self.bar.spacing);
+            right_x += self.render_bar_module(framebuffer, module, right_x, baseline, bar_height)
+                + i32::from(self.bar.spacing);
+        }
+        if bar_style.border_bottom_width != 0 {
+            framebuffer.rect(
+                0,
+                bar_height - i32::from(bar_style.border_bottom_width),
+                self.screen_width,
+                i32::from(bar_style.border_bottom_width),
+                bar_style.border_bottom_color,
+            );
         }
     }
 
-    fn bar_module_text<'a>(&self, module: &'a str) -> &'a str {
-        match module {
-            "niri/workspaces" => workspace_label(self.workspaces.active(), self.workspaces.len()),
-            "niri/window" if self.workspaces.focused_window().is_some() => self
-                .workspaces
-                .focused_window()
-                .map(|window| title(self.windows[window as usize].kind))
-                .unwrap_or(""),
-            "niri/window" => "",
-            "custom/launcher" => "SLOPOS",
-            "network" => "NET --",
-            "cpu" => "CPU OK",
-            "memory" => "MEM 36%",
-            "clock" => "UTC",
-            _ => module,
+    fn render_bar_module(
+        &self,
+        framebuffer: &mut Framebuffer,
+        module: &str,
+        x: i32,
+        baseline: i32,
+        bar_height: i32,
+    ) -> i32 {
+        let text = self.bar_module_text(module);
+        let style = self.bar_module_style(module);
+        let box_x = x + i32::from(style.margin_left);
+        let box_width = i32::from(style.padding_left)
+            + text_width(text.as_str())
+            + i32::from(style.padding_right);
+        if let Some(background) = style.background {
+            framebuffer.rect(box_x, 0, box_width, bar_height, background);
         }
+        if style.border_bottom_width != 0 {
+            framebuffer.rect(
+                box_x,
+                bar_height - i32::from(style.border_bottom_width),
+                box_width,
+                i32::from(style.border_bottom_width),
+                style.border_bottom_color,
+            );
+        }
+        framebuffer.text(
+            box_x + i32::from(style.padding_left),
+            baseline,
+            text.as_str(),
+            style.foreground,
+            1,
+        );
+        i32::from(style.margin_left) + box_width + i32::from(style.margin_right)
+    }
+
+    fn bar_module_width(&self, module: &str) -> i32 {
+        let text = self.bar_module_text(module);
+        let style = self.bar_module_style(module);
+        i32::from(style.margin_left)
+            + i32::from(style.padding_left)
+            + text_width(text.as_str())
+            + i32::from(style.padding_right)
+            + i32::from(style.margin_right)
+    }
+
+    fn bar_module_style(&self, module: &str) -> ResolvedWaybarStyle {
+        self.bar_style.resolve(
+            module_selector(module),
+            ResolvedWaybarStyle::new(WHITE, None),
+        )
+    }
+
+    fn module_interval(&self, module: &str) -> u16 {
+        self.bar
+            .module_configs
+            .get(module)
+            .and_then(|config| config.interval)
+            .unwrap_or(0)
+    }
+
+    fn bar_module_text(&self, module: &str) -> BarText {
+        let blank = BarFormatValue {
+            name: "",
+            value: "",
+        };
+        let mut values = [blank; 4];
+        let (default, value_count) = match module {
+            "niri/workspaces" => {
+                let label = workspace_label(self.workspaces.active(), self.workspaces.len());
+                values[0] = BarFormatValue {
+                    name: "value",
+                    value: label,
+                };
+                values[1] = BarFormatValue {
+                    name: "name",
+                    value: self.active_workspace_name(),
+                };
+                values[2] = BarFormatValue {
+                    name: "index",
+                    value: small_number(self.workspaces.active() + 1),
+                };
+                values[3] = BarFormatValue {
+                    name: "total",
+                    value: small_number(self.workspaces.len()),
+                };
+                (label, 4)
+            }
+            "niri/window" => {
+                let focused = self
+                    .workspaces
+                    .focused_window()
+                    .map(|window| title(self.windows[window as usize].kind))
+                    .unwrap_or("");
+                values[0] = BarFormatValue {
+                    name: "title",
+                    value: focused,
+                };
+                (focused, 1)
+            }
+            "custom/launcher" => ("SLOPOS", 0),
+            "network" => {
+                values[0] = BarFormatValue {
+                    name: "ifname",
+                    value: "--",
+                };
+                ("NET --", 1)
+            }
+            "cpu" => {
+                values[0] = BarFormatValue {
+                    name: "usage",
+                    value: "0",
+                };
+                ("CPU OK", 1)
+            }
+            "memory" => {
+                values[0] = BarFormatValue {
+                    name: "percentage",
+                    value: "36",
+                };
+                ("MEM 36%", 1)
+            }
+            "clock" => ("UTC", 0),
+            _ => (module, 0),
+        };
+        let module_config = self.bar.module_configs.get(module);
+        let template = if module == "network" {
+            module_config
+                .and_then(|config| config.format_disconnected.or(config.format))
+                .unwrap_or(default)
+        } else {
+            module_config
+                .and_then(|config| config.format)
+                .unwrap_or(default)
+        };
+        let mut text = format_bar_text(template, default, &values[..value_count])
+            .unwrap_or_else(|_| crate::fatal("Waybar module format failed validation"));
+        if let Some(maximum) = module_config.and_then(|config| config.max_length) {
+            text.truncate(usize::from(maximum));
+        }
+        if let Some(minimum) = module_config.and_then(|config| config.min_length) {
+            text.pad_to(usize::from(minimum))
+                .unwrap_or_else(|_| crate::fatal("Waybar min-length exceeds fixed text buffer"));
+        }
+        text
     }
 
     fn render_window(&self, framebuffer: &mut Framebuffer, index: usize) {
@@ -906,6 +1062,34 @@ const fn workspace_label(active: usize, count: usize) -> &'static str {
         (1, _) => "1 [2] 3 4",
         (2, _) => "1 2 [3] 4",
         _ => "1 2 3 [4]",
+    }
+}
+
+const fn small_number(value: usize) -> &'static str {
+    match value {
+        0 => "0",
+        1 => "1",
+        2 => "2",
+        3 => "3",
+        4 => "4",
+        5 => "5",
+        6 => "6",
+        7 => "7",
+        8 => "8",
+        _ => "?",
+    }
+}
+
+fn module_selector(module: &str) -> &'static str {
+    match module {
+        "niri/workspaces" => "#workspaces",
+        "niri/window" => "#window",
+        "custom/launcher" => "#custom-launcher",
+        "network" => "#network",
+        "cpu" => "#cpu",
+        "memory" => "#memory",
+        "clock" => "#clock",
+        _ => "#module",
     }
 }
 

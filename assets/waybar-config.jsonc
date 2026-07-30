@@ -18,9 +18,31 @@
     ],
 
     "niri/workspaces": {
-        "format": "{value}"
+        "format": "{value}",
+        "tooltip": false
+    },
+    "niri/window": {
+        "format": "{title}",
+        "max-length": 32
+    },
+    "network": {
+        "format-disconnected": "NET --",
+        "interval": 5,
+        "tooltip": false
+    },
+    "cpu": {
+        "format": "CPU {usage}%",
+        "interval": 10,
+        "tooltip": false
+    },
+    "memory": {
+        "format": "MEM {percentage}%",
+        "interval": 30,
+        "tooltip": false
     },
     "clock": {
-        "format": "UTC"
+        "format": "UTC",
+        "interval": 60,
+        "tooltip": false
     }
 }

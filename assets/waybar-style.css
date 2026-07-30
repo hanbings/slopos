@@ -1,0 +1,42 @@
+/* SlopOS Waybar-compatible GTK CSS seed. */
+* {
+    color: #f4f4f8;
+}
+
+window#waybar {
+    background-color: #161a2a;
+    border-bottom: 2px solid #6558f5;
+}
+
+#workspaces {
+    color: #f4f4f8;
+    padding: 0 6px;
+}
+
+#window {
+    color: #f4f4f8;
+    padding: 0 8px;
+}
+
+#network, #cpu, #memory, #clock {
+    padding: 0 7px;
+}
+
+#network {
+    color: #5ee28a;
+}
+
+#cpu {
+    color: #101426;
+    background-color: #4dd8e5;
+}
+
+#memory {
+    color: #f4f4f8;
+    background-color: #6558f5;
+}
+
+#clock {
+    color: #101426;
+    background-color: #5ee28a;
+}
