@@ -5,6 +5,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${repo_dir}/target/slopos-esp.img"
+root_image="${repo_dir}/target/slopos-root.ext4"
 ovmf_vars="${repo_dir}/target/OVMF_VARS_4M.test.fd"
 serial_log="${repo_dir}/evidence/serial.log"
 debug_log="${repo_dir}/evidence/uefi-debugcon.log"
@@ -21,6 +22,7 @@ timeout 10s qemu-system-x86_64 \
     -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd" \
     -drive "if=pflash,format=raw,file=${ovmf_vars}" \
     -drive "if=virtio,format=raw,file=${image}" \
+    -drive "if=virtio,format=raw,file=${root_image}" \
     -serial "file:${serial_log}" \
     -debugcon "file:${debug_log}" \
     -global isa-debugcon.iobase=0x402 \
@@ -47,7 +49,8 @@ required_markers=(
     "SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42"
     "SLOPOS-PCI: mechanism1 devices="
     "SLOPOS-VIRTIO: async block completion queue=8"
-    "sector0_signature=55aa interrupts=1 queue_interrupts=1"
+    "sector=2 bytes=1024 interrupts=1 queue_interrupts=1"
+    "SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT"
     "SLOPOS-KERNEL: framebuffer ownership accepted"
     "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
     "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized"

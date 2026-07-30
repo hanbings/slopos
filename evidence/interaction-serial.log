@@ -4,29 +4,30 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=96152
+SLOPOS-UEFI: kernel file loaded bytes=96016
 SLOPOS-UEFI: kernel mapped 0x4000000..0x400d000 entry=0x4000000
-SLOPOS-UEFI: initrd loaded bytes=186 base=0xdf6d000
-SLOPOS-UEFI: Boot Services exited descriptors=113
+SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
+SLOPOS-UEFI: Boot Services exited descriptors=117
 SLOPOS-UEFI: transferring control to kernel
 SLOPOS-KERNEL: entry reached
-SLOPOS-KERNEL: boot info valid memory_descriptors=113
+SLOPOS-KERNEL: boot info valid memory_descriptors=117
 SLOPOS-ACPI: XSDT MADT validated cpus=1 lapic=0xfee00000 ioapics=1 overrides=5 irq11=11/13
-SLOPOS-KERNEL: initrd available base=0xdf6d000 bytes=186
-SLOPOS-PCI: mechanism1 devices=7 virtio=1 block=00:03.0 id=1001 caps=0x1e
-SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000000c/000000c0 regions=0xc000000000/0xc000003000/0xc000001000/0xc000002000
-SLOPOS-MM: frame allocator initialized regions=7 free_frames=53033 probe=0x100000
+SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
+SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
+SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=53020 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
 SLOPOS-KERNEL: framebuffer ownership accepted 1024x768
 SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed
-SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized timer_hz=100 lapic_id=0 ioapic_id=0 redirections=24 routes=2/1/12/11
+SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized timer_hz=100 lapic_id=0 ioapic_id=0 redirections=24 routes=2/1/12/10
 SLOPOS-DESKTOP: interactive compositor loop entered windows=3
 SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
-SLOPOS-VIRTIO: modern block request submitted queue=8 capacity_sectors=131072
+SLOPOS-VIRTIO: modern block request submitted queue=8 capacity_sectors=262144
 SLOPOS-ASYNC: executor entered tasks=3
-SLOPOS-VIRTIO: async block completion queue=8 capacity_sectors=131072 sector0_signature=55aa interrupts=1 queue_interrupts=1
+SLOPOS-VIRTIO: async block completion queue=8 capacity_sectors=262144 sector=2 bytes=1024 interrupts=1 queue_interrupts=1
+SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT block_size=4096 blocks=32768 inodes=32768 features=0x103c/0x22c2/0x46b
 SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=1/1
 SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=1/1
 SLOPOS-TERMINAL: command=STATUS

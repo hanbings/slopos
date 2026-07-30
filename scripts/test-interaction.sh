@@ -5,6 +5,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${repo_dir}/target/slopos-esp.img"
+root_image="${repo_dir}/target/slopos-root.ext4"
 ovmf_vars="${repo_dir}/target/OVMF_VARS_4M.interaction.fd"
 serial_log="${repo_dir}/evidence/interaction-serial.log"
 
@@ -36,6 +37,7 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "${ovmf_vars}"
     -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd" \
     -drive "if=pflash,format=raw,file=${ovmf_vars}" \
     -drive "if=virtio,format=raw,file=${image}" \
+    -drive "if=virtio,format=raw,file=${root_image}" \
     -serial "file:${serial_log}" \
     -debugcon "file:${repo_dir}/evidence/interaction-uefi-debugcon.log" \
     -global isa-debugcon.iobase=0x402 \
