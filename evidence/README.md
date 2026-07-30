@@ -37,7 +37,7 @@ qemu-system-x86_64
 
 ELF parser 的宿主测试由 `make test-elf` 执行。10 项测试验证 ELF64 little-endian/x86-64/`ET_EXEC` header、program-header table、`PT_LOAD` data/BSS view，并拒绝 truncation、越界、`p_filesz > p_memsz`、非法 alignment/congruence、重叠 segment、W+X 与不属于 executable segment 的 entry。parser 无分配且 `no_std`；section header 与 dynamic linking 不参与当前装载。
 
-shell 状态机由 `make test-shell` 验证。8 项 layout 测试覆盖 niri KDL、无效 policy/width/color、稳定 strip coordinate、edge scroll、vertical stack、close 与 clamp；3 项 Waybar 测试覆盖 JSONC comment/trailing comma、module ordering/defaults，以及 duplicate/invalid/overflow rejection。裸机 marker 记录 `niri_columns=3 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4`；交互日志另有 titlebar drag 后的 view offset。`desktop.png` 显示初始 terminal/System 两列与 JSONC 驱动的顶部 module 区，`window-moved.png` 显示 viewport 横移后的列。它不证明完整 niri、Waybar 或 swww 兼容性。
+shell 状态机由 `make test-shell` 验证。8 项 layout 测试覆盖 niri KDL、稳定 strip coordinate、focus/scroll/stack/close；3 项 Waybar 测试覆盖 JSONC 与 module list；7 项 swww 测试覆盖 CLI/environment parse、daemon lifecycle/output、P3/PNM 边界、两个嵌入式 asset 和 transition mask/blend。裸机 marker 记录 niri/Waybar 配置及 `SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry=1024x768 ... transition=simple step=32 fps=30`。交互日志再记录 Sunset `img`、5 帧 center transition、返回当前 image 的 `query`、kill/restart、无 transition 换图、titlebar drag 与三列 close。`desktop.png`/`terminal-status.png` 是 Aurora，`wallpaper-switched.png` 是 Sunset，`window-moved.png` 同时显示 Sunset 和横移后的三列，`wallpaper-only.png` 显示关闭所有 tile 后仍由 Waybar 覆盖的完整壁纸。它不证明完整 niri/Waybar、独立 swww process、Wayland layer-shell 或其他图片格式。
 
 eBPF 的宿主边界测试由 `make test-ebpf` 执行；裸机证据是 `serial.log` 中的 `SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42`。它只证明文档所列子集，不证明 map、attach point 或 Linux eBPF 兼容性。
 

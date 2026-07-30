@@ -18,13 +18,15 @@ QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk�
 - 50% 默认列宽、16 px gap、focus ring 与 edge scroll；
 - Tab 切换列、鼠标标题栏横拖滚动 viewport、关闭 tiled window；
 - Waybar JSONC 驱动的 left/center/right 顶部 module 栏；
-- niri KDL layout 与 Waybar JSONC 配置子集，共 11 项宿主测试；
+- swww 式 daemon 状态、`img/query/kill` 命令、环境默认值与 CPU transition；
+- 两张可在运行时切换的嵌入式 P3/PNM 壁纸；
+- niri KDL、Waybar JSONC 与 swww 配置/状态机子集，共 18 项宿主测试；
 - 键盘输入；
-- 可执行 `HELP`、`STATUS`、`ABOUT`、`CLEAR` 的图形 kernel monitor；
+- 可执行 `HELP`、`STATUS`、`ABOUT`、`CLEAR` 和 `SWWW ...` 的图形 kernel monitor；
 - 系统状态窗口；
 - 配置 surface。
 
-这些桌面功能目前仍在内核态。Waybar module 顺序/栏高/间距已由 JSONC 决定，但 module backend 和 CSS 尚未实现；swww daemon/图片/过渡也尚未实现，且没有 Wayland client surface。完整兼容边界见 [docs/desktop-shell.md](docs/desktop-shell.md)，保守完成度见 [docs/status.md](docs/status.md)。
+这些桌面功能目前仍在内核态。Waybar module 顺序/栏高/间距已由 JSONC 决定，但 module backend 和 CSS 尚未实现；swww 状态机也还不是独立进程或 Wayland layer-shell client，图片来源暂限两个编译时 PNM asset。完整兼容边界见 [docs/desktop-shell.md](docs/desktop-shell.md)，保守完成度见 [docs/status.md](docs/status.md)。
 
 ## 构建与运行
 
@@ -56,7 +58,7 @@ make test-journal-replay
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-elf` 的 10 项测试覆盖 ELF64 header、`PT_LOAD`、BSS、范围/对齐/重叠/W^X 与 entry validation，`make test-shell` 的 11 项测试覆盖 niri KDL、Waybar JSONC 与滚动平铺状态机，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode 与 EOF growth。`make test-boot` 在 OVMF 中验证 ELF→CPL3 enter/trap/exit、niri/Waybar config、上述硬件路径、447 次 virtio 请求及 446 次 INTx completion、fd overwrite/append/truncate、active transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键盘并横拖 tiled titlebar 验证 viewport scroll；`make test-page-fault` 在用户进程退出并恢复 kernel CR3 后核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、477 次请求/476 次 completion、桌面继续运行和宿主 fsck。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-elf` 的 10 项测试覆盖 ELF64 header、`PT_LOAD`、BSS、范围/对齐/重叠/W^X 与 entry validation，`make test-shell` 的 18 项测试覆盖 niri KDL、Waybar JSONC、swww CLI/daemon/PNM/transition 与滚动平铺状态机，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode 与 EOF growth。`make test-boot` 在 OVMF 中验证 ELF→CPL3 enter/trap/exit、niri/Waybar/swww 配置、上述硬件路径、447 次 virtio 请求及 446 次 INTx completion、fd overwrite/append/truncate、active transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 命令，验证 swww Sunset 换图、center transition、query、kill/restart、niri viewport 横拖及逐列关闭；`make test-page-fault` 在用户进程退出并恢复 kernel CR3 后核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、477 次请求/476 次 completion、桌面继续运行和宿主 fsck。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；Tab 沿 column strip 切换焦点，横拖标题栏滚动 viewport，红色 `X` 关闭 tiled window。
 

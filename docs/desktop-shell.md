@@ -46,12 +46,16 @@ JSONC parser 支持 `//` 与 `/* */` comment、trailing comma、未知 nested mo
 
 ## swww 式壁纸控制
 
-当前背景仍是 kernel 生成的色带，swww 兼容层尚未实现。计划保持 swww 的 daemon/client 行为：
+`crates/shell` 已提供无分配 swww 风格 CLI parser 与 `WallpaperDaemon` 状态机。kernel 启动时等价执行 `swww-daemon` 和 `swww img /usr/share/backgrounds/slopos-aurora.ppm`；图形 monitor 接受带或不带 `swww` 前缀的命令：
 
 - `img <path>` 设置图片，可选 output；
 - `query` 返回 output geometry 与当前 image；
 - `kill` 停止 daemon；
-- `--transition-type`、`--transition-step`、`--transition-fps` 及对应环境变量；
-- 至少提供 `simple`、`fade`、`left/right/top/bottom`、`center` 的有界 CPU transition。
+- `swww-daemon` 在 kill 后重新启动并清空旧 image；
+- `--outputs/-o`、`--resize crop|fit|no`、`--transition-type`、`--transition-step`、`--transition-fps`、`--transition-duration`、`--transition-angle`；
+- `assets/swww.env` 以同名 `SWWW_TRANSITION*` 变量提供 boot 默认值；
+- `none`、`simple`、`fade`、`left/right/top/bottom`、`center/outer`、`any/random` transition。
 
-命令与 transition 语义依据 [swww 官方 README](https://github.com/LGFae/swww)。在有 IPC、图片 decoder、VFS path 和独立用户进程前，不会声称兼容 swww daemon。
+两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart 与 `none` 重设。7 项 swww/PNM 测试加上 8 项 layout 与 3 项 Waybar 测试，共 18 项。
+
+命令与 transition 语义依据 [swww 官方 README](https://github.com/LGFae/swww)。当前不是独立用户进程或 Unix socket，也没有 Wayland layer-shell、多 output、VFS 任意路径、PNG/JPEG/GIF decode、animated image cache、frame callback/timing、transition position/bezier/wave/grow 或 damage tracking。同步 framebuffer renderer 为限制最坏 CPU 时间，会把极小 step 最多采样成 17 帧，因此不声称二进制或动画时序完全兼容 swww。

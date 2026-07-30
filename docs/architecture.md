@@ -47,9 +47,9 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `kernel/src/framebuffer.rs` 直接使用 volatile 32-bit framebuffer store，尊重 GOP stride 和 RGB/BGR 格式。`font.rs` 是项目内原创的 5×7 bitmap glyph 集。
 
-`crates/shell` 是无分配、无标准库的滚动平铺状态机、niri KDL layout parser 与 Waybar JSONC parser。column 位于向右延伸的 strip，新窗口不会改变既有 column width；viewport 按 focus edge reveal 或 `never`/`always`/`on-overflow` policy 移动，一个 column 也可纵向 stack 多个 window。KDL 支持 gap、default fixed/proportional/client width、centering、focus-ring 与 background；JSONC 支持 comment/trailing comma、bar position/height/spacing 和 left/center/right module list。11 项宿主测试覆盖 parse/reject/open/focus/scroll/stack/close。
+`crates/shell` 是无分配、无标准库的滚动平铺与壁纸状态机、niri KDL parser、Waybar JSONC parser、swww CLI/environment parser 和 P3/PNM decoder。column 位于向右延伸的 strip，新窗口不会改变既有 column width；viewport 按 focus edge reveal 或 `never`/`always`/`on-overflow` policy 移动，一个 column 也可纵向 stack 多个 window。swww 部分以固定容量保存 current/previous path，校验 daemon/output 生命周期，并提供 fade、方向、center/outer transition 的纯像素函数。18 项宿主测试覆盖 parse/reject/open/focus/scroll/stack/close、daemon、嵌入式 PNM asset 与 transition。
 
-`desktop.rs` 当前仍是内核态的早期合成 async task，但三个 surface 已由 `ScrollLayout` 放入 50% 宽 column。Tab 沿 column focus，标题栏横拖滚动 strip，红色按钮关闭 tile；`assets/waybar-config.jsonc` 决定顶部 bar 高度、间距与 module 顺序，registry 把 workspace/title/system provider 分别排到 left/center/right。两份配置都仍是编译时 asset，并非 VFS live reload。它没有声称实现 Wayland object/surface IPC、用户态 client、完整 niri workspace/window rule/bind/animation、Waybar CSS/完整 module backend 或 swww daemon。兼容边界见 [desktop-shell.md](desktop-shell.md)。
+`desktop.rs` 当前仍是内核态的早期合成 async task，但三个 surface 已由 `ScrollLayout` 放入 50% 宽 column。Tab 沿 column focus，标题栏横拖滚动 strip，红色按钮关闭 tile；`assets/waybar-config.jsonc` 决定顶部 bar，`assets/swww.env` 提供同名环境默认值，两张编译时 PNM 经 crop/fit/no resize 后成为窗口下方背景。kernel monitor 的 `SWWW IMG/QUERY/KILL` 会驱动同一个 daemon state；过渡以最多 17 个同步采样帧写入 GOP。它没有声称实现 Wayland object/surface IPC、用户态 client、完整 niri workspace/window rule/bind/animation、Waybar CSS/完整 module backend，或真正的 swww socket/process/layer-shell。兼容边界见 [desktop-shell.md](desktop-shell.md)。
 
 `memory.rs` 按 firmware 报告的 descriptor stride 解析 UEFI map，只收集 conventional memory，并提供并发保护的物理 frame/contiguous bump allocator。启动时实际分配一个 frame、volatile 写入、读回并清零。
 
