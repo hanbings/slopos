@@ -29,6 +29,18 @@ dd if=/dev/zero bs=1024 count=6 status=none \
     | tr '\000' 'Z' >"${staging_dir}/usr/share/slopos/multiblock.bin"
 dd if=/dev/zero bs=4096 count=9 status=none \
     | tr '\000' 'D' >"${staging_dir}/usr/share/slopos/deep-extent.bin"
+large_directory="${staging_dir}/usr/share/slopos/large-directory"
+mkdir -p "${large_directory}"
+cp "${staging_dir}/etc/slopos-release" "${large_directory}/seed"
+printf -v long_suffix '%220s' ''
+long_suffix="${long_suffix// /x}"
+for link_index in {00..17}; do
+    ln "${large_directory}/seed" \
+        "${large_directory}/entry-${link_index}-${long_suffix}"
+done
+for tail_index in {00..29}; do
+    ln "${large_directory}/seed" "${large_directory}/tail-${tail_index}"
+done
 truncate -s 256M "${image}"
 "${mke2fs}" \
     -q \

@@ -4,7 +4,8 @@ use core::future::pending;
 use core::ptr;
 use slopos_ext4::{
     DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DirectoryBlock, Extent, ExtentNode,
-    GroupDescriptor, Inode, ROOT_INODE, SUPERBLOCK_SIZE, Superblock, validate_path_component,
+    GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
+    validate_path_component,
 };
 
 use crate::virtio::BlockDevice;
@@ -13,12 +14,14 @@ const SUPERBLOCK_SECTOR: u64 = 2;
 const SECTOR_SIZE: u64 = 512;
 const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
+static ZERO_BLOCK: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
 const EXPECTED_RELEASE: &[u8] = include_bytes!("../../rootfs/etc/slopos-release");
 const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/slopos/system.conf");
 const RELEASE_PATH: [&[u8]; 2] = [b"etc", b"slopos-release"];
 const CONFIGURATION_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"system.conf"];
 const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"multiblock.bin"];
 const DEEP_EXTENT_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"deep-extent.bin"];
+const CROSS_BLOCK_PATH: [&[u8]; 5] = [b"usr", b"share", b"slopos", b"large-directory", b"tail-29"];
 
 pub async fn mount_task(mut device: BlockDevice) -> ! {
     crate::serial::serialln(format_args!(
@@ -119,6 +122,31 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         deep_extent.inode.number,
         deep_bytes.len()
     ));
+    let hole_bytes = mount.read_file_block(&mut device, &deep_extent, 7).await;
+    if hole_bytes.len() != BLOCK_SIZE || hole_bytes.iter().any(|byte| *byte != 0) {
+        device.fail("ext4 sparse hole did not read as zeros");
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: sparse read valid inode={} logical_block=7 zero_bytes={}",
+        deep_extent.inode.number,
+        hole_bytes.len()
+    ));
+
+    let cross_block = mount.open_file(&mut device, &CROSS_BLOCK_PATH).await;
+    if cross_block.directory_block != 1 {
+        device.fail("ext4 cross-block directory entry was not in logical block one");
+    }
+    let cross_block_bytes = mount.read_file_block(&mut device, &cross_block, 0).await;
+    if cross_block_bytes != EXPECTED_RELEASE {
+        device.fail("ext4 cross-block directory file content mismatch");
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: cross-block directory valid directory_inode={} directory_blocks=2 entry_block={} target_inode={} target_bytes={} metadata_checksums=valid path=/usr/share/slopos/large-directory/tail-29",
+        cross_block.parent_inode,
+        cross_block.directory_block,
+        cross_block.inode.number,
+        cross_block_bytes.len()
+    ));
 
     crate::serial::serialln(format_args!(
         "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={}",
@@ -186,34 +214,38 @@ impl ReadOnlyMount {
     }
 
     async fn open_file(&mut self, device: &mut BlockDevice, components: &[&[u8]]) -> ReadOnlyFile {
-        let inode = self.resolve_path(device, components).await;
+        let (inode, parent_inode, directory_block) = self.resolve_path(device, components).await;
         if !inode.is_regular_file() {
             device.fail("ext4 open target is not a regular file");
         }
-        ReadOnlyFile { inode }
+        ReadOnlyFile {
+            inode,
+            parent_inode,
+            directory_block,
+        }
     }
 
-    async fn resolve_path(&mut self, device: &mut BlockDevice, components: &[&[u8]]) -> Inode {
+    async fn resolve_path(
+        &mut self,
+        device: &mut BlockDevice,
+        components: &[&[u8]],
+    ) -> (Inode, u32, u32) {
         if components.is_empty() {
             device.fail("ext4 path has no components");
         }
         let mut current = self.read_inode(device, ROOT_INODE).await;
+        let mut parent_inode = ROOT_INODE;
+        let mut directory_block = 0;
         for component in components {
             if validate_path_component(component).is_err() {
                 device.fail("ext4 path component is invalid");
             }
-            let extent = self.directory_extent(device, &current);
-            let block = self
-                .cache
-                .read_block(device, &self.superblock, extent.physical_block)
-                .await;
-            let directory = DirectoryBlock::parse(block, &current, &self.superblock)
-                .unwrap_or_else(|_| device.fail("ext4 path directory is invalid"));
-            let entry = directory
-                .find(component)
+            parent_inode = current.number;
+            let (inode_number, file_type, entry_block) = self
+                .find_directory_entry(device, &current, component)
+                .await
                 .unwrap_or_else(|| device.fail("ext4 path component was not found"));
-            let inode_number = entry.inode;
-            let file_type = entry.file_type;
+            directory_block = entry_block;
             current = self.read_inode(device, inode_number).await;
             if (file_type == DIRECTORY_ENTRY_DIRECTORY && !current.is_directory())
                 || (file_type == DIRECTORY_ENTRY_REGULAR_FILE && !current.is_regular_file())
@@ -223,7 +255,41 @@ impl ReadOnlyMount {
                 device.fail("ext4 directory entry type mismatch");
             }
         }
-        current
+        (current, parent_inode, directory_block)
+    }
+
+    async fn find_directory_entry(
+        &mut self,
+        device: &mut BlockDevice,
+        inode: &Inode,
+        component: &[u8],
+    ) -> Option<(u32, u8, u32)> {
+        if !inode.is_directory() {
+            device.fail("ext4 path component parent is not a directory");
+        }
+        if inode.flags & INODE_FLAG_DIRECTORY_INDEX != 0 {
+            device.fail("indexed ext4 directories are unsupported");
+        }
+        let block_count = inode.size.div_ceil(u64::from(self.superblock.block_size));
+        if block_count == 0 || block_count > u64::from(u32::MAX) {
+            device.fail("ext4 directory size is invalid");
+        }
+        for logical_block in 0..block_count as u32 {
+            let physical_block = self
+                .inode_physical_block(device, inode, logical_block)
+                .await
+                .unwrap_or_else(|| device.fail("ext4 directory contains a sparse block"));
+            let block = self
+                .cache
+                .read_block(device, &self.superblock, physical_block)
+                .await;
+            let directory = DirectoryBlock::parse(block, inode, &self.superblock)
+                .unwrap_or_else(|_| device.fail("ext4 path directory block is invalid"));
+            if let Some(entry) = directory.find(component) {
+                return Some((entry.inode, entry.file_type, logical_block));
+            }
+        }
+        None
     }
 
     async fn read_inode(&mut self, device: &mut BlockDevice, inode_number: u32) -> Inode {
@@ -259,15 +325,21 @@ impl ReadOnlyMount {
         file: &ReadOnlyFile,
         logical_block: u32,
     ) -> &'a [u8] {
-        let physical_block = self.file_physical_block(device, file, logical_block).await;
-        let block = self
-            .cache
-            .read_block(device, &self.superblock, physical_block)
-            .await;
         let byte_offset = u64::from(logical_block) * u64::from(self.superblock.block_size);
         let remaining = file.inode.size - byte_offset;
         let length = remaining.min(u64::from(self.superblock.block_size)) as usize;
-        &block[..length]
+        let physical_block = self
+            .inode_physical_block(device, &file.inode, logical_block)
+            .await;
+        if let Some(physical_block) = physical_block {
+            let block = self
+                .cache
+                .read_block(device, &self.superblock, physical_block)
+                .await;
+            &block[..length]
+        } else {
+            &ZERO_BLOCK[..length]
+        }
     }
 
     async fn prefetch_file_pair(
@@ -278,35 +350,31 @@ impl ReadOnlyMount {
         second_logical_block: u32,
     ) {
         let first = self
-            .file_physical_block(device, file, first_logical_block)
-            .await;
+            .inode_physical_block(device, &file.inode, first_logical_block)
+            .await
+            .unwrap_or_else(|| device.fail("ext4 paired prefetch starts in a hole"));
         let second = self
-            .file_physical_block(device, file, second_logical_block)
-            .await;
+            .inode_physical_block(device, &file.inode, second_logical_block)
+            .await
+            .unwrap_or_else(|| device.fail("ext4 paired prefetch ends in a hole"));
         self.cache
             .prefetch_pair(device, &self.superblock, first, second)
             .await;
     }
 
-    async fn file_physical_block(
+    async fn inode_physical_block(
         &mut self,
         device: &mut BlockDevice,
-        file: &ReadOnlyFile,
+        inode: &Inode,
         logical_block: u32,
-    ) -> u64 {
-        let file_block_count = file
-            .inode
-            .size
-            .div_ceil(u64::from(self.superblock.block_size));
+    ) -> Option<u64> {
+        let file_block_count = inode.size.div_ceil(u64::from(self.superblock.block_size));
         if u64::from(logical_block) >= file_block_count {
-            device.fail("ext4 file read is past end of file");
+            device.fail("ext4 inode read is past end of file");
         }
-        let extent = self
-            .file_extent(device, &file.inode, logical_block)
-            .await
-            .unwrap_or_else(|| device.fail("sparse ext4 file reads are unsupported"));
+        let extent = self.file_extent(device, inode, logical_block).await?;
         if extent.unwritten {
-            device.fail("ext4 regular file extent is invalid");
+            return None;
         }
         let physical_block =
             extent.physical_block + u64::from(logical_block - extent.logical_block);
@@ -318,7 +386,7 @@ impl ReadOnlyMount {
         {
             device.fail("ext4 regular file block is outside the filesystem");
         }
-        physical_block
+        Some(physical_block)
     }
 
     async fn file_extent(
@@ -383,6 +451,8 @@ impl ReadOnlyMount {
 
 struct ReadOnlyFile {
     inode: Inode,
+    parent_inode: u32,
+    directory_block: u32,
 }
 
 struct RootProbe {
