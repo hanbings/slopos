@@ -76,6 +76,7 @@ pub enum NiriAction<'a> {
     SwitchPresetWindowHeightBack,
     MaximizeColumn,
     CenterColumn,
+    CenterVisibleColumns,
     ExpandColumnToAvailableWidth,
     SetColumnWidth(ColumnWidthChange),
     SetWindowHeight(ColumnWidthChange),
@@ -492,6 +493,7 @@ impl<'a> ShellConfigParser<'a> {
             "switch-preset-window-height-back" => NiriAction::SwitchPresetWindowHeightBack,
             "maximize-column" => NiriAction::MaximizeColumn,
             "center-column" => NiriAction::CenterColumn,
+            "center-visible-columns" => NiriAction::CenterVisibleColumns,
             "expand-column-to-available-width" => NiriAction::ExpandColumnToAvailableWidth,
             "set-column-width" => {
                 let KdlToken::String(width) = self.next() else {
@@ -978,6 +980,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].center_focused_column()
     }
 
+    pub fn center_visible_columns(&mut self) -> bool {
+        self.layouts[self.active].center_visible_columns()
+    }
+
     pub fn expand_focused_column_to_available_width(&mut self) -> bool {
         self.layouts[self.active].expand_focused_column_to_available_width()
     }
@@ -1114,6 +1120,7 @@ mod tests {
                 Mod+Ctrl+R { reset-window-height; }
                 Mod+F { maximize-column; }
                 Mod+C { center-column; }
+                Mod+Ctrl+C { center-visible-columns; }
                 Mod+Ctrl+F { expand-column-to-available-width; }
                 Mod+Q { close-window; }
             }
@@ -1134,7 +1141,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 28);
+        assert_eq!(config.bindings.len(), 29);
         assert_eq!(
             config
                 .bindings
@@ -1226,6 +1233,13 @@ mod tests {
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Character(b'C')),
             Some(NiriAction::CenterColumn)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::Character(b'C')
+            ),
+            Some(NiriAction::CenterVisibleColumns)
         );
         assert_eq!(
             config.bindings.action(

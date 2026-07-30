@@ -662,6 +662,51 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         changed
     }
 
+    pub fn center_visible_columns(&mut self) -> bool {
+        if self.column_count == 0
+            || self.config.center_focused_column == CenterFocusedColumn::Always
+            || (self.config.always_center_single_column && self.column_count == 1)
+        {
+            return false;
+        }
+
+        let view_start = self.view_offset;
+        let view_end = view_start + i32::from(self.output_width);
+        let gap = i32::from(self.config.gaps);
+        let mut width_taken = 0i32;
+        let mut leftmost_start = None;
+        let mut active_visible = false;
+
+        for index in 0..self.column_count {
+            let start = self.column_start(index);
+            let width = i32::from(self.effective_column_width(index));
+            if start < view_start + gap {
+                continue;
+            }
+            if start + width + gap > view_end {
+                break;
+            }
+
+            if leftmost_start.is_none() {
+                leftmost_start = Some(start);
+            }
+            if index == self.focused_column {
+                active_visible = true;
+            }
+            width_taken += width + gap;
+        }
+
+        if !active_visible {
+            return false;
+        }
+        let free_space = i32::from(self.output_width) - width_taken + gap;
+        let centered =
+            leftmost_start.expect("a visible active column has a left edge") - free_space / 2;
+        let changed = centered != self.view_offset;
+        self.view_offset = centered;
+        changed
+    }
+
     pub fn expand_focused_column_to_available_width(&mut self) -> bool {
         if self.column_count == 0 || self.columns[self.focused_column].maximized {
             return false;
@@ -1719,6 +1764,30 @@ mod tests {
         assert!(!single.expand_focused_column_to_available_width());
         assert!(single.toggle_maximize_focused_column());
         assert_eq!(single.tile_rect(1).unwrap().width, 300);
+    }
+
+    #[test]
+    fn centers_fully_visible_columns_as_a_group() {
+        let config = LayoutConfig {
+            default_column_width: ColumnWidth::Fixed(300),
+            ..LayoutConfig::default()
+        };
+        let mut layout = ScrollLayout::<2, 1>::new(1000, 700, 30, config);
+        layout.open_window(1).unwrap();
+        layout.open_window(2).unwrap();
+        assert!(layout.focus_column_left());
+        assert!(layout.center_visible_columns());
+        assert_eq!(layout.tile_rect(1).unwrap().x, 192);
+        assert_eq!(layout.tile_rect(2).unwrap().x, 508);
+        assert!(!layout.center_visible_columns());
+
+        let always = LayoutConfig {
+            center_focused_column: CenterFocusedColumn::Always,
+            ..config
+        };
+        let mut always_centered = ScrollLayout::<1, 1>::new(1000, 700, 30, always);
+        always_centered.open_window(1).unwrap();
+        assert!(!always_centered.center_visible_columns());
     }
 
     #[test]
