@@ -7,7 +7,7 @@ use crate::ps2::{Controller, DesktopEvent, InputEvent, Key, KeyEvent, KeyModifie
 use crate::serial::serialln;
 use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
-    BarFormatValue, BarPosition, BarText, BindingKey, BindingModifiers, NiriAction,
+    BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers, NiriAction,
     NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle, SwwwCommand, SwwwDaemonError,
     SwwwDefaults, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceSet, format_bar_text,
     parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
@@ -356,26 +356,14 @@ impl Desktop {
                 + i32::from(self.bar.spacing);
         }
 
-        let mut center_width = 0;
-        for module in self.bar.modules_center.iter() {
-            if center_width != 0 {
-                center_width += i32::from(self.bar.spacing);
-            }
-            center_width += self.bar_module_width(module);
-        }
+        let center_width = self.bar_modules_width(self.bar.modules_center);
         let mut center_x = (self.screen_width - center_width) / 2;
         for module in self.bar.modules_center.iter() {
             center_x += self.render_bar_module(framebuffer, module, center_x, baseline, bar_height)
                 + i32::from(self.bar.spacing);
         }
 
-        let mut right_width = 0;
-        for module in self.bar.modules_right.iter() {
-            if right_width != 0 {
-                right_width += i32::from(self.bar.spacing);
-            }
-            right_width += self.bar_module_width(module);
-        }
+        let right_width = self.bar_modules_width(self.bar.modules_right);
         let mut right_x = self.screen_width - right_width - 12;
         for module in self.bar.modules_right.iter() {
             right_x += self.render_bar_module(framebuffer, module, right_x, baseline, bar_height)
@@ -436,6 +424,21 @@ impl Desktop {
             + text_width(text.as_str())
             + i32::from(style.padding_right)
             + i32::from(style.margin_right)
+    }
+
+    fn bar_modules_width(&self, modules: BarModuleList<'_>) -> i32 {
+        modules
+            .iter()
+            .enumerate()
+            .map(|(index, module)| {
+                self.bar_module_width(module)
+                    + if index == 0 {
+                        0
+                    } else {
+                        i32::from(self.bar.spacing)
+                    }
+            })
+            .sum()
     }
 
     fn bar_module_style(&self, module: &str) -> ResolvedWaybarStyle {
@@ -907,24 +910,57 @@ impl Desktop {
         if y < 0 || y >= i32::from(self.bar.height) {
             return None;
         }
-        let mut module_x = BAR_LEFT_START_X;
-        for module in self.bar.modules_left.iter() {
+        let center_width = self.bar_modules_width(self.bar.modules_center);
+        let right_width = self.bar_modules_width(self.bar.modules_right);
+        self.bar_workspace_in_modules(self.bar.modules_left, BAR_LEFT_START_X, x)
+            .or_else(|| {
+                self.bar_workspace_in_modules(
+                    self.bar.modules_center,
+                    (self.screen_width - center_width) / 2,
+                    x,
+                )
+            })
+            .or_else(|| {
+                self.bar_workspace_in_modules(
+                    self.bar.modules_right,
+                    self.screen_width - right_width - 12,
+                    x,
+                )
+            })
+    }
+
+    fn bar_workspace_in_modules(
+        &self,
+        modules: BarModuleList<'_>,
+        mut module_x: i32,
+        x: i32,
+    ) -> Option<usize> {
+        for module in modules.iter() {
             let module_width = self.bar_module_width(module);
             if module == "niri/workspaces" {
                 let text = self.bar_module_text(module);
                 let style = self.bar_module_style(module);
-                let text_x =
+                let workspace_label =
+                    workspace_label(self.workspaces.active(), self.workspaces.len());
+                let Some(label_offset) = text.as_str().find(workspace_label) else {
+                    module_x += module_width + i32::from(self.bar.spacing);
+                    continue;
+                };
+                let label_x =
                     module_x + i32::from(style.margin_left) + i32::from(style.padding_left);
-                let relative = x - text_x;
-                if relative >= 0 && relative < text_width(text.as_str()) {
+                let label_x = label_x
+                    + i32::try_from(label_offset)
+                        .unwrap_or(i32::MAX / 6)
+                        .saturating_mul(6);
+                let relative = x - label_x;
+                if relative >= 0 && relative < text_width(workspace_label) {
                     let byte_index = usize::try_from(relative / 6).ok()?;
-                    let digit = *text.as_str().as_bytes().get(byte_index)?;
+                    let digit = *workspace_label.as_bytes().get(byte_index)?;
                     if (b'1'..=b'8').contains(&digit) {
                         let workspace = usize::from(digit - b'1');
                         return (workspace < self.workspaces.len()).then_some(workspace);
                     }
                 }
-                return None;
             }
             module_x += module_width + i32::from(self.bar.spacing);
         }

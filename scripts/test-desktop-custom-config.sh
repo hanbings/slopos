@@ -9,6 +9,7 @@ root_image="${repo_dir}/target/slopos-root.ext4"
 serial_log="${repo_dir}/evidence/custom-config-serial.log"
 debug_log="${repo_dir}/evidence/custom-config-uefi-debugcon.log"
 qemu_log="${repo_dir}/evidence/custom-config-qemu.log"
+workspace_screenshot="${repo_dir}/evidence/custom-config-workspace-click.ppm"
 runtime_dir="$(mktemp -d /tmp/slopos-custom-config.XXXXXX)"
 runtime_esp="${runtime_dir}/slopos-esp.img"
 runtime_root="${runtime_dir}/slopos-root.ext4"
@@ -52,7 +53,10 @@ mkdir -p "${repo_dir}/evidence"
 cp --reflink=auto --sparse=always "${esp_image}" "${runtime_esp}"
 cp --reflink=auto --sparse=always "${root_image}" "${runtime_root}"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
-sed '1i// user override accepted by the SlopOS desktop service' \
+sed \
+    -e '1i// user override accepted by the SlopOS desktop service' \
+    -e '/"modules-left":/,/]/ s/"niri\/workspaces"/"niri\/window"/' \
+    -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
     "${repo_dir}/assets/waybar-config.jsonc" >"${custom_waybar}"
 custom_bytes="$(wc -c <"${custom_waybar}")"
 if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
@@ -67,7 +71,19 @@ fi
     "${runtime_root}" >/dev/null 2>&1
 
 set +e
-timeout 10s qemu-system-x86_64 \
+{
+    sleep 7
+    echo "mouse_move 5 -364"
+    echo "mouse_button 1"
+    echo "mouse_button 0"
+    sleep 1
+    echo "screendump ${workspace_screenshot}"
+    echo "mouse_move -24 0"
+    echo "mouse_button 1"
+    echo "mouse_button 0"
+    sleep 1
+    echo "quit"
+} | timeout 12s qemu-system-x86_64 \
     -machine q35,accel=tcg \
     -cpu qemu64 \
     -m 256M \
@@ -79,7 +95,7 @@ timeout 10s qemu-system-x86_64 \
     -debugcon "file:${debug_log}" \
     -global isa-debugcon.iobase=0x402 \
     -display none \
-    -monitor none \
+    -monitor stdio \
     -no-reboot >"${qemu_log}" 2>&1
 qemu_status=$?
 set -e
@@ -127,6 +143,17 @@ if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; 
     echo "persistent desktop service reached an unexpected exit or fatal path" >&2
     exit 1
 fi
+grep -Fq \
+    "SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=true module=niri/workspaces" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: workspace clicked index=1 name=main changed=true module=niri/workspaces" \
+    "${serial_log}"
+test -s "${workspace_screenshot}"
+if command -v pnmtopng >/dev/null 2>&1; then
+    pnmtopng "${workspace_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-workspace-click.png"
+fi
 
 set +e
 "${e2fsck}" -fn "${runtime_root}" >"${fsck_log}" 2>&1
@@ -137,4 +164,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded user desktop configuration override verified"
+echo "SlopOS bounded user desktop configuration override and configured Waybar placement verified"

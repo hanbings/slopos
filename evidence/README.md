@@ -7,7 +7,7 @@
 | `serial.log` | `make test-boot` | OVMF/UEFI、ELF、`ExitBootServices`、XSDT/MADT、memory、两个常驻 CPL3 进程、cooperative/timer switch、policy/config event、eBPF、PCI/virtio INTx、ext4、async 与桌面循环 |
 | `uefi-debugcon.log` | `make test-boot` | loader 独立 debugcon 日志 |
 | `interaction-serial.log` | `make test-interaction` | PS/2 键盘触发 VFS 配置 reload/rollback、执行 `STATUS`/swww，鼠标横拖 viewport、Super+右键缩放、点击 Waybar workspace，Super bind 缩放/重排/关闭窗口并切换 workspace |
-| `custom-config-serial.log` | `make test-desktop-custom-config` | 不同长度的合法 Waybar override 经 PID 2 分块 hash、两代 policy 与 config apply 路径生效 |
+| `custom-config-serial.log` | `make test-desktop-custom-config` | 不同长度及 left/center placement 的合法 Waybar override 经 PID 2 分块 hash、两代 policy、config apply 与中央 workspace 点击生效 |
 | `custom-config-uefi-debugcon.log` / `custom-config-qemu.log` | `make test-desktop-custom-config` | 自定义配置回归的 loader 与 QEMU 输出 |
 | `page-fault-serial.log` | `make test-page-fault` | 自有页表的未映射访问、vector 14、error、RIP、CR2 与 fatal boundary |
 | `journal-injection-serial.log` | `make test-journal-replay` phase 1 | commit 已 flush、home 尚未 checkpoint 的 dirty disk |
@@ -19,6 +19,7 @@
 | `column-reordered.png` | `make test-interaction` | `Mod+Shift+Right` 把 focused terminal column 从 x=16 重排至 x=496 |
 | `mouse-resized.png` | `make test-interaction` | Super+右键横拖把 focused terminal column 从 512 px 放大至 608 px |
 | `waybar-workspace-click.png` | `make test-interaction` | 点击顶部数字 `2` 后 `niri/workspaces` 显示 active 2，并切入 Config surface |
+| `custom-config-workspace-click.png` | `make test-desktop-custom-config` | JSONC 把 `niri/workspaces` 移到 center 后，点击中央数字 `2` 切入 Config |
 | `workspace-config.png` | `make test-interaction` | `slopos-config` window rule 与 `Mod+Down` 切入 named workspace |
 | `wallpaper-switched.png` / `wallpaper-only.png` | `make test-interaction` | Sunset transition 后的窗口背景，以及关闭全部 tile 后的完整壁纸 |
 | `qemu-test.log` | `make test-boot` | QEMU stderr/stdout；正常测试通常为空 |
@@ -48,7 +49,7 @@ qemu-system-x86_64
 
 PID 2 首轮打开 inode 20 Waybar JSONC，以 offset 0/256/512/768 的四个 chunk 读齐默认 904 bytes并验证 EOF，再打开 inode 17 swww environment，读齐默认 172 bytes并验证 EOF；读取器允许非空 Waybar/swww 分别扩展至 4096/512 bytes。`SLOPOS-DESKTOP-SERVICE` submission marker 记录 protocol 1、40-byte commit、`waybar-provider/swww-policy` capability、CPU 0、Memory 36、Aurora，以及实际 VFS hash `0xd34d4a92c88d065b`/`0xc5edd6e5c5369f52`；私有 syscall marker 记录编号 `1397489665` 与 result 0。第二个私有 syscall（`1397489666`）以 32-byte user buffer、event kind 与 `after_generation` 进入 Blocked；desktop task随后记录 snapshot generation 1、相同 owner/capability/provider 值及 kernel renderer boundary，swww marker 证明初始 Aurora 只在 policy 到达后应用。ack marker 再唤醒 block task，completion marker 记录 `Blocked → Runnable`、`policy-applied` generation 1；PID 2 decode event 后只在首次写一次 ready message，然后等待 `config-applied`。
 
-`make test-desktop-custom-config` 不修改仓库标准镜像：脚本复制 ESP/rootfs，用 `debugfs` 在临时 ext4 中把 inode 20 替换成 960-byte、仍可解析的 JSONC。`custom-config-serial.log` 证明 PID 2 在 policy generation 1 与 config generation 1 唤醒后的 generation 2 都读到 960 bytes，并两次提交新的 Waybar hash `0x7db7bed329c6edbc`，而不是默认 `0xd34d4a92c88d065b`；swww hash 保持不变。末尾 marker 为 `desktop service parked ... after_generation=1`，没有 exit/FATAL，宿主 `e2fsck -fn` 也接受测试副本。这覆盖有效自定义文件，不覆盖自动文件监听或完整 Waybar schema。
+`make test-desktop-custom-config` 不修改仓库标准镜像：脚本复制 ESP/rootfs，用 `debugfs` 在临时 ext4 中把 inode 20 替换成 960-byte、仍可解析的 JSONC，并把 `niri/window`/`niri/workspaces` 分别放到 left/center。`custom-config-serial.log` 证明 PID 2 在 policy generation 1 与 config generation 1 唤醒后的 generation 2 都读到 960 bytes，并两次提交新的 Waybar hash `0x0c1727e886f1ceac`，而不是默认 `0xd34d4a92c88d065b`；swww hash 保持不变。末尾 marker 为 `desktop service parked ... after_generation=1`，随后真实 PS/2 点击中央 workspace `2`/`1` 往返且没有 exit/FATAL；`custom-config-workspace-click.png` 保存 active 2 画面，宿主 `e2fsck -fn` 也接受测试副本。这覆盖有效自定义文件、module placement 和点击几何，不覆盖自动文件监听或完整 Waybar schema。
 
 当前五条主要 QEMU 日志都出现 `userspace runtime parked init=wait4 desktop=config-applied`；初始 VFS config generation 1 的 acknowledge 唤醒 PID 2，服务重读两份文件、提交并收到 policy generation 2，随后在 `after_generation=1` 再次稳定休眠。交互日志进一步证明 config generation 2 唤醒 service 并产生 policy generation 3；非法 reload 保留 config generation 2，没有 policy generation 4。脚本同时拒绝任何 `state=exited` 或 `FATAL`。`make test-process` 的 6 项宿主测试另行覆盖 child-exit wake、immediate zombie reap、initial stack、Blocked/Runnable/round-robin、PID/parent/child lookup/lifecycle、exit cleanup 和 per-process fd isolation/seek。当前证据不证明任意 exec、多 segment mapping、动态并发 syscall、通用 wait selector/options/orphan adoption 或通用 namespace mutation。
 
