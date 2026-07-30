@@ -11,7 +11,7 @@
 | 进程/线程/调度 | 尚未实现 | 当前只有一个内核执行流；没有用户态、地址空间或 preemption。 |
 | 内存管理 | 部分实现 | kernel 解析 firmware descriptor stride，建立 frame allocator、自有四级页表并切换 CR3，建立 1 MiB kernel bump heap；frame/heap 读回与真实 vector-14 diagnostic 已验证。没有 user address space、细粒度页权限、COW 或 demand paging。 |
 | ext4/btrfs 文件系统 | 部分实现 | 双 group 镜像与 8-entry cache；QEMU 实际读取 checksummed depth-1 extent、sparse hole、跨块目录和 fast symlink，并两次覆写/flush/失效/读回 inode 25 的已分配 block，最终恢复后 `e2fsck` 通过。只有整块原位 data write，无 allocation/metadata/journal，btrfs 未实现。 |
-| VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 3 项宿主测试；QEMU 把 ext4 挂到 `/`，以 fd 3 分块读取 76 bytes 并 seek/read。仍是 block task 局部、root-only、只读状态，不是每进程 POSIX VFS。 |
+| VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 4 项宿主测试；QEMU 把 ext4 挂到 `/`，以 fd 3 分块读/seek，再复用读写 fd 3 在 offset 123 覆写/读回/恢复 73 bytes。仍是 block task 局部、root-only、固定 file size 状态，不是每进程 POSIX VFS。 |
 | 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，52 个请求由 51 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
 | 图形系统与 Wayland | 部分实现 | framebuffer renderer 和早期 window manager 可用；所有 Wayland wire/object/global/xdg 功能尚未实现。 |
 | 声明式配置 | 部分实现 | UI 中可原子切换一个内存主题预览；没有 parser、types、schema、module、diff、持久化或 rollback。 |
@@ -35,7 +35,7 @@
 - 最后成功 PCI 单元测试：2026-07-30，`make test-pci`，3 项。
 - 最后成功 virtio 单元测试：2026-07-30，`make test-virtio`，4 项。
 - 最后成功 ext4 单元测试：2026-07-30，`make test-ext4`，13 项。
-- 最后成功 VFS 单元测试：2026-07-30，`make test-vfs`，3 项。
+- 最后成功 VFS 单元测试：2026-07-30，`make test-vfs`，4 项。
 - 已验证的 kernel entry：`0x04000000`。
 - 已验证 GOP mode：1024×768，stride 1024。
 - 当前 bootstrap image：186 bytes，临时 SlopOS 文本格式。

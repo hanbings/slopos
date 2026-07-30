@@ -6,7 +6,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
-QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对配置文件，读取多块文件，沿 checksummed depth-1 extent leaf 读取数据及零填充 hole，跨两个 checksummed 目录块解析路径，并跟随 inode 内 fast symlink。固定容量只读 VFS 把 ext4 挂到 `/`，通过 fd 3 的 offset/read/seek 读取配置。virtio-blk 已支持写入与 flush；启动测试对已分配的 ext4 数据块写入、flush、失效 cache、读回并恢复原内容。8-entry cache 记录 60 hit/47 miss/2 invalidation，52 个设备请求中有一个双请求批次、两次写和两次 flush。当前还没有用户态、每进程 fd 或通用可写 namespace。
+QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对配置文件，读取多块文件，沿 checksummed depth-1 extent leaf 读取数据及零填充 hole，跨两个 checksummed 目录块解析路径，并跟随 inode 内 fast symlink。固定容量 VFS 把 ext4 挂到 `/`，通过 fd 3 的 offset/read/seek 读取配置；读写 fd 还会在已分配数据块中间覆写 73 bytes、flush、失效 cache、读回并恢复原内容。8-entry cache 记录 62 hit/47 miss/2 invalidation，52 个设备请求中有一个双请求批次、两次写和两次 flush。当前还没有用户态、每进程 fd、文件增长或通用可写 namespace。
 
 ![SlopOS early interactive desktop](evidence/desktop.png)
 
