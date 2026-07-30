@@ -43,9 +43,11 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `desktop.rs` 当前是内核态的早期合成 async task。窗口拥有几何、开关状态、类型和 z-order；输入路径提供焦点、标题栏拖动、右下角缩放、关闭、任务栏恢复和键盘命令处理。它没有声称实现 surface IPC、Wayland object、用户态 client 或进程隔离。
 
-`memory.rs` 按 firmware 报告的 descriptor stride 解析 UEFI map，只收集 conventional memory，并提供并发保护的物理 frame bump allocator。启动时实际分配一个 frame、volatile 写入、读回并清零。
+`memory.rs` 按 firmware 报告的 descriptor stride 解析 UEFI map，只收集 conventional memory，并提供并发保护的物理 frame/contiguous bump allocator。启动时实际分配一个 frame、volatile 写入、读回并清零。
 
-`interrupts.rs` 安装自有 GDT/IDT，把 8259 PIC remap 到 `0x20`/`0x28`，配置 100 Hz PIT，并为 timer、keyboard、mouse 安装 gate。汇编 stub 只保存上下文、对齐栈并调用有界 Rust top half。PS/2 top half 读取一个字节、确认 PIC 并写入固定 SPSC ring；`desktop` future 负责扫描码和 mouse packet 的复杂解析。
+`paging.rs` 从 frame allocator 建立新的 x86-64 PML4/PDPT/PD，以 2 MiB page identity-map 当前 RAM 和 GOP framebuffer，然后写入并读回 CR3。`heap.rs` 从 contiguous frames 保留 1 MiB，提供 alignment-aware、并发保护的 bump allocation；启动路径实际分配 128 bytes 并验证首尾。
+
+`interrupts.rs` 安装自有 GDT/IDT，把 8259 PIC remap 到 `0x20`/`0x28`，配置 100 Hz PIT，并为 timer、keyboard、mouse 及关键 CPU exception 安装 gate。汇编 stub 只保存上下文、对齐栈并调用有界 Rust top half。PS/2 top half 读取一个字节、确认 PIC 并写入固定 SPSC ring；`desktop` future 负责扫描码和 mouse packet 的复杂解析。独立测试会访问未映射的 1 GiB 地址，实际验证 page-fault vector、error、RIP 和 CR2。
 
 `executor.rs` 当前固定运行两个 pinned future，以原子 ready mask 作为 task queue，以 RawWaker 标识 task，并在空闲时执行 race-free `cli` 检查和 `sti; hlt`。`timer.rs` 的 future 由 PIT tick 唤醒。它仍缺动态 task arena、timer wheel、cancellation、async lock 和 SMP。
 

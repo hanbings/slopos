@@ -34,10 +34,11 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 make image
 make test-boot
 make test-interaction
+make test-page-fault
 make run
 ```
 
-`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、内核接管、ACPI、GOP 和桌面循环的串口标记。`make test-interaction` 通过 QEMU 注入真实 PS/2 键盘和鼠标事件，执行 `STATUS` 并拖动终端窗口。
+`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、内核接管、自有 CR3/heap、ACPI、GOP、IRQ、async timer 和桌面循环的串口标记。`make test-interaction` 通过 QEMU 注入真实 PS/2 键盘和鼠标事件，执行 `STATUS` 并拖动终端窗口。`make test-page-fault` 注入未映射地址访问并核验 vector 14、RIP、error code 和 CR2。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 

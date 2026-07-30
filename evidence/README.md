@@ -7,6 +7,7 @@
 | `serial.log` | `make test-boot` | OVMF 启动、UEFI loader、ELF 加载、`ExitBootServices`、kernel entry、ACPI/GOP/initrd 验证、桌面循环 |
 | `uefi-debugcon.log` | `make test-boot` | loader 独立 debugcon 日志 |
 | `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`，鼠标拖动终端 |
+| `page-fault-serial.log` | `make test-page-fault` | 自有页表的未映射访问、vector 14、error、RIP、CR2 与 fatal boundary |
 | `desktop.png` | `scripts/capture-desktop.sh` | 当前三窗口图形桌面 |
 | `terminal-status.png` | `make test-interaction` | 图形终端对键盘命令的实际响应 |
 | `window-moved.png` | `make test-interaction` | 鼠标拖动后的窗口位置 |
