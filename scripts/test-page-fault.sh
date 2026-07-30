@@ -49,10 +49,13 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "${ovmf_vars}"
     -no-reboot >/dev/null
 
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=4848 blocks=2 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=22928 blocks=6 matches_boot=true" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-PROCESS: pid=1 source=vfs path=/sbin/slop-init format=elf64" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-VFS: process read complete pid=1 fd=3 inode=18 offset=0 requested=76 bytes=76 async=true" \
     "${serial_log}"
 grep -Fq "SLOPOS-EXCEPTION: injecting page fault at 0x40000000" "${serial_log}"
 grep -Fq "SLOPOS-EXCEPTION: vector=14" "${serial_log}"
