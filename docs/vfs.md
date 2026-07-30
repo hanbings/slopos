@@ -9,11 +9,11 @@
 - 每个 descriptor 保存 filesystem/node identity、file size、offset 和 read/write access mode；
 - bounded read/write window、成功后 offset advance、absolute seek 与 close。
 
-内核当前建立容量 4 的 namespace，把 ext4 注册为 filesystem 1 并挂到 `/`。mount/recovery 后，block task 先经同一个 component walker 打开 inode 23 的 `/sbin/slop-init`，跨七个逻辑块读出 25896 bytes，与 BootInfo 保留的引导副本完全匹配后把这份 VFS bytes 交给 ELF/process loader。
+内核当前建立容量 4 的 namespace，把 ext4 注册为 filesystem 1 并挂到 `/`。mount/recovery 后，block task 先经同一个 component walker 打开 inode 23 的 `/sbin/slop-init`，跨七个逻辑块读出 26152 bytes，与 BootInfo 保留的引导副本完全匹配后把这份 VFS bytes 交给 ELF/process loader。
 
 运行中的 PID 1 先发出 Linux x86-64 `openat(AT_FDCWD, "/etc/slopos/system.conf", O_RDONLY)`。fast handler 保存 user frame并回到 block task；root namespace 解析 inode 18，容量 8 的该进程 fd table 返回 fd 3。`read(3, stack, 76)` 再次暂停用户上下文，异步 ext4/virtio 完成后把 76 bytes 复制到 writable user stack、推进 descriptor offset并恢复原 RIP/RSP/GPR；用户态逐字节核对内容并 close。
 
-PID 1 随后以 `O_RDWR` 打开 `/usr/share/slopos/write-probe.bin`，复用 fd 3。`lseek(3, 123, SEEK_SET)` 直接更新独立 descriptor offset；`write(3, patch, 16)` 则保存用户 frame，把有界 input 复制到 pending request，让 block task 对 inode 31 执行 read-modify-write、virtio write/flush 与 cache invalidation。用户态 read 验证 patch 后，以同样路径恢复 16 个 `P` bytes并再次读回。最后 close 会同时清除 process fd 与对应的 block-task `Ext4File` backing slot。所有需要 I/O 的同步 ABI 调用都通过 suspend/completion 实现，没有在 syscall handler 内 busy-wait。
+PID 1 随后以 `O_RDWR` 打开 `/usr/share/slopos/write-probe.bin`，复用 fd 3。`lseek(3, 123, SEEK_SET)` 直接更新独立 descriptor offset；`write(3, patch, 64)` 的 input 故意横跨两个 user stack page。kernel 先验证完整 range，再逐页翻译各自的 physical frame并复制到 pending request，让 block task 对 inode 31 执行 read-modify-write、virtio write/flush 与 cache invalidation。用户态 read 也跨两页写回并验证 patch，随后以同样路径恢复 64 个 `P` bytes并再次读回。PID 1 故意不显式 close；exit 后 `close_all` 清除 process fd，block task 同时释放对应的 `Ext4File` backing slot，并核对两者数量均为 1。所有需要 I/O 的同步 ABI 调用都通过 suspend/completion 实现，没有在 syscall handler 内 busy-wait。
 
 启动 probe 另有一张 block-task 局部容量 8 的 fd table：它为规范化的 `/etc/./slopos/../slopos/system.conf` 分配 fd 3，使用 17-byte request 分五次读完同一 inode，seek 到 offset 7 再读取 11 bytes，最后 close。关闭后的 fd 3 会被复用于 inode 31 的 `ReadWrite` descriptor；它 seek 到 offset 123，写入 73 bytes，通过同一 fd 读回边界内容，再恢复原始 bytes。
 
