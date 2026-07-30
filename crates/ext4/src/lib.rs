@@ -8,8 +8,21 @@ pub const FEATURE_INCOMPAT_64BIT: u32 = 0x0080;
 pub const FEATURE_INCOMPAT_CHECKSUM_SEED: u32 = 0x2000;
 pub const FEATURE_READ_ONLY_COMPAT_METADATA_CHECKSUM: u32 = 0x0400;
 pub const INODE_FLAG_EXTENTS: u32 = 0x0008_0000;
+pub const INODE_FLAG_DIRECTORY_INDEX: u32 = 0x0000_1000;
 pub const ROOT_INODE: u32 = 2;
+pub const DIRECTORY_ENTRY_REGULAR_FILE: u8 = 1;
+pub const DIRECTORY_ENTRY_DIRECTORY: u8 = 2;
+const FEATURE_INCOMPAT_FILETYPE: u32 = 0x0002;
+const FEATURE_INCOMPAT_EXTENTS: u32 = 0x0040;
+const FEATURE_INCOMPAT_FLEX_BG: u32 = 0x0200;
+const SUPPORTED_INCOMPAT_FEATURES: u32 = FEATURE_INCOMPAT_FILETYPE
+    | FEATURE_INCOMPAT_EXTENTS
+    | FEATURE_INCOMPAT_64BIT
+    | FEATURE_INCOMPAT_FLEX_BG
+    | FEATURE_INCOMPAT_CHECKSUM_SEED;
+const FILESYSTEM_STATE_CLEAN: u16 = 0x0001;
 const DIRECTORY_MODE: u16 = 0x4000;
+const REGULAR_FILE_MODE: u16 = 0x8000;
 const MODE_TYPE_MASK: u16 = 0xf000;
 const EXTENT_HEADER_MAGIC: u16 = 0xf30a;
 const DIRECTORY_CHECKSUM_FILE_TYPE: u8 = 0xde;
@@ -23,10 +36,13 @@ pub enum ParseError {
     InvalidDescriptorSize,
     InvalidGeometry,
     UnsupportedChecksum,
+    UnsupportedFeature,
+    DirtyFilesystem,
     InvalidChecksum,
     InvalidInode,
     InvalidExtent,
     UnsupportedExtentDepth,
+    UnsupportedDirectoryIndex,
     NotDirectory,
     InvalidDirectory,
 }
@@ -83,6 +99,9 @@ impl Superblock {
 
         let feature_incompat = read_u32(bytes, 96)?;
         let feature_read_only_compat = read_u32(bytes, 100)?;
+        if feature_incompat & !SUPPORTED_INCOMPAT_FEATURES != 0 {
+            return Err(ParseError::UnsupportedFeature);
+        }
         let descriptor_size = if feature_incompat & FEATURE_INCOMPAT_64BIT != 0 {
             read_u16(bytes, 254)?
         } else {
@@ -139,6 +158,10 @@ impl Superblock {
         {
             return Err(ParseError::InvalidGeometry);
         }
+        let state = read_u16(bytes, 58)?;
+        if state & FILESYSTEM_STATE_CLEAN == 0 {
+            return Err(ParseError::DirtyFilesystem);
+        }
         Ok(Self {
             inode_count,
             block_count,
@@ -148,7 +171,7 @@ impl Superblock {
             block_size,
             blocks_per_group,
             inodes_per_group,
-            state: read_u16(bytes, 58)?,
+            state,
             errors: read_u16(bytes, 60)?,
             revision,
             inode_size,
@@ -335,6 +358,10 @@ impl Inode {
         self.mode & MODE_TYPE_MASK == DIRECTORY_MODE
     }
 
+    pub const fn is_regular_file(&self) -> bool {
+        self.mode & MODE_TYPE_MASK == REGULAR_FILE_MODE
+    }
+
     pub fn first_extent(&self) -> Result<Extent, ParseError> {
         if self.flags & INODE_FLAG_EXTENTS == 0 {
             return Err(ParseError::InvalidExtent);
@@ -395,6 +422,9 @@ impl<'a> DirectoryBlock<'a> {
     ) -> Result<Self, ParseError> {
         if !inode.is_directory() {
             return Err(ParseError::NotDirectory);
+        }
+        if inode.flags & INODE_FLAG_DIRECTORY_INDEX != 0 {
+            return Err(ParseError::UnsupportedDirectoryIndex);
         }
         if bytes.len() != superblock.block_size as usize {
             return Err(ParseError::InvalidDirectory);
@@ -643,6 +673,11 @@ mod tests {
         bytes[offset + 8..offset + 8 + name.len()].copy_from_slice(name);
     }
 
+    fn refresh_superblock_checksum(bytes: &mut [u8; SUPERBLOCK_SIZE]) {
+        let checksum = crc32c(u32::MAX, &bytes[..1020]);
+        bytes[1020..1024].copy_from_slice(&checksum.to_le_bytes());
+    }
+
     #[test]
     fn parses_geometry_features_and_high_counts() {
         let superblock = Superblock::parse(&valid_superblock()).unwrap();
@@ -669,6 +704,21 @@ mod tests {
         let mut bytes = valid_superblock();
         bytes[88..90].copy_from_slice(&192u16.to_le_bytes());
         assert_eq!(Superblock::parse(&bytes), Err(ParseError::InvalidInodeSize));
+    }
+
+    #[test]
+    fn safely_rejects_unsupported_or_dirty_filesystems() {
+        let mut bytes = valid_superblock();
+        bytes[96..100].copy_from_slice(&(FEATURE_INCOMPAT_64BIT | 0x0008).to_le_bytes());
+        assert_eq!(
+            Superblock::parse(&bytes),
+            Err(ParseError::UnsupportedFeature)
+        );
+
+        let mut bytes = valid_superblock();
+        bytes[58..60].copy_from_slice(&0u16.to_le_bytes());
+        refresh_superblock_checksum(&mut bytes);
+        assert_eq!(Superblock::parse(&bytes), Err(ParseError::DirtyFilesystem));
     }
 
     #[test]
@@ -724,6 +774,13 @@ mod tests {
         assert_eq!(directory.entry_count(), 3);
         assert_eq!(directory.find(b"etc").unwrap().inode, 13);
         assert_eq!(directory.find(b"missing"), None);
+
+        let mut indexed_inode = inode;
+        indexed_inode.flags |= INODE_FLAG_DIRECTORY_INDEX;
+        assert!(matches!(
+            DirectoryBlock::parse(&directory_bytes, &indexed_inode, &superblock),
+            Err(ParseError::UnsupportedDirectoryIndex)
+        ));
 
         let mut corrupted = directory_bytes;
         corrupted[32] ^= 1;
