@@ -15,16 +15,17 @@ static MESSAGE: &[u8; 18] = b"SLOPOS user write\n";
 #[unsafe(link_section = ".text._start")]
 pub extern "C" fn _start() -> ! {
     let result: i64;
-    // SAFETY: SlopOS installs a DPL3 trap gate with the Linux x86-64 register
-    // convention before entering this executable.
+    // SAFETY: SlopOS configures the architectural x86-64 SYSCALL MSRs with the
+    // Linux register convention before entering this executable.
     unsafe {
         asm!(
-            "int 0x80",
+            "syscall",
             inlateout("rax") SYS_WRITE => result,
             in("rdi") STDOUT,
             in("rsi") MESSAGE.as_ptr(),
             in("rdx") MESSAGE.len(),
-            options(nostack)
+            out("rcx") _,
+            out("r11") _,
         );
     }
     exit(if result == MESSAGE.len() as i64 { 0 } else { 1 })
@@ -35,7 +36,7 @@ fn exit(status: u64) -> ! {
     // return to this instruction stream.
     unsafe {
         asm!(
-            "int 0x80",
+            "syscall",
             in("rax") SYS_EXIT,
             in("rdi") status,
             options(noreturn)

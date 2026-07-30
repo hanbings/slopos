@@ -1,0 +1,9 @@
+[package]
+name = "slopos-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+slopos-vfs = { path = "../vfs" }

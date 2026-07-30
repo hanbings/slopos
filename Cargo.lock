@@ -50,6 +50,7 @@ dependencies = [
  "slopos-elf",
  "slopos-ext4",
  "slopos-pci",
+ "slopos-process",
  "slopos-shell",
  "slopos-vfs",
  "slopos-virtio",
@@ -58,6 +59,13 @@ dependencies = [
 [[package]]
 name = "slopos-pci"
 version = "0.1.0"
+
+[[package]]
+name = "slopos-process"
+version = "0.1.0"
+dependencies = [
+ "slopos-vfs",
+]
 
 [[package]]
 name = "slopos-shell"

@@ -16,7 +16,6 @@ const TIMER_VECTOR: usize = 0x20;
 const KEYBOARD_VECTOR: usize = 0x21;
 const VIRTIO_VECTOR: usize = 0x2b;
 const MOUSE_VECTOR: usize = 0x2c;
-const SYSCALL_VECTOR: usize = 0x80;
 const SPURIOUS_VECTOR: usize = 0xff;
 const TSS_STACK_PAGES: usize = 4;
 
@@ -59,12 +58,6 @@ impl IdtEntry {
             offset_high: (handler >> 32) as u32,
             reserved: 0,
         }
-    }
-
-    fn user_interrupt_gate(handler: u64) -> Self {
-        let mut entry = Self::interrupt_gate(handler);
-        entry.attributes = 0xee;
-        entry
     }
 }
 
@@ -246,8 +239,6 @@ unsafe fn install_idt() {
         (*entries)[VIRTIO_VECTOR] =
             IdtEntry::interrupt_gate(slopos_virtio_interrupt as usize as u64);
         (*entries)[MOUSE_VECTOR] = IdtEntry::interrupt_gate(slopos_mouse_interrupt as usize as u64);
-        (*entries)[SYSCALL_VECTOR] =
-            IdtEntry::user_interrupt_gate(slopos_syscall_interrupt as usize as u64);
         (*entries)[SPURIOUS_VECTOR] =
             IdtEntry::interrupt_gate(slopos_spurious_interrupt as usize as u64);
     }
@@ -354,7 +345,6 @@ unsafe extern "C" {
     fn slopos_keyboard_interrupt();
     fn slopos_virtio_interrupt();
     fn slopos_mouse_interrupt();
-    fn slopos_syscall_interrupt();
     fn slopos_spurious_interrupt();
 }
 
