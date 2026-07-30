@@ -3,9 +3,9 @@
 当前内核在中断子系统初始化、ext4 root mount 与 journal recovery 后，由 block task 驱动 PID 1 与 PID 2。它的目标是验证一条最小但真实的 VFS ELF→process table→cooperative/preemptive scheduler→x86-64 privilege/syscall→async block completion boundary，而不是模拟用户态日志：
 
 - 以独立 `slopos-elf` crate 校验 little-endian x86-64 `ET_EXEC`、program-header geometry、`PT_LOAD` range/alignment/overlap/W^X 与 executable entry；
-- 由 `userspace/init` 生成 26312-byte Rust ELF、由 `userspace/desktop` 生成另一个 27128-byte Rust ELF；rootfs builder 分别安装为 inode 23 `/sbin/slop-init` 和 inode 24 `/sbin/slop-shell`，kernel 的 ext4 path walker 各跨七个逻辑块读取全部 bytes；
+- 由 `userspace/init` 生成 26312-byte Rust ELF、由 `userspace/desktop` 生成另一个 27512-byte Rust ELF；rootfs builder 分别安装为 inode 23 `/sbin/slop-init` 和 inode 24 `/sbin/slop-shell`，kernel 的 ext4 path walker 各跨七个逻辑块读取全部 bytes；
 - UEFI 仍从 ESP `/slopos/init.elf` 读入 BootInfo v2 校验副本；kernel 要求 root VFS image 与该副本逐字节一致，差异会停止启动；
-- 从 ELF file offset `0x1000` 分别复制 init 的 2576-byte 与 desktop service 的 3264-byte R+X `PT_LOAD`，各 code page 的剩余部分保持为零；
+- 从 ELF file offset `0x1000` 分别复制 init 的 2576-byte 与 desktop service 的 3520-byte R+X `PT_LOAD`，各 code page 的剩余部分保持为零；
 - 把 image/CR3/entry/stack/user range 插入容量 4 的 `slopos-process` 表；状态机支持 `Ready → Running → Blocked/Runnable → Running → Exited`，每个 PID 独立保留 exit status、syscall count、pending syscall 与保存的 syscall frame；
 - 每个 slot 自带独立、容量 8 的 `slopos-vfs::FileDescriptorTable`；6 项宿主测试覆盖 Linux 初始栈、PID/parent/capacity、blocked/runnable/round-robin transition、exit/reap/`close_all`，以及两个进程各自取得 fd 3、独立 seek 且 offset 互不影响；
 - frame allocator 为两个进程各建一个 PML4，并保留 supervisor-only kernel identity map；allocator 另有容量 256 的 recycled-frame stack，拒绝未分配、未对齐、重复或超容量释放；
@@ -33,15 +33,17 @@
 4. 用户态把 76 bytes 与编译时预期内容逐字节比较，随后 `close(3)`；
 5. `openat(AT_FDCWD, "/usr/share/slopos/write-probe.bin", O_RDWR, 0)` 复用 fd 3，然后在 fd 保持打开时再次 yield。PID 2 随即以自己的 descriptor table 打开配置并同样取得 fd 3，由此实测同号 descriptor 的 per-process ownership；
 6. 四次 `lseek(3, 123, SEEK_SET)` 分别定位 patch/verify/restore/verify；64-byte scratch buffer 位于 `0x40001fe0..0x40002020`，故意横跨两个 stack page。两次 write 和两次 read 完成可逆 patch，四个 completion marker 都记录 `cross_page=true`；
-7. PID 1 故意不显式关闭 fd 3；`write(1, message, 18)` 经 stdout 特判直接返回 18，再以 `wait4(-1, &status, 0, NULL)` 等待。根据 timer interleaving，这一步会走 blocked/wake 或 zombie/immediate 路径；两者都返回 child PID 2 与 status 0。PID 1 随后 `exit(0)`，cleanup marker 核对 `descriptors=1 backing_objects=1`。
+7. PID 1 故意不显式关闭 fd 3；`write(1, message, 18)` 经 stdout 特判直接返回 18，再以 `wait4(-1, &status, 0, NULL)` 等待。当前 desktop apply-event handshake 会令四条 QEMU 回归都走 blocked/wake 并返回 child PID 2/status 0；process 宿主测试另覆盖 child 已成为 zombie 时的 immediate 路径。PID 1 随后 `exit(0)`，cleanup marker 核对 `descriptors=1 backing_objects=1`。
 
-PID 2 是一次性的桌面策略服务。第一次 yield 后它打开 inode 20 `/etc/slopos/waybar.jsonc`，保持自己的 fd 3 再 yield；随后以 256/256/256/136 bytes 四段读齐 904 bytes，并以额外 1-byte read 验证严格 EOF，close 后再打开 inode 17 `/etc/slopos/swww.env`，读齐 172 bytes并同样验证 EOF。用户态把两份内容与编译进自身的预期 asset 比较，然后以私有 `0x534c0001` syscall 提交 40-byte versioned desktop policy。kernel 只接受 PID 2 的第一代提交，再核对 magic/version/size/capability/reserved fields、两份配置 hash、CPU/Memory range 与 wallpaper id，最后用 release/acquire snapshot 唤醒 desktop task。PID 2 写出 28-byte stdout message 后 `exit(0)`。process table 最终分别记录 PID 1 的 17 次 syscall、PID 2 的 16 次 syscall与 status 0；cleanup 为 PID 2 核对 `descriptors=0 backing_objects=0`。PID 2 被 PID 1 reap，PID 1 退出时由 kernel owner reap；两者各释放 7 个 frame。
+PID 2 是 lifecycle-aware 的一次性桌面策略服务。第一次 yield 后它打开 inode 20 `/etc/slopos/waybar.jsonc`，保持自己的 fd 3 再 yield；随后以 256/256/256/136 bytes 四段读齐 904 bytes，并以额外 1-byte read 验证严格 EOF，close 后再打开 inode 17 `/etc/slopos/swww.env`，读齐 172 bytes并同样验证 EOF。用户态把两份内容与编译进自身的预期 asset 比较，然后以私有 `0x534c0001` syscall 提交 40-byte versioned desktop policy。kernel 只接受 PID 2 的第一代提交，再核对 magic/version/size/capability/reserved fields、两份配置 hash、CPU/Memory range 与 wallpaper id，最后用 release/acquire snapshot 唤醒 desktop task。
+
+PID 2 随后用 `0x534c0002` 把自己和 32-byte writable event buffer交给 kernel，process table 记录 `Blocked`。block task 在 `next_applied_event` Future 上等待，因而不会 busy-wait；desktop task 完成实际 provider/wallpaper apply 后发布 generation 1 acknowledgement并唤醒 block task。completion 再验证 event kind/generation/capability/reserved fields、复制到 user stack、把 PID 2 转成 `Runnable` 并恢复原 CR3/RIP/RSP/GPR。用户程序解析事件成功后才写出 28-byte stdout message并 `exit(0)`。process table 最终分别记录 PID 1/PID 2 各 17 次 syscall与 status 0；cleanup 为 PID 2 核对 `descriptors=0 backing_objects=0`。PID 2 被 PID 1 reap，PID 1 退出时由 kernel owner reap；两者各释放 7 个 frame。
 
 路径 copy 最多 128 bytes，单次 read/write 最多 256 bytes；read destination 必须完全落在该 PID 已知的 writable stack mappings，path/write input 必须落在它的 code 或 stack mappings。整个 range 会先完成 overflow/权限/映射验证，再逐页复制，因此不会把任意 user virtual pointer 直接解引用，也不会假定相邻 virtual page 的 physical frame 连续。未知编号返回 `-ENOSYS`，已连接调用对坏 fd、pointer、flag/path/offset 等返回当前子集的负 errno。
 
 `STAR=0x10000800000000` 与当前 GDT 对应：SYSCALL 使用 kernel CS/SS `0x08/0x10`，64-bit SYSRET 生成 user CS/SS `0x23/0x1b`。`LSTAR` 指向 kernel ELF 内的 assembly entry；每次 QEMU 启动都核验 MSR readback。`FMASK` 确保 fast entry 在启用 Rust stack 前没有 IRQ/trace/direction-flag 窗口；返回前再清 user IOPL/NT/RF/VM 并恢复 reserved bit 与 IF。IDT 不再暴露 DPL3 vector `0x80`。
 
-ELF 已与 kernel 分离，实际执行 bytes 来自 root VFS 的固定 `/sbin/slop-init` 与 `/sbin/slop-shell`；ESP/BootInfo 副本目前仍是 PID 1 的强制相等启动信任锚，因此这不是任意路径的通用 `exec`。每进程 descriptor ownership 已实际连接 root ext4 的 `O_RDONLY`/`O_RDWR openat`、read/write/lseek/close；desktop commit 是一个有界的 SlopOS 私有 ABI，而不是 Linux syscall 或通用 IPC。单核 cooperative/preemptive scheduler 仍嵌在一个 block task 的专用 suspend/resume loop，fd 1 继续由 syscall handler 特判。现阶段没有：
+ELF 已与 kernel 分离，实际执行 bytes 来自 root VFS 的固定 `/sbin/slop-init` 与 `/sbin/slop-shell`；ESP/BootInfo 副本目前仍是 PID 1 的强制相等启动信任锚，因此这不是任意路径的通用 `exec`。每进程 descriptor ownership 已实际连接 root ext4 的 `O_RDONLY`/`O_RDWR openat`、read/write/lseek/close；desktop commit/event 是一个有界的 SlopOS 私有双向 ABI，而不是 Linux syscall、通用 message queue 或 socket。单核 cooperative/preemptive scheduler 仍嵌在一个 block task 的专用 suspend/resume loop，fd 1 继续由 syscall handler 特判。现阶段没有：
 
 - 任意路径/多 `PT_LOAD` page mapping、动态链接，或从通用 exec 参数构建初始栈；
 - 超出当前一页 code/两页 stack mapping 的通用 `copy_from_user`/`copy_to_user`，或 grow/truncate/stat/directory/dup/poll/mmap 等通用 VFS syscall；

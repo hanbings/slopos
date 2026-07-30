@@ -8,7 +8,9 @@ root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`�
 
 `crates/desktop-protocol` 定义 40-byte、显式 magic/version/size 的 `DesktopCommit`。消息包含 Waybar provider 与 swww policy capability、两份配置的 FNV-1a hash、CPU/Memory 初始值范围和 wallpaper id；reserved bit/byte 必须为零。私有 syscall `0x534c0001` 只接受 PID 2 的第一代提交，kernel 再以自己嵌入的同源 asset 校验 hash，成功后用 release/acquire snapshot 唤醒 desktop task。当前 PID 2 发布 CPU 0%、Memory 36% 和 Aurora wallpaper，desktop 在 snapshot 到达前明确保持 `awaiting-user-policy`，而不是自行选择初始壁纸。
 
-这是可执行的用户进程→kernel desktop policy 边界，不是完整的用户态桌面。`/sbin/slop-shell` 提交一次后退出，并由 PID 1 的 `wait4` 回收；PS/2 输入、niri 状态机、运行时配置 reload、swww daemon/transition、surface、GOP renderer 与 composition 仍在 kernel。当前还没有常驻服务、双向 IPC、共享 surface buffer、Wayland protocol 或普通用户 client。
+私有 syscall `0x534c0002` 建立反向生命周期事件：PID 2 提交后以 writable user buffer 阻塞等待；desktop task 真正应用 policy 后发布 32-byte `policy-applied` event、唤醒 block task，kernel 验证 generation/capability/reserved fields，复制到 PID 2 user stack并恢复其 CR3/frame。四条 QEMU 回归都出现 `Blocked → desktop-event → Runnable`，所以这不是同步伪造的成功返回。
+
+这仍不是完整的用户态桌面。`/sbin/slop-shell` 收到首次应用确认后退出，并由 PID 1 的 `wait4` 回收；PS/2 输入、niri 状态机、运行时配置 reload、swww daemon/transition、surface、GOP renderer 与 composition 仍在 kernel。当前还没有常驻服务、通用 message queue/socket、共享 surface buffer、Wayland protocol 或普通用户 client。
 
 ## VFS 配置发现与原子重载
 
@@ -96,6 +98,6 @@ VFS 中选中的 CSS 使用 Waybar 同样的 GTK CSS selector 命名；仓库默
 - VFS 中发现的 environment 文件以同名 `SWWW_TRANSITION*` 变量提供 boot/reload 默认值，仓库默认源是 `assets/swww.env`；
 - `none`、`simple`、`fade`、`left/right/top/bottom`、`center/outer`、`any/random` transition。
 
-两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart 与 `none` 重设。7 项 swww/PNM、11 项 niri layout/shell、7 项 Waybar JSONC/CSS 与 3 项 desktop protocol 测试，共 28 项。
+两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart 与 `none` 重设。7 项 swww/PNM、11 项 niri layout/shell、7 项 Waybar JSONC/CSS 与 5 项 desktop commit/event protocol 测试，共 30 项。
 
 命令与 transition 语义依据 [swww 官方 README](https://github.com/LGFae/swww)。初始 environment/hash/image policy 已由用户进程提交，environment 默认值也参与后续四文件 VFS 原子重载；daemon state 和 image decode/render 仍在 kernel，而不是常驻用户进程或 Unix socket。也没有 Wayland layer-shell、多 output、从 VFS 解码任意图片路径、PNG/JPEG/GIF decode、animated image cache、frame callback/timing、transition position/bezier/wave/grow 或 damage tracking。同步 framebuffer renderer 为限制最坏 CPU 时间，会把极小 step 最多采样成 17 帧，因此不声称二进制或动画时序完全兼容 swww。
