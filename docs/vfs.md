@@ -19,4 +19,4 @@
 - 只有一个 root filesystem，没有 mount/unmount 生命周期或引用计数；
 - 只有 regular-file read/seek/close，没有 directory fd、stat、dup、poll、mmap 或权限检查；
 - 没有 syscall，因此用户程序尚不能访问这些 fd；
-- 文件系统仍只读。
+- VFS API 仍只读；底层 ext4 现有的整块原位 write probe 尚未暴露为 fd write。
