@@ -4,7 +4,7 @@
 
 | 文件 | 生成方式 | 证明范围 |
 |---|---|---|
-| `serial.log` | `make test-boot` | OVMF 启动、UEFI loader、ELF 加载、`ExitBootServices`、kernel entry、ACPI/GOP/initrd 验证、桌面循环 |
+| `serial.log` | `make test-boot` | OVMF 启动、UEFI loader、ELF 加载、`ExitBootServices`、kernel entry、ACPI/GOP/initrd、memory、eBPF 返回 42、IRQ/async 与桌面循环 |
 | `uefi-debugcon.log` | `make test-boot` | loader 独立 debugcon 日志 |
 | `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`，鼠标拖动终端 |
 | `page-fault-serial.log` | `make test-page-fault` | 自有页表的未映射访问、vector 14、error、RIP、CR2 与 fatal boundary |
@@ -30,3 +30,5 @@ qemu-system-x86_64
   -monitor none
   -no-reboot
 ```
+
+eBPF 的宿主边界测试由 `make test-ebpf` 执行；裸机证据是 `serial.log` 中的 `SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42`。它只证明文档所列子集，不证明 map、attach point 或 Linux eBPF 兼容性。

@@ -16,6 +16,7 @@ OVMF
   -> ELF entry at physical 0x04000000 (SlopOS Rust kernel)
       -> validate BootInfo and ACPI RSDP
       -> initialize COM1
+      -> establish frame allocator, page tables, heap, and eBPF self-test
       -> accept GOP framebuffer ownership
       -> initialize PS/2 keyboard and mouse
       -> interactive early desktop loop
@@ -50,6 +51,8 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 `interrupts.rs` 安装自有 GDT/IDT，把 8259 PIC remap 到 `0x20`/`0x28`，配置 100 Hz PIT，并为 timer、keyboard、mouse 及关键 CPU exception 安装 gate。汇编 stub 只保存上下文、对齐栈并调用有界 Rust top half。PS/2 top half 读取一个字节、确认 PIC 并写入固定 SPSC ring；`desktop` future 负责扫描码和 mouse packet 的复杂解析。独立测试会访问未映射的 1 GiB 地址，实际验证 page-fault vector、error、RIP 和 CR2。
 
 `executor.rs` 当前固定运行两个 pinned future，以原子 ready mask 作为 task queue，以 RawWaker 标识 task，并在空闲时执行 race-free `cli` 检查和 `sti; hlt`。`timer.rs` 的 future 由 PIT tick 唤醒。它仍缺动态 task arena、timer wheel、cancellation、async lock 和 SMP。
+
+`ebpf` 是与内核分离的 `no_std` crate。它把标准 little-endian 8-byte instruction 解码成固定布局，以前向数据流交集跟踪已初始化寄存器，拒绝 backward jump、越界分支、对 frame pointer 的写入、越界 stack access、未知 helper 和没有可达 `EXIT` 的路径。解释器拥有 11 个 64-bit 寄存器和 512-byte stack；启动路径验证并执行一段 ALU/stack 程序，要求结果为 42。具体指令和未实现边界见 [ebpf.md](ebpf.md)。
 
 ## 汇编用途与安全边界
 

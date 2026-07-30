@@ -4,6 +4,8 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 当前仓库已经有一个可重复启动的早期系统，而不是完成版操作系统：0BSD Rust UEFI 加载器会从 FAT ESP 读取并解析独立的 ELF64 内核，取得 ACPI RSDP 与 GOP，加载 bootstrap image，取得最终 memory map，调用 `ExitBootServices`，再把控制权交给 SlopOS 内核。内核接管串口、GOP framebuffer 与 PS/2 键鼠，并直接进入一个早期交互桌面。
 
+内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
+
 ![SlopOS early interactive desktop](evidence/desktop.png)
 
 早期桌面已实际验证：
@@ -32,13 +34,14 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 ```bash
 make image
+make test-ebpf
 make test-boot
 make test-interaction
 make test-page-fault
 make run
 ```
 
-`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、内核接管、自有 CR3/heap、ACPI、GOP、IRQ、async timer 和桌面循环的串口标记。`make test-interaction` 通过 QEMU 注入真实 PS/2 键盘和鼠标事件，执行 `STATUS` 并拖动终端窗口。`make test-page-fault` 注入未映射地址访问并核验 vector 14、RIP、error code 和 CR2。
+`make test-ebpf` 在宿主运行 verifier/interpreter 的边界测试。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、内核接管、自有 CR3/heap、eBPF 实际执行、ACPI、GOP、IRQ、async timer 和桌面循环的串口标记。`make test-interaction` 通过 QEMU 注入真实 PS/2 键盘和鼠标事件，执行 `STATUS` 并拖动终端窗口。`make test-page-fault` 注入未映射地址访问并核验 vector 14、RIP、error code 和 CR2。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 
@@ -55,6 +58,7 @@ make run
 - [架构和启动协议](docs/architecture.md)
 - [逐子系统完成度](docs/status.md)
 - [异步内核设计状态](docs/async-kernel.md)
+- [eBPF 子集与验证边界](docs/ebpf.md)
 - [依赖与许可证](docs/dependencies.md)
 - [已知问题](docs/known-issues.md)
 - [验证证据](evidence/README.md)

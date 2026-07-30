@@ -16,7 +16,7 @@
 | 声明式配置 | 部分实现 | UI 中可原子切换一个内存主题预览；没有 parser、types、schema、module、diff、持久化或 rollback。 |
 | 文本编辑器 | 尚未实现 | kernel monitor 只编辑当前命令行，不是普通文本或配置文件编辑器。 |
 | `slopd` | 尚未实现 | 没有用户态 init、unit、dependency graph 或 supervision。 |
-| eBPF | 尚未实现 | 没有 instruction parser、VM、verifier、map 或 attach point。 |
+| eBPF | 部分实现 | 独立 `no_std` crate 提供 8-byte instruction decode、无分配 verifier、ALU64/前向 branch/512-byte stack/helper 子集解释器；10 项宿主测试与内核返回 42 均已验证。没有 ELF loader、map、program type、attach point、权限模型或 JIT。 |
 | AMD SVM VMM | 尚未实现 | 尚未进行 SVM capability detection 或 `VMRUN`。 |
 | Linux x86-64 ABI | 尚未实现 | 没有 Linux ELF 用户进程、syscall ABI、proxy 或 guest agent。 |
 | 网络与 IPC | 尚未实现 | Ethernet/ARP/IP/TCP/UDP/DHCP/DNS 与 IPC 均未实现。 |
@@ -29,10 +29,11 @@
 - 最后成功启动：2026-07-30，QEMU 10.0.11 + OVMF 2025.02，`make test-boot`。
 - 最后成功交互测试：2026-07-30，`make test-interaction`。
 - 最后成功异常测试：2026-07-30，`make test-page-fault`。
+- 最后成功 eBPF 单元测试：2026-07-30，`make test-ebpf`，10 项。
 - 已验证的 kernel entry：`0x04000000`。
 - 已验证 GOP mode：1024×768，stride 1024。
 - 当前 bootstrap image：186 bytes，临时 SlopOS 文本格式。
 
 ## 下一项最高价值工作
 
-下一阶段应把固定两任务 executor 扩展为可 spawn/cancel 的 task arena 与 timer wheel，并为 heap 增加回收。随后解析 ACPI MADT、启用 LAPIC/IOAPIC 替换兼容 PIC，并为 virtio completion 提供同一套 IRQ-to-waker 路径。
+下一阶段应解析 ACPI XSDT/MADT、启用 LAPIC/IOAPIC 替换兼容 PIC，并为 virtio completion 提供现有 IRQ-to-waker 路径。eBPF 方向仍需 map、program type、attach point 与 ELF relocation，不能把当前受限解释器当成 Linux eBPF 兼容层。
