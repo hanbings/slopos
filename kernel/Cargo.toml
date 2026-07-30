@@ -12,3 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 slopos-boot-protocol = { path = "../crates/boot-protocol" }
+slopos-ebpf = { path = "../ebpf" }

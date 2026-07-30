@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "boot",
     "crates/boot-protocol",
+    "ebpf",
     "kernel",
 ]
 

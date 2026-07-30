@@ -21,10 +21,15 @@ name = "slopos-boot-protocol"
 version = "0.1.0"
 
 [[package]]
+name = "slopos-ebpf"
+version = "0.1.0"
+
+[[package]]
 name = "slopos-kernel"
 version = "0.1.0"
 dependencies = [
  "slopos-boot-protocol",
+ "slopos-ebpf",
 ]
 
 [[package]]

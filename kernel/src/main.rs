@@ -21,6 +21,7 @@ use desktop::Desktop;
 use framebuffer::Framebuffer;
 use serial::serialln;
 use slopos_boot_protocol::{BOOT_INFO_MAGIC, BOOT_INFO_VERSION, BootInfo};
+use slopos_ebpf::{Instruction, NoHelpers};
 
 /// SlopOS ELF entry point invoked by the UEFI loader.
 ///
@@ -119,6 +120,8 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         heap_probe.as_ptr() as usize
     ));
 
+    verify_ebpf_runtime();
+
     let mut framebuffer = match Framebuffer::new(boot_info.framebuffer) {
         Some(framebuffer) => framebuffer,
         None => fatal("GOP framebuffer information is invalid"),
@@ -154,6 +157,32 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         desktop.run(&mut framebuffer, input),
         timer::diagnostics_task(),
     )
+}
+
+fn verify_ebpf_runtime() {
+    const PROGRAM: [Instruction; 5] = [
+        Instruction::new(0xb7, 2, 0, 0, 20),
+        Instruction::new(0x07, 2, 0, 0, 22),
+        Instruction::new(0x7b, 10, 2, -8, 0),
+        Instruction::new(0x79, 0, 10, -8, 0),
+        Instruction::new(0x95, 0, 0, 0, 0),
+    ];
+
+    let verified = match slopos_ebpf::verify(&PROGRAM, &[]) {
+        Ok(program) => program,
+        Err(_) => fatal("built-in eBPF program failed verification"),
+    };
+    let result = match slopos_ebpf::execute(&verified, &mut NoHelpers, 0) {
+        Ok(value) => value,
+        Err(_) => fatal("built-in eBPF program failed execution"),
+    };
+    if result != 42 {
+        fatal("built-in eBPF program returned the wrong value");
+    }
+    serialln(format_args!(
+        "SLOPOS-EBPF: verifier accepted instructions={} interpreter_result={result}",
+        verified.len()
+    ));
 }
 
 fn valid_rsdp(address: u64) -> bool {
