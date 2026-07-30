@@ -39,9 +39,11 @@ fi
 
 required_markers=(
     "SLOPOS-UEFI: loader entered"
+    "SLOPOS-UEFI: user ELF loaded bytes="
     "SLOPOS-UEFI: Boot Services exited"
     "SLOPOS-KERNEL: entry reached"
     "SLOPOS-KERNEL: boot info valid"
+    "SLOPOS-KERNEL: user ELF available base="
     "SLOPOS-ACPI: XSDT MADT validated"
     "SLOPOS-MM: frame allocator initialized"
     "SLOPOS-MM: CR3 switched"
@@ -73,7 +75,8 @@ required_markers=(
     "SLOPOS-KERNEL: framebuffer ownership accepted"
     "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
     "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized"
-    "SLOPOS-PROCESS: pid=1 format=elf64 entry=0x40000000 segments=1 file_bytes=4242 load_bytes=146 memory_bytes=4096 address_space="
+    "SLOPOS-PROCESS: pid=1 source=boot format=elf64 entry=0x40000000 segments=1 file_bytes="
+    "load_bytes=66 memory_bytes=66 address_space="
     "user_code=0x40000000 user_stack=0x40002000"
     "code=user-readonly stack=user-writable kernel=supervisor"
     "SLOPOS-SYSCALL: pid=1 abi=x86_64 trap=int80 nr=1 write fd=1 bytes=18 cpl=3 result=18"

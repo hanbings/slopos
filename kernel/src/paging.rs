@@ -99,7 +99,8 @@ pub fn install(framebuffer: FramebufferInfo, mmio_ranges: &[MmioRange]) -> Pagin
 
 pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressSpace {
     if image.is_empty()
-        || memory_size != PAGE_SIZE
+        || memory_size == 0
+        || memory_size > PAGE_SIZE
         || image.len() > usize::try_from(memory_size).unwrap_or(0)
     {
         crate::fatal("user ELF segment does not fit one page");

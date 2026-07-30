@@ -69,6 +69,17 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     if boot_info.initrd.base == 0 || boot_info.initrd.size < 17 {
         fatal("bootstrap image is missing");
     }
+    if boot_info.user_image.base == 0
+        || boot_info.user_image.size < slopos_elf::ELF64_HEADER_SIZE as u64
+        || boot_info.user_image.size > 4 * 1024 * 1024
+        || boot_info
+            .user_image
+            .base
+            .checked_add(boot_info.user_image.size)
+            .is_none()
+    {
+        fatal("user ELF image is missing or invalid");
+    }
 
     serialln(format_args!(
         "SLOPOS-KERNEL: boot info valid memory_descriptors={}",
@@ -90,6 +101,10 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     serialln(format_args!(
         "SLOPOS-KERNEL: initrd available base={:#x} bytes={}",
         boot_info.initrd.base, boot_info.initrd.size
+    ));
+    serialln(format_args!(
+        "SLOPOS-KERNEL: user ELF available base={:#x} bytes={}",
+        boot_info.user_image.base, boot_info.user_image.size
     ));
 
     let pci_inventory = pci::discover();
@@ -243,7 +258,14 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         ));
     }
     interrupts::initialize(&platform.madt, virtio_block.interrupt_line);
-    process::run_probe();
+    let user_image_size = usize::try_from(boot_info.user_image.size)
+        .unwrap_or_else(|_| fatal("user ELF size exceeds address space"));
+    // SAFETY: the UEFI loader owns this allocation, BootInfo bounds were
+    // validated above, and LOADER_DATA remains identity-mapped after exit.
+    let user_image = unsafe {
+        core::slice::from_raw_parts(boot_info.user_image.base as *const u8, user_image_size)
+    };
+    process::run_probe(user_image);
 
     let mut desktop = Desktop::new(framebuffer.width(), framebuffer.height());
     desktop.render(&mut framebuffer);

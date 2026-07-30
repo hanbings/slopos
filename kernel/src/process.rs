@@ -1,103 +1,16 @@
 // SPDX-License-Identifier: 0BSD
 
 use core::arch::global_asm;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 const PID: u32 = 1;
 const USER_STDOUT: u64 = 1;
 const LINUX_SYS_WRITE: u64 = 1;
 const LINUX_SYS_EXIT: u64 = 60;
-const USER_MESSAGE_OFFSET: usize = 0x80;
 const USER_MESSAGE: &[u8] = b"SLOPOS user write\n";
-const USER_MESSAGE_ADDRESS: u64 = crate::paging::USER_CODE_BASE + USER_MESSAGE_OFFSET as u64;
-const USER_ELF_PROGRAM_OFFSET: usize = 0x1000;
-const USER_ELF_LOAD_SIZE: usize = USER_MESSAGE_OFFSET + USER_MESSAGE.len();
-const USER_ELF_SIZE: usize = USER_ELF_PROGRAM_OFFSET + USER_ELF_LOAD_SIZE;
-const USER_PROGRAM: [u8; 58] = [
-    0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1 (write)
-    0xbf, 0x01, 0x00, 0x00, 0x00, // mov edi, 1 (stdout)
-    0x48, 0xbe, 0x80, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, // mov rsi, message
-    0xba, 0x12, 0x00, 0x00, 0x00, // mov edx, 18
-    0xcd, 0x80, // int 0x80
-    0x48, 0x83, 0xf8, 0x12, // cmp rax, 18
-    0x75, 0x0b, // jne failure
-    0xb8, 0x3c, 0x00, 0x00, 0x00, // mov eax, 60 (exit)
-    0x31, 0xff, // xor edi, edi
-    0xcd, 0x80, // int 0x80
-    0x0f, 0x0b, // ud2 if exit returned
-    0xb8, 0x3c, 0x00, 0x00, 0x00, // failure: mov eax, 60
-    0xbf, 0x01, 0x00, 0x00, 0x00, // mov edi, 1
-    0xcd, 0x80, // int 0x80
-    0x0f, 0x0b, // ud2
-];
 
 static SYSCALL_STATE: AtomicU8 = AtomicU8::new(0);
-
-const fn user_elf() -> [u8; USER_ELF_SIZE] {
-    let mut image = [0u8; USER_ELF_SIZE];
-    image[0] = 0x7f;
-    image[1] = b'E';
-    image[2] = b'L';
-    image[3] = b'F';
-    image[4] = 2; // ELFCLASS64
-    image[5] = 1; // ELFDATA2LSB
-    image[6] = 1; // EV_CURRENT
-    put_u16(&mut image, 16, 2); // ET_EXEC
-    put_u16(&mut image, 18, 62); // EM_X86_64
-    put_u32(&mut image, 20, 1); // EV_CURRENT
-    put_u64(&mut image, 24, crate::paging::USER_CODE_BASE);
-    put_u64(&mut image, 32, 64); // e_phoff
-    put_u16(&mut image, 52, 64); // e_ehsize
-    put_u16(&mut image, 54, 56); // e_phentsize
-    put_u16(&mut image, 56, 1); // e_phnum
-
-    put_u32(&mut image, 64, 1); // PT_LOAD
-    put_u32(&mut image, 68, slopos_elf::PF_R | slopos_elf::PF_X);
-    put_u64(&mut image, 72, USER_ELF_PROGRAM_OFFSET as u64);
-    put_u64(&mut image, 80, crate::paging::USER_CODE_BASE);
-    put_u64(&mut image, 88, crate::paging::USER_CODE_BASE);
-    put_u64(&mut image, 96, USER_ELF_LOAD_SIZE as u64);
-    put_u64(&mut image, 104, 4096);
-    put_u64(&mut image, 112, 4096);
-
-    let mut index = 0;
-    while index < USER_PROGRAM.len() {
-        image[USER_ELF_PROGRAM_OFFSET + index] = USER_PROGRAM[index];
-        index += 1;
-    }
-    index = 0;
-    while index < USER_MESSAGE.len() {
-        image[USER_ELF_PROGRAM_OFFSET + USER_MESSAGE_OFFSET + index] = USER_MESSAGE[index];
-        index += 1;
-    }
-    image
-}
-
-const fn put_u16(image: &mut [u8; USER_ELF_SIZE], offset: usize, value: u16) {
-    let bytes = value.to_le_bytes();
-    image[offset] = bytes[0];
-    image[offset + 1] = bytes[1];
-}
-
-const fn put_u32(image: &mut [u8; USER_ELF_SIZE], offset: usize, value: u32) {
-    let bytes = value.to_le_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        image[offset + index] = bytes[index];
-        index += 1;
-    }
-}
-
-const fn put_u64(image: &mut [u8; USER_ELF_SIZE], offset: usize, value: u64) {
-    let bytes = value.to_le_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        image[offset + index] = bytes[index];
-        index += 1;
-    }
-}
-
-static USER_ELF: [u8; USER_ELF_SIZE] = user_elf();
+static USER_MEMORY_END: AtomicU64 = AtomicU64::new(0);
 
 #[repr(C)]
 struct SyscallFrame {
@@ -123,32 +36,37 @@ struct SyscallFrame {
     ss: u64,
 }
 
-pub fn run_probe() {
+pub fn run_probe(user_image: &[u8]) {
     SYSCALL_STATE.store(0, Ordering::Release);
-    let elf = slopos_elf::ElfFile::parse(&USER_ELF)
-        .unwrap_or_else(|_| crate::fatal("embedded user ELF failed validation"));
+    let elf = slopos_elf::ElfFile::parse(user_image)
+        .unwrap_or_else(|_| crate::fatal("boot user ELF failed validation"));
     if elf.load_segment_count() != 1 {
-        crate::fatal("embedded user ELF has an unexpected PT_LOAD count");
+        crate::fatal("boot user ELF has an unexpected PT_LOAD count");
     }
     let segment = elf
         .load_segments()
         .next()
-        .unwrap_or_else(|| crate::fatal("embedded user ELF has no PT_LOAD segment"));
+        .unwrap_or_else(|| crate::fatal("boot user ELF has no PT_LOAD segment"));
     if segment.virtual_address() != crate::paging::USER_CODE_BASE
-        || segment.memory_size() != 4096
+        || segment.memory_size() == 0
+        || segment.memory_size() > 4096
         || !segment.readable()
         || segment.writable()
         || !segment.executable()
     {
-        crate::fatal("embedded user ELF segment policy mismatch");
+        crate::fatal("boot user ELF segment policy mismatch");
     }
+    USER_MEMORY_END.store(
+        crate::paging::USER_CODE_BASE + segment.memory_size(),
+        Ordering::Release,
+    );
     let address_space =
         crate::paging::create_user_address_space(segment.data(), segment.memory_size());
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={PID} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frame={:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        "SLOPOS-PROCESS: pid={PID} source=boot format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frame={:#x} code=user-readonly stack=user-writable kernel=supervisor",
         elf.entry(),
         elf.load_segment_count(),
-        USER_ELF.len(),
+        user_image.len(),
         segment.file_size(),
         segment.memory_size(),
         address_space.root,
@@ -181,16 +99,11 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
     }
     match frame.rax {
         LINUX_SYS_WRITE => {
-            if frame.rdi != USER_STDOUT
-                || frame.rsi != USER_MESSAGE_ADDRESS
-                || frame.rdx != USER_MESSAGE.len() as u64
-            {
+            if frame.rdi != USER_STDOUT || frame.rdx != USER_MESSAGE.len() as u64 {
                 crate::fatal("user write syscall arguments are invalid");
             }
-            // SAFETY: the exact checked range is wholly inside the mapped user
-            // code page and cannot cross a page boundary.
-            let message =
-                unsafe { core::slice::from_raw_parts(frame.rsi as *const u8, USER_MESSAGE.len()) };
+            let message = user_bytes(frame.rsi, USER_MESSAGE.len())
+                .unwrap_or_else(|| crate::fatal("user write range is outside PT_LOAD memory"));
             if message != USER_MESSAGE
                 || SYSCALL_STATE
                     .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
@@ -224,6 +137,20 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             0
         }
     }
+}
+
+fn user_bytes(address: u64, length: usize) -> Option<&'static [u8]> {
+    let length = u64::try_from(length).ok()?;
+    let end = address.checked_add(length)?;
+    if address < crate::paging::USER_CODE_BASE
+        || end > USER_MEMORY_END.load(Ordering::Acquire)
+        || end < address
+    {
+        return None;
+    }
+    // SAFETY: the range was checked against the validated PT_LOAD mapping, and
+    // the process frame remains allocated for the lifetime of this boot.
+    Some(unsafe { core::slice::from_raw_parts(address as *const u8, length as usize) })
 }
 
 unsafe extern "C" {
