@@ -41,9 +41,13 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `kernel/src/framebuffer.rs` 直接使用 volatile 32-bit framebuffer store，尊重 GOP stride 和 RGB/BGR 格式。`font.rs` 是项目内原创的 5×7 bitmap glyph 集。
 
-`desktop.rs` 当前是内核态的早期合成循环。窗口拥有几何、开关状态、类型和 z-order；输入路径提供焦点、标题栏拖动、右下角缩放、关闭、任务栏恢复和键盘命令处理。它没有声称实现 surface IPC、Wayland object、用户态 client 或进程隔离。
+`desktop.rs` 当前是内核态的早期合成 async task。窗口拥有几何、开关状态、类型和 z-order；输入路径提供焦点、标题栏拖动、右下角缩放、关闭、任务栏恢复和键盘命令处理。它没有声称实现 surface IPC、Wayland object、用户态 client 或进程隔离。
 
-PS/2 初始化和数据读取在 `ps2.rs`。中断和 IDT 尚未实现，因此当前循环使用有界检查与 `pause`。这不满足最终异步驱动要求，状态明确标为“部分实现”。
+`memory.rs` 按 firmware 报告的 descriptor stride 解析 UEFI map，只收集 conventional memory，并提供并发保护的物理 frame bump allocator。启动时实际分配一个 frame、volatile 写入、读回并清零。
+
+`interrupts.rs` 安装自有 GDT/IDT，把 8259 PIC remap 到 `0x20`/`0x28`，配置 100 Hz PIT，并为 timer、keyboard、mouse 安装 gate。汇编 stub 只保存上下文、对齐栈并调用有界 Rust top half。PS/2 top half 读取一个字节、确认 PIC 并写入固定 SPSC ring；`desktop` future 负责扫描码和 mouse packet 的复杂解析。
+
+`executor.rs` 当前固定运行两个 pinned future，以原子 ready mask 作为 task queue，以 RawWaker 标识 task，并在空闲时执行 race-free `cli` 检查和 `sti; hlt`。`timer.rs` 的 future 由 PIT tick 唤醒。它仍缺动态 task arena、timer wheel、cancellation、async lock 和 SMP。
 
 ## 汇编用途与安全边界
 
