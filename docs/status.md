@@ -10,8 +10,8 @@
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
 | 进程/线程/调度 | 尚未实现 | 当前只有一个内核执行流；没有用户态、地址空间或 preemption。 |
 | 内存管理 | 部分实现 | kernel 解析 firmware descriptor stride，建立 frame allocator、自有四级页表并切换 CR3，建立 1 MiB kernel bump heap；frame/heap 读回与真实 vector-14 diagnostic 已验证。没有 user address space、细粒度页权限、COW 或 demand paging。 |
-| ext4/btrfs 文件系统 | 部分实现 | 独立 `ReadOnlyMount`/`ReadOnlyFile` API；校验 metadata CRC32C，异步遍历三个路径，按 inline extent run 读取并核对单块与 6144-byte 多块 regular file。仅限 group 0、depth-0、单块目录；无 global namespace/write/journal，btrfs 未实现。 |
-| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 可顺序复用 descriptor chain，29 次 DMA read 各经 INTx 唤醒 Future，并跨三轮 ring wrap。没有多 in-flight 队列、缓存、写入、MSI-X、其他设备类或 application processor。 |
+| ext4/btrfs 文件系统 | 部分实现 | 双 group 镜像与独立 mount/file API；按 inode group 定位、校验 descriptor，QEMU 实际读取 group 1 的 inode 20 和 6144-byte 文件。支持 depth-0 inline extent、单块目录；无 deep extent/namespace/write/journal，btrfs 未实现。 |
+| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 顺序复用 descriptor chain，33 次 DMA read 各经 INTx 唤醒 Future，并跨四轮 ring wrap。没有多 in-flight 队列、缓存、写入、MSI-X、其他设备类或 application processor。 |
 | 图形系统与 Wayland | 部分实现 | framebuffer renderer 和早期 window manager 可用；所有 Wayland wire/object/global/xdg 功能尚未实现。 |
 | 声明式配置 | 部分实现 | UI 中可原子切换一个内存主题预览；没有 parser、types、schema、module、diff、持久化或 rollback。 |
 | 文本编辑器 | 尚未实现 | kernel monitor 只编辑当前命令行，不是普通文本或配置文件编辑器。 |
@@ -40,4 +40,4 @@
 
 ## 下一项最高价值工作
 
-下一阶段应增加多 group descriptor 定位、跨块/depth extent 读取与 VFS namespace/mount table。随后把单 in-flight chain 扩展为 descriptor free list、bounded multi-request queue 与 block cache。之后需要可回收 heap、动态 task arena 和首个隔离用户地址空间；eBPF 仍需 map、program type、attach point 与 ELF relocation。
+下一阶段应增加 depth>0 extent index block、跨块目录与 VFS namespace/mount table。随后把单 in-flight chain 扩展为 descriptor free list、bounded multi-request queue 与 block cache。之后需要可回收 heap、动态 task arena 和首个隔离用户地址空间；eBPF 仍需 map、program type、attach point 与 ELF relocation。
