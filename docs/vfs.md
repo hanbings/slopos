@@ -19,4 +19,5 @@
 - 只有一个 root filesystem，没有 mount/unmount 生命周期或引用计数；
 - 只有 regular-file read/原位 write/seek/close，没有 directory fd、stat、dup、poll、mmap、owner/mode 权限或文件增长；
 - 没有 syscall，因此用户程序尚不能访问这些 fd；
-- fd write 可覆写已有 initialized block；在 descriptor 位于 EOF 时还可取得 append window，由 ext4 五-home transaction 分配一个连续 block，随后更新 node size/offset并经同一 fd 读回。truncate probe 把 offset/size 与 block metadata 一起恢复。当前只支持单块增长；底层 create/unlink 尚未接到 VFS namespace API。
+- fd write 可覆写已有 initialized block；在 descriptor 位于 EOF 时还可取得 append window，由 ext4 五-home transaction 分配一个连续 block，随后更新 node size/offset并经同一 fd 读回。truncate probe 把 offset/size 与 block metadata 一起恢复。当前只支持单块增长；create/unlink 也仍未抽象为通用 VFS namespace API。
+- create transaction checkpoint 后，path walker 将新 inode 26 转为 `FileNode`，固定表复用读写 fd 3，空文件 read 返回 EOF；close 后才执行 unlink transaction。它证明 ext4 namespace mutation 与 descriptor 生命周期相接，但尚未抽象为可复用 VFS create/unlink API。

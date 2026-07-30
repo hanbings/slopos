@@ -57,7 +57,7 @@ JBD2 宿主测试解析 big-endian v2 superblock，并拒绝 truncation、非法
 
 第六个 marker 证明 fd 3 的 append/truncate 与五 tag allocation transaction 同步覆盖 blocks 0/1/33/38/99。descriptor 在 EOF 4096 取得 4096-byte append window；内核把 superblock/group free count 各减一、更新 block bitmap CRC32C 与 descriptor checksum、增长 inode size/i_blocks/extent，并把 node size 扩为 8192、offset 推进到 EOF。新增 logical block 1 经普通 fd read 路径读回全 `G`；第二笔 transaction 释放 block，descriptor truncate 回 4096，五块逐字节恢复。
 
-第七个 marker 证明 create/unlink transaction 同步覆盖 blocks 0/1/36/38/83。全局/group 1 free inode 与 `itable_unused` 由 7→6，inode bitmap CRC、group checksum、inode 26 checksum 和 directory tail checksum 全部重算；正常 path walker 能打开 size 0 的 `create-probe`。第二笔 transaction 经共享 directory remover 与 inode-bitmap encoder 回到原始五块。最终固定 hash/fsck 排除 inode、目录项或计数泄漏。
+第七个 marker 证明 VFS create/unlink transaction 同步覆盖 blocks 0/1/36/38/83。全局/group 1 free inode 与 `itable_unused` 由 7→6，inode bitmap CRC、group checksum、inode 26 checksum 和 directory tail checksum 全部重算；正常 path walker 打开 size 0 的 `create-probe`，固定表为它复用读写 fd 3 且 read 返回 EOF。close 后第二笔 transaction 经共享 directory remover 与 inode-bitmap encoder 回到原始五块。最终固定 hash/fsck 排除 inode、目录项或计数泄漏。
 
 两阶段 recovery 证据来自独立 injection/replay 日志。phase 1 marker 明确记录 sequence 1/start 1、五个 targets 0/1/33/38/99、`allocated/grown` 旧状态、`free/original` 新状态与 `after_commit_before_home` 停止点；宿主同时确认 feature、free count、bitmap、inode size/blockcount 与全 G data。phase 2 普通 kernel 在任何 ext4 path read 前报告五 tag replay、全部 home readback、next sequence 2、records cleared 和 recovery false，随后用 sequence 2 继续全部 probes并进入桌面；最终 marker 为 477 requests/476 queue interrupts。宿主把五个 crash home 与注入前快照逐块比较，确认 block 99 释放并运行五阶段 fsck；脚本最后恢复固定-hash 标准镜像。
 

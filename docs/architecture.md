@@ -62,7 +62,7 @@ mount 首次解析若只因 `needs_recovery` 被拒绝，会进入受限 recover
 
 固定容量 multi-block engine 最多接受八个 home block；descriptor 的首 tag 携 UUID，后续 tag 使用 `SAME_UUID`，每个 tag 独立处理 escape。fd 3 在 EOF 请求 append 后，同一笔五 tag transaction 更新 block 0 superblock free count/checksum、block 1 group descriptor、block 33 bitmap、block 38 inode 25 与 block 99 data；home superblock 在 checkpoint 阶段保持 recovery bit，全部 home flush 后才清 recovery。inode 的 size/i_blocks/inline extent 从 4096/8 sectors/1 block 增至 8192/16/2，descriptor size/offset 随之更新，新增块经普通 fd read 回读；第二笔 truncate transaction 再释放回原始状态。replay scanner 已能解析最多八 tag，但仍只扫描一笔非 wrap transaction。
 
-create probe 复用相同 engine，把 blocks 0/1/36/38/83 作为一个原子集合：更新全局/group 1 free-inode count 与 `itable_unused`，重算 inode bitmap/group checksum，初始化带 extent header/checksum 的 inode 26，并在 inode 20 的线性目录块中拆分 slack、插入带 directory-tail checksum 的 `create-probe`。checkpoint 后正常 path walker 能打开 size 0 文件；第二笔 unlink transaction 合并目录 record、释放 inode bit 并逐字节恢复五块。
+VFS create probe 复用相同 engine，把 blocks 0/1/36/38/83 作为一个原子集合：更新全局/group 1 free-inode count 与 `itable_unused`，重算 inode bitmap/group checksum，初始化带 extent header/checksum 的 inode 26，并在 inode 20 的线性目录块中拆分 slack、插入带 directory-tail checksum 的 `create-probe`。checkpoint 后正常 path walker 打开 size 0 文件，固定 descriptor table 为它分配读写 fd 3 并验证 EOF；close 后第二笔 unlink transaction 合并目录 record、释放 inode bit并逐字节恢复五块。
 
 `crates/vfs` 是无分配、无标准库的 namespace 状态机：绝对路径最多 16 个 component，mount table 采用最长 component-prefix，fd table 从 3 开始分配并维护 vnode、size、offset 与 read/write access mode。内核把 ext4 注册为 filesystem 1 并挂到 `/`；启动验证通过 fd 3 以五个 chunk 读取 inode 16、seek 到 offset 7 再读 11 bytes，关闭后复用 fd 3 对 inode 25 的 offset 123 写入 73 bytes。当前这些表仍由 block task 局部持有，不是每进程或并发全局对象。
 
