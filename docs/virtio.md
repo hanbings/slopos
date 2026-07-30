@@ -16,7 +16,7 @@
 10. INTx top half 读取 ISR、累计 queue interrupt、wake block task 并发 local APIC EOI；
 11. transport Future 检查目标 used index 与各槽 block status；独立 fs mount task 可等待一个请求，或一次发布两个 chain 并在二者全部完成后复用槽。
 
-共享 `slopos-virtio` crate 对 split-ring byte layout、power-of-two queue size，以及从任意合法 head 开始的三 descriptor block-read chain 做宿主单元测试。文件系统以一个双块 cache prefetch 实际同时发布两个请求；加入 extent tree、sparse 和跨块目录路径后，8-entry cache 最终记录 35 hit/33 miss。另加未缓存的 superblock，裸机 `make test-boot` 验证 34 次 DMA 请求由 33 次 INTx/ISR/Future completion 唤醒完成。当前 root disk 为 256 MiB，即 524288 个 512-byte sector。
+共享 `slopos-virtio` crate 对 split-ring byte layout、power-of-two queue size，以及从任意合法 head 开始的三 descriptor block-read chain 做宿主单元测试。文件系统以一个双块 cache prefetch 实际同时发布两个请求；加入 extent tree、sparse、跨块目录和 symlink 路径后，8-entry cache 最终记录 39 hit/39 miss。另加未缓存的 superblock，裸机 `make test-boot` 验证 40 次 DMA 请求由 39 次 INTx/ISR/Future completion 唤醒完成。当前 root disk 为 256 MiB，即 524288 个 512-byte sector。
 
 q35 的 slot 3 INTA 映射到 PIRQ H。当前 OVMF 仍把 PIRQ H 路由到 legacy IRQ11，MADT 对 IRQ11 指定 GSI 11、flags 13；内核按这一 firmware route 配置 active-high level entry。请求必须在 entry unmask 之后提交，否则完成边沿可能在接管期间丢失。
 
