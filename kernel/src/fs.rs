@@ -30,7 +30,7 @@ const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
 const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
 const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
-const ALLOCATION_PROBE_BLOCK: u64 = 106;
+const ALLOCATION_PROBE_BLOCK: u64 = 110;
 const CREATE_TRANSACTION_BLOCKS: usize = 5;
 const CREATE_PROBE_INODE: u32 = 32;
 const CREATE_PROBE_NAME: &[u8] = b"create-probe";
@@ -53,7 +53,7 @@ const ROOT_FILESYSTEM_ID: u16 = 1;
 const VFS_TEST_PATH: &[u8] = b"/etc/./slopos/../slopos/system.conf";
 const INIT_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-init"];
 const INIT_EXECUTABLE_DISPLAY: &str = "/sbin/slop-init";
-const INIT_EXECUTABLE_CAPACITY: usize = 8192;
+const INIT_EXECUTABLE_CAPACITY: usize = 32 * 1024;
 const PROCESS_FILE_CAPACITY: usize = 8;
 const LINUX_ENOENT: i64 = -2;
 const LINUX_EBADF: i64 = -9;
@@ -3012,6 +3012,21 @@ impl Ext4Mount {
                 )
                 .await;
             if device.data(BLOCK_SIZE) != expected {
+                let first_difference = device
+                    .data(BLOCK_SIZE)
+                    .iter()
+                    .zip(expected.iter())
+                    .position(|(actual, wanted)| actual != wanted)
+                    .unwrap_or(BLOCK_SIZE);
+                crate::serial::serialln(format_args!(
+                    "SLOPOS-EXT4: multi-block home mismatch index={index} target_block={target} first_difference={first_difference} actual={:#x} expected={:#x}",
+                    device
+                        .data(BLOCK_SIZE)
+                        .get(first_difference)
+                        .copied()
+                        .unwrap_or(0),
+                    expected.get(first_difference).copied().unwrap_or(0)
+                ));
                 device.fail("multi-block JBD2 home readback mismatch");
             }
             self.cache.invalidate(*target);

@@ -55,6 +55,7 @@ done
 for tail_index in {00..29}; do
     ln "${large_directory}/seed" "${large_directory}/tail-${tail_index}"
 done
+truncate -s 0 "${image}"
 truncate -s 256M "${image}"
 "${mke2fs}" \
     -q \
@@ -77,6 +78,11 @@ for logical_block in 1 3 5 7; do
         -R "punch /usr/share/slopos/deep-extent.bin ${logical_block} ${logical_block}" \
         "${image}" >/dev/null 2>&1
 done
+# e2fsprogs 1.47.2 can allocate the new depth-1 extent leaf from the first
+# punched block without persisting the corresponding allocation counters.
+# Reasserting the deterministic leaf allocation repairs the bitmap/count
+# checksums and makes a freshly zeroed image pass fsck.
+"${debugfs}" -w -R "setb 96" "${image}" >/dev/null 2>&1
 
 # mke2fs -d intentionally preserves source ownership and inode timestamps.
 # Normalize every populated inode so a fresh checkout under another uid/umask
