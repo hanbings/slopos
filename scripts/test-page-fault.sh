@@ -49,16 +49,19 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "${ovmf_vars}"
     -no-reboot >/dev/null
 
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=25896 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26152 blocks=7 matches_boot=true" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-PROCESS: pid=1 source=vfs path=/sbin/slop-init format=elf64" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-VFS: process read complete pid=1 fd=3 inode=18 offset=0 requested=76 bytes=76 async=true" \
+    "SLOPOS-VFS: process read complete pid=1 fd=3 inode=18 offset=0 requested=76 bytes=76 user_pages=1 cross_page=false async=true" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=16 bytes=16 async=true flushed=true" \
+    "SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true flushed=true" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-PROCESS: pid=1 exit resources released descriptors=1 backing_objects=1 address_space_retained=true" \
     "${serial_log}"
 grep -Fq "SLOPOS-EXCEPTION: injecting page fault at 0x40000000" "${serial_log}"
 grep -Fq "SLOPOS-EXCEPTION: vector=14" "${serial_log}"
