@@ -6,7 +6,7 @@ use slopos_ext4::{
     DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DIRECTORY_ENTRY_SYMLINK,
     DirectoryBlock, Extent, ExtentNode, GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode,
     JOURNAL_INODE, JournalCommit, JournalDescriptor, JournalSuperblock, ParseError, ROOT_INODE,
-    SUPERBLOCK_SIZE, Superblock, encode_single_block_journal_transaction,
+    SUPERBLOCK_SIZE, Superblock, encode_single_block_journal_transaction, set_inode_size,
     set_journal_superblock_state, set_superblock_recovery, validate_path_component,
 };
 use slopos_vfs::{AbsolutePath, AccessMode, FileDescriptorTable, FileNode, MountTable};
@@ -404,6 +404,17 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         active_transaction.sequence,
         active_transaction.target_block,
         active_transaction.next_sequence
+    ));
+    let metadata_transaction = mount
+        .probe_inode_metadata_transactions(&mut device, &journal, &write_probe)
+        .await;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: metadata journal transactions valid inode={} inode_table_block={} size=4095/4096 checksums=valid transactions=2 sequences={}/{} final_sequence={} test_sequence_rewound=true restored=true writes=23 flushes=17",
+        write_probe.inode.number,
+        metadata_transaction.target_block,
+        metadata_transaction.first_sequence,
+        metadata_transaction.second_sequence,
+        metadata_transaction.final_sequence
     ));
 
     crate::serial::serialln(format_args!(
@@ -1066,6 +1077,364 @@ impl Ext4Mount {
         }
     }
 
+    async fn probe_inode_metadata_transactions(
+        &mut self,
+        device: &mut BlockDevice,
+        journal: &JournalProbe,
+        file: &Ext4File,
+    ) -> MetadataJournalProbe {
+        let group_index = self
+            .superblock
+            .inode_group(file.inode.number)
+            .unwrap_or_else(|_| device.fail("metadata probe inode number is invalid"));
+        let group = if group_index == 0 {
+            self.group0
+        } else {
+            read_group_descriptor(device, &self.superblock, group_index, &mut self.cache).await
+        };
+        let location = self
+            .superblock
+            .inode_location(file.inode.number, &group)
+            .unwrap_or_else(|_| device.fail("metadata probe inode location is invalid"));
+        let inode_offset = location.offset as usize;
+        let inode_end = inode_offset + usize::from(self.superblock.inode_size);
+        if inode_end > BLOCK_SIZE {
+            device.fail("metadata probe inode crosses its table block");
+        }
+
+        let mut metadata = MetadataJournalScratch::new();
+        device
+            .read(
+                block_to_sector(device, &self.superblock, location.block),
+                BLOCK_SIZE,
+            )
+            .await;
+        metadata
+            .original_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        metadata
+            .modified_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        set_inode_size(
+            &mut metadata.modified_block_mut()[inode_offset..inode_end],
+            file.inode.number,
+            &self.superblock,
+            file.inode.size - 1,
+        )
+        .unwrap_or_else(|_| device.fail("metadata probe inode encoding failed"));
+        let modified_inode = Inode::parse(
+            &metadata.modified_block()[inode_offset..inode_end],
+            file.inode.number,
+            &self.superblock,
+        )
+        .unwrap_or_else(|_| device.fail("metadata probe inode self-validation failed"));
+        if modified_inode.size != file.inode.size - 1 {
+            device.fail("metadata probe inode size mismatch");
+        }
+
+        let first_sequence = journal.superblock.sequence;
+        let second_sequence = self
+            .commit_single_block_journal_transaction(
+                device,
+                journal,
+                first_sequence,
+                location.block,
+                metadata.modified_block(),
+            )
+            .await;
+        let updated_inode = self.read_inode(device, file.inode.number).await;
+        if updated_inode.size != file.inode.size - 1 {
+            device.fail("metadata journal checkpoint did not update inode size");
+        }
+
+        let final_sequence = self
+            .commit_single_block_journal_transaction(
+                device,
+                journal,
+                second_sequence,
+                location.block,
+                metadata.original_block(),
+            )
+            .await;
+        let restored_inode = self.read_inode(device, file.inode.number).await;
+        if restored_inode != file.inode {
+            device.fail("metadata journal restoration did not restore inode");
+        }
+
+        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
+        let mut rewind = JournalStateScratch::new();
+        device.read(journal_sector, BLOCK_SIZE).await;
+        rewind
+            .journal_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        let checkpointed = JournalSuperblock::parse(rewind.journal_block())
+            .unwrap_or_else(|_| device.fail("metadata journal checkpoint state is invalid"));
+        if checkpointed.sequence != final_sequence || checkpointed.start != 0 {
+            device.fail("metadata journal final sequence mismatch");
+        }
+        set_journal_superblock_state(rewind.journal_block_mut(), first_sequence, 0)
+            .unwrap_or_else(|_| device.fail("metadata journal sequence rewind failed"));
+        device.write(journal_sector, rewind.journal_block()).await;
+        device.flush().await;
+        device.read(journal_sector, BLOCK_SIZE).await;
+        let restored_journal = JournalSuperblock::parse(device.data(BLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("metadata journal rewind validation failed"));
+        if device.data(BLOCK_SIZE) != rewind.journal_block()
+            || restored_journal.sequence != first_sequence
+            || restored_journal.start != 0
+        {
+            device.fail("metadata journal rewind readback mismatch");
+        }
+
+        device
+            .read(
+                block_to_sector(device, &self.superblock, location.block),
+                BLOCK_SIZE,
+            )
+            .await;
+        if device.data(BLOCK_SIZE) != metadata.original_block() {
+            device.fail("metadata inode table block was not restored");
+        }
+
+        MetadataJournalProbe {
+            target_block: location.block,
+            first_sequence,
+            second_sequence,
+            final_sequence,
+        }
+    }
+
+    async fn commit_single_block_journal_transaction(
+        &mut self,
+        device: &mut BlockDevice,
+        journal: &JournalProbe,
+        sequence: u32,
+        target_block: u64,
+        home_data: &[u8],
+    ) -> u32 {
+        if home_data.len() != BLOCK_SIZE {
+            device.fail("JBD2 home data must be one filesystem block");
+        }
+        let filesystem_sector = block_to_sector(device, &self.superblock, 0);
+        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
+        let descriptor_block = journal
+            .physical_block
+            .checked_add(u64::from(journal.superblock.first_log_block))
+            .unwrap_or_else(|| device.fail("JBD2 transaction descriptor overflow"));
+        let data_block = descriptor_block
+            .checked_add(1)
+            .unwrap_or_else(|| device.fail("JBD2 transaction data overflow"));
+        let commit_block = descriptor_block
+            .checked_add(2)
+            .unwrap_or_else(|| device.fail("JBD2 transaction commit overflow"));
+        let journal_end = journal
+            .physical_block
+            .checked_add(u64::from(journal.superblock.max_length))
+            .unwrap_or_else(|| device.fail("JBD2 transaction extent overflow"));
+        if commit_block >= journal_end {
+            device.fail("JBD2 transaction exceeds journal extent");
+        }
+
+        let mut scratch = ActiveJournalScratch::new();
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        scratch
+            .state
+            .filesystem_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        if Superblock::parse(
+            &scratch.state.filesystem_block()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+        )
+        .is_err()
+        {
+            device.fail("JBD2 transaction requires a clean ext4 superblock");
+        }
+        device.read(journal_sector, BLOCK_SIZE).await;
+        scratch
+            .state
+            .journal_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        let initial_journal = JournalSuperblock::parse(scratch.state.journal_block())
+            .unwrap_or_else(|_| device.fail("JBD2 transaction initial state is invalid"));
+        if initial_journal.sequence != sequence || initial_journal.start != 0 {
+            device.fail("JBD2 transaction initial sequence mismatch");
+        }
+        for block in [descriptor_block, data_block, commit_block] {
+            device
+                .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
+                .await;
+            if device.data(BLOCK_SIZE).iter().any(|byte| *byte != 0) {
+                device.fail("JBD2 transaction record block is not empty");
+            }
+        }
+
+        let target_block = u32::try_from(target_block)
+            .unwrap_or_else(|_| device.fail("JBD2 transaction target exceeds 32 bits"));
+        {
+            let (descriptor, data, commit) = scratch.records.buffers();
+            encode_single_block_journal_transaction(
+                descriptor,
+                data,
+                commit,
+                sequence,
+                target_block,
+                &self.superblock.uuid,
+                home_data,
+            )
+            .unwrap_or_else(|_| device.fail("JBD2 transaction encoding failed"));
+        }
+
+        set_superblock_recovery(
+            &mut scratch.state.filesystem_block_mut()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            true,
+        )
+        .unwrap_or_else(|_| device.fail("JBD2 transaction recovery activation failed"));
+        device
+            .write(filesystem_sector, scratch.state.filesystem_block())
+            .await;
+        device.flush().await;
+        set_journal_superblock_state(
+            scratch.state.journal_block_mut(),
+            sequence,
+            journal.superblock.first_log_block,
+        )
+        .unwrap_or_else(|_| device.fail("JBD2 transaction state activation failed"));
+        device
+            .write(journal_sector, scratch.state.journal_block())
+            .await;
+        device.flush().await;
+
+        device
+            .write(
+                block_to_sector(device, &self.superblock, descriptor_block),
+                scratch.records.descriptor(),
+            )
+            .await;
+        device
+            .write(
+                block_to_sector(device, &self.superblock, data_block),
+                scratch.records.data(),
+            )
+            .await;
+        device.flush().await;
+        device
+            .write(
+                block_to_sector(device, &self.superblock, commit_block),
+                scratch.records.commit(),
+            )
+            .await;
+        device.flush().await;
+
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != scratch.state.filesystem_block()
+            || Superblock::parse(
+                &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            ) != Err(ParseError::DirtyFilesystem)
+        {
+            device.fail("JBD2 transaction recovery readback mismatch");
+        }
+        device.read(journal_sector, BLOCK_SIZE).await;
+        let active_journal = JournalSuperblock::parse(device.data(BLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("JBD2 transaction active state is invalid"));
+        if device.data(BLOCK_SIZE) != scratch.state.journal_block()
+            || active_journal.sequence != sequence
+            || active_journal.start != journal.superblock.first_log_block
+        {
+            device.fail("JBD2 transaction active state mismatch");
+        }
+        for (block, expected) in [
+            (descriptor_block, scratch.records.descriptor()),
+            (data_block, scratch.records.data()),
+            (commit_block, scratch.records.commit()),
+        ] {
+            device
+                .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
+                .await;
+            if device.data(BLOCK_SIZE) != expected {
+                device.fail("JBD2 transaction record readback mismatch");
+            }
+        }
+        let descriptor = JournalDescriptor::parse(scratch.records.descriptor())
+            .unwrap_or_else(|_| device.fail("JBD2 transaction descriptor is invalid"));
+        let commit = JournalCommit::parse(scratch.records.commit())
+            .unwrap_or_else(|_| device.fail("JBD2 transaction commit is invalid"));
+        if descriptor.sequence != sequence
+            || descriptor.target_block != target_block
+            || descriptor.uuid != self.superblock.uuid
+            || commit.sequence != sequence
+        {
+            device.fail("JBD2 transaction identity mismatch");
+        }
+
+        device
+            .write(
+                block_to_sector(device, &self.superblock, u64::from(target_block)),
+                home_data,
+            )
+            .await;
+        device.flush().await;
+        device
+            .read(
+                block_to_sector(device, &self.superblock, u64::from(target_block)),
+                BLOCK_SIZE,
+            )
+            .await;
+        if device.data(BLOCK_SIZE) != home_data {
+            device.fail("JBD2 transaction home-block readback mismatch");
+        }
+        self.cache.invalidate(u64::from(target_block));
+
+        let next_sequence = sequence
+            .checked_add(1)
+            .unwrap_or_else(|| device.fail("JBD2 transaction sequence overflow"));
+        set_journal_superblock_state(scratch.state.journal_block_mut(), next_sequence, 0)
+            .unwrap_or_else(|_| device.fail("JBD2 transaction checkpoint update failed"));
+        device
+            .write(journal_sector, scratch.state.journal_block())
+            .await;
+        device.flush().await;
+        set_superblock_recovery(
+            &mut scratch.state.filesystem_block_mut()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            false,
+        )
+        .unwrap_or_else(|_| device.fail("JBD2 transaction recovery clearing failed"));
+        device
+            .write(filesystem_sector, scratch.state.filesystem_block())
+            .await;
+        device.flush().await;
+        for block in [descriptor_block, data_block, commit_block] {
+            device
+                .write(
+                    block_to_sector(device, &self.superblock, block),
+                    &ZERO_BLOCK,
+                )
+                .await;
+        }
+        device.flush().await;
+
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != scratch.state.filesystem_block()
+            || Superblock::parse(
+                &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            )
+            .is_err()
+        {
+            device.fail("JBD2 transaction final ext4 state mismatch");
+        }
+        device.read(journal_sector, BLOCK_SIZE).await;
+        let final_journal = JournalSuperblock::parse(device.data(BLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("JBD2 transaction final state is invalid"));
+        if device.data(BLOCK_SIZE) != scratch.state.journal_block()
+            || final_journal.sequence != next_sequence
+            || final_journal.start != 0
+        {
+            device.fail("JBD2 transaction final state mismatch");
+        }
+        next_sequence
+    }
+
     async fn open_file(&mut self, device: &mut BlockDevice, components: &[&[u8]]) -> Ext4File {
         let (inode, parent_inode, directory_block, followed_symlink) =
             self.resolve_path(device, components).await;
@@ -1399,6 +1768,13 @@ struct ActiveJournalProbe {
     next_sequence: u32,
 }
 
+struct MetadataJournalProbe {
+    target_block: u64,
+    first_sequence: u32,
+    second_sequence: u32,
+    final_sequence: u32,
+}
+
 struct ActiveJournalScratch {
     records: JournalScratch,
     state: JournalStateScratch,
@@ -1410,6 +1786,36 @@ impl ActiveJournalScratch {
             records: JournalScratch::new(),
             state: JournalStateScratch::new(),
         }
+    }
+}
+
+struct MetadataJournalScratch {
+    original_frame: usize,
+    modified_frame: usize,
+}
+
+impl MetadataJournalScratch {
+    fn new() -> Self {
+        Self {
+            original_frame: allocate_scratch_frame(),
+            modified_frame: allocate_scratch_frame(),
+        }
+    }
+
+    fn original_block(&self) -> &[u8] {
+        scratch_frame_bytes(self.original_frame)
+    }
+
+    fn original_block_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.original_frame)
+    }
+
+    fn modified_block(&self) -> &[u8] {
+        scratch_frame_bytes(self.modified_frame)
+    }
+
+    fn modified_block_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.modified_frame)
     }
 }
 
