@@ -6,7 +6,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
-QEMU 另挂载一个可重复生成的 128 MiB ext4 root disk。内核经第二个 virtio-blk 连续完成四次 DMA/INTx/Future 读取，校验 superblock、group descriptor、root inode、extent 和 root directory 的 metadata CRC32C，并确认 `etc`/`lost+found` 目录项；这仍只是只读 mount probe，不是通用路径解析或 VFS。
+QEMU 另挂载一个可重复生成的 128 MiB ext4 root disk。内核经第二个 virtio-blk 连续完成 18 次 DMA/INTx/Future 读取，校验 superblock、group descriptor、inode、extent 和 directory metadata CRC32C；异步 component walker 实际读取并核对 `/etc/slopos-release` 与 `/etc/slopos/system.conf`。当前仍是受限只读 mount probe，不是通用 VFS。
 
 ![SlopOS early interactive desktop](evidence/desktop.png)
 
@@ -47,7 +47,7 @@ make test-page-fault
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 和 block descriptor chain，`make test-ext4` 检查 superblock/group/inode/extent/directory parser 与 checksum。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、内核接管、自有 CR3/heap、eBPF、ACPI、PCI、四次 virtio-blk DMA/INTx/Future completion、ext4 root directory、LAPIC/IOAPIC IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 和 block descriptor chain，`make test-ext4` 检查 superblock/group/inode/extent/directory parser、checksum 与安全拒绝。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、自有 CR3/heap、eBPF、ACPI、PCI、18 次 virtio-blk DMA/INTx/Future completion、ext4 路径/文件读取、LAPIC/IOAPIC IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 

@@ -37,6 +37,6 @@ ACPI parser 的宿主测试由 `make test-acpi` 执行。裸机日志记录 QEMU
 
 PCI 枚举器的宿主测试由 `make test-pci` 执行。裸机日志包含 QEMU q35 的设备总数和实际 virtio-blk BDF；当前证据为 `00:03.0`、device ID `1001`，完整 region 校验后的 capability mask `0x1e`（configuration type 1–4）。OVMF 分配的 modern BAR base 为 `0xc000000000`，因此 CR3 证据同时包含跨 PML4 slot 的 7 个 table frame。
 
-virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA 与 INTx→waker→Future：queue size 8，root device 报告 262144 sectors，同一 chain 顺序完成 4 次请求，top half/queue interrupt 计数均为 4。
+virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA 与 INTx→waker→Future：queue size 8，root device 报告 262144 sectors，同一 chain 顺序完成 18 次请求，top half/queue interrupt 计数均为 18，并覆盖两次 ring wrap。
 
-ext4 parser 测试由 `make test-ext4` 执行。裸机日志证明 label `SLOPOS_ROOT`、4096-byte block、32768 blocks/inodes、feature masks `0x103c/0x22c2/0x46b`，以及 inode table 49、root inode 2、extent block 18、4 个 root entries；superblock/group/inode/directory metadata checksum 均由内核 CRC32C 校验。归一化 source inode metadata 并固定 filesystem UUID/hash seed 后，当前 e2fsprogs 1.47.2 root image 的 SHA-256 为 `29c8f332ce7c9aca80f4c0253ddebaa8a92985b42125e5a006d7f97887b74811`。这仍不证明通用 path walk 或 VFS。
+ext4 parser 测试由 `make test-ext4` 执行。裸机日志证明 label `SLOPOS_ROOT`、4096-byte block、32768 blocks/inodes、feature masks `0x103c/0x22c2/0x46b`，以及 inode table 49、root inode 2、extent block 18、4 个 root entries；superblock/group/inode/directory metadata checksum 均由内核 CRC32C 校验。另一个 marker 证明 `/etc/slopos-release`（inode 16，40 bytes）和 `/etc/slopos/system.conf`（inode 15，76 bytes）的异步路径遍历与逐字节内容核对。归一化 source inode metadata 并固定 filesystem UUID/hash seed 后，当前 e2fsprogs 1.47.2 root image 的 SHA-256 为 `29c8f332ce7c9aca80f4c0253ddebaa8a92985b42125e5a006d7f97887b74811`。这仍不证明通用 VFS。
