@@ -86,9 +86,16 @@ pub struct ImgRequest<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClearRequest<'a> {
+    pub color: u32,
+    pub output: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SwwwCommand<'a> {
     Daemon,
     Img(ImgRequest<'a>),
+    Clear(ClearRequest<'a>),
     Query,
     Kill,
 }
@@ -103,6 +110,7 @@ pub enum SwwwParseError {
     InvalidNumber,
     InvalidTransition,
     InvalidResize,
+    InvalidColor,
     UnexpectedArgument,
 }
 
@@ -132,6 +140,9 @@ pub fn parse_swww_command(
     }
     if equal(subcommand, "img") {
         return parse_img(args, defaults.transition).map(SwwwCommand::Img);
+    }
+    if equal(subcommand, "clear") {
+        return parse_clear(args).map(SwwwCommand::Clear);
     }
     Err(SwwwParseError::UnknownCommand)
 }
@@ -210,6 +221,27 @@ fn parse_img<'a>(
     })
 }
 
+fn parse_clear<'a>(mut args: Arguments<'a>) -> Result<ClearRequest<'a>, SwwwParseError> {
+    let mut color = None;
+    let mut output = None;
+    while let Some(argument) = args.next() {
+        if equal(argument, "-o") || equal(argument, "--outputs") {
+            output = Some(args.next().ok_or(SwwwParseError::MissingValue)?);
+        } else if argument.starts_with('-') {
+            return Err(SwwwParseError::UnexpectedArgument);
+        } else {
+            if color.is_some() {
+                return Err(SwwwParseError::UnexpectedArgument);
+            }
+            color = Some(parse_hex_color(argument)?);
+        }
+    }
+    Ok(ClearRequest {
+        color: color.unwrap_or(0),
+        output,
+    })
+}
+
 fn no_arguments<'a>(
     mut args: Arguments<'a>,
     command: SwwwCommand<'a>,
@@ -284,6 +316,23 @@ fn parse_u16(value: &str) -> Result<u16, SwwwParseError> {
     Ok(parsed)
 }
 
+fn parse_hex_color(value: &str) -> Result<u32, SwwwParseError> {
+    if value.len() != 6 {
+        return Err(SwwwParseError::InvalidColor);
+    }
+    let mut color = 0u32;
+    for byte in value.bytes() {
+        let component = match byte {
+            b'0'..=b'9' => u32::from(byte - b'0'),
+            b'a'..=b'f' => u32::from(byte - b'a' + 10),
+            b'A'..=b'F' => u32::from(byte - b'A' + 10),
+            _ => return Err(SwwwParseError::InvalidColor),
+        };
+        color = color << 4 | component;
+    }
+    Ok(color)
+}
+
 fn equal(left: &str, right: &str) -> bool {
     left.eq_ignore_ascii_case(right)
 }
@@ -343,6 +392,18 @@ impl StoredPath {
         self.length = 0;
     }
 
+    fn set_color(&mut self, color: u32) {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        self.bytes.fill(0);
+        self.bytes[0] = b'0';
+        self.bytes[1] = b'x';
+        for index in 0..6 {
+            let shift = (5 - index) * 4;
+            self.bytes[index + 2] = HEX[((color >> shift) & 0x0f) as usize];
+        }
+        self.length = 8;
+    }
+
     fn get(&self) -> Option<&str> {
         if self.length == 0 {
             return None;
@@ -381,6 +442,7 @@ pub struct WallpaperDaemon {
     progress: u8,
     transition_active: bool,
     generation: u32,
+    clear_color: Option<u32>,
 }
 
 impl WallpaperDaemon {
@@ -403,6 +465,7 @@ impl WallpaperDaemon {
             progress: 0,
             transition_active: false,
             generation: 0,
+            clear_color: None,
         }
     }
 
@@ -419,6 +482,7 @@ impl WallpaperDaemon {
         self.previous.clear();
         self.transition_active = false;
         self.progress = 0;
+        self.clear_color = None;
         Ok(())
     }
 
@@ -431,6 +495,7 @@ impl WallpaperDaemon {
         self.previous.clear();
         self.transition_active = false;
         self.progress = 0;
+        self.clear_color = None;
         Ok(())
     }
 
@@ -451,12 +516,32 @@ impl WallpaperDaemon {
         current.set(request.path)?;
         self.previous = self.current;
         self.current = current;
+        self.clear_color = None;
         self.transition = request.transition;
         self.generation = self.generation.wrapping_add(1);
         self.transition.kind = resolve_transition(self.transition.kind, self.generation);
         self.transition_active =
             self.previous.get().is_some() && self.transition.kind != TransitionType::None;
         self.progress = if self.transition_active { 0 } else { u8::MAX };
+        Ok(())
+    }
+
+    pub fn clear(&mut self, request: ClearRequest<'_>) -> Result<(), SwwwDaemonError> {
+        if !self.running {
+            return Err(SwwwDaemonError::NotRunning);
+        }
+        if let Some(output) = request.output
+            && output != "*"
+            && !output.eq_ignore_ascii_case(self.output)
+        {
+            return Err(SwwwDaemonError::UnknownOutput);
+        }
+        self.current.set_color(request.color);
+        self.previous.clear();
+        self.transition_active = false;
+        self.progress = u8::MAX;
+        self.clear_color = Some(request.color);
+        self.generation = self.generation.wrapping_add(1);
         Ok(())
     }
 
@@ -473,7 +558,7 @@ impl WallpaperDaemon {
     }
 
     pub fn current_image(&self) -> Option<&str> {
-        if self.running {
+        if self.running && self.clear_color.is_none() {
             self.current.get()
         } else {
             None
@@ -498,6 +583,10 @@ impl WallpaperDaemon {
 
     pub const fn transition_active(&self) -> bool {
         self.transition_active
+    }
+
+    pub const fn clear_color(&self) -> Option<u32> {
+        if self.running { self.clear_color } else { None }
     }
 
     pub fn tick(&mut self) -> bool {
@@ -796,6 +885,20 @@ mod tests {
         assert_eq!(request.transition.fps, 60);
         assert_eq!(request.transition.resize, ResizeMode::Fit);
         assert_eq!(
+            parse_swww_command("swww clear", SwwwDefaults::default()),
+            Ok(SwwwCommand::Clear(ClearRequest {
+                color: 0,
+                output: None,
+            }))
+        );
+        assert_eq!(
+            parse_swww_command("clear -o SLOPOS-1 1a804a", SwwwDefaults::default()),
+            Ok(SwwwCommand::Clear(ClearRequest {
+                color: 0x1a804a,
+                output: Some("SLOPOS-1"),
+            }))
+        );
+        assert_eq!(
             parse_swww_command("SWWW QUERY", SwwwDefaults::default()),
             Ok(SwwwCommand::Query)
         );
@@ -849,6 +952,26 @@ mod tests {
             ),
             Err(SwwwParseError::InvalidTransition)
         );
+        assert_eq!(
+            parse_swww_command("swww clear #1a804a", SwwwDefaults::default()),
+            Err(SwwwParseError::InvalidColor)
+        );
+        assert_eq!(
+            parse_swww_command("swww clear fff", SwwwDefaults::default()),
+            Err(SwwwParseError::InvalidColor)
+        );
+        assert_eq!(
+            parse_swww_command("swww clear 1a80xz", SwwwDefaults::default()),
+            Err(SwwwParseError::InvalidColor)
+        );
+        assert_eq!(
+            parse_swww_command("swww clear 1a804a 000000", SwwwDefaults::default()),
+            Err(SwwwParseError::UnexpectedArgument)
+        );
+        assert_eq!(
+            parse_swww_command("swww clear -o", SwwwDefaults::default()),
+            Err(SwwwParseError::MissingValue)
+        );
     }
 
     #[test]
@@ -896,8 +1019,33 @@ mod tests {
         assert!(daemon.tick());
         assert!(!daemon.transition_active());
         assert_eq!(daemon.previous_image(), None);
+
+        daemon
+            .clear(ClearRequest {
+                color: 0x1a804a,
+                output: Some("SLOPOS-1"),
+            })
+            .unwrap();
+        assert_eq!(daemon.clear_color(), Some(0x1a804a));
+        assert_eq!(daemon.current_image(), None);
+        assert_eq!(daemon.previous_image(), None);
+        assert_eq!(daemon.query().unwrap().image, "0x1A804A");
+        assert!(!daemon.transition_active());
+        assert_eq!(daemon.progress(), u8::MAX);
+        assert_eq!(
+            daemon.clear(ClearRequest {
+                color: 0,
+                output: Some("other"),
+            }),
+            Err(SwwwDaemonError::UnknownOutput)
+        );
+
+        daemon.apply(first).unwrap();
+        assert_eq!(daemon.clear_color(), None);
+        assert_eq!(daemon.current_image(), Some("aurora.ppm"));
         daemon.kill().unwrap();
         assert_eq!(daemon.current_image(), None);
+        assert_eq!(daemon.clear_color(), None);
     }
 
     #[test]

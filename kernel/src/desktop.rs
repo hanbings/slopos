@@ -257,7 +257,9 @@ impl Desktop {
             0,
             self.screen_width,
             self.screen_height,
-            self.workspaces.config().background_color,
+            self.wallpaper
+                .clear_color()
+                .unwrap_or(self.workspaces.config().background_color),
         );
         let Some(current_path) = self.wallpaper.current_image() else {
             return;
@@ -1142,6 +1144,17 @@ impl Desktop {
                         }
                     }
                 }
+                Ok(SwwwCommand::Clear(request)) => match self.wallpaper.clear(request) {
+                    Ok(()) => {
+                        self.set_response("SWWW COLOR APPLIED");
+                        serialln(format_args!(
+                            "SLOPOS-SWWW: clear color={:06X} output={}",
+                            request.color,
+                            request.output.unwrap_or("*")
+                        ));
+                    }
+                    Err(error) => self.set_response(swww_error(error)),
+                },
                 Ok(SwwwCommand::Query) => match self.wallpaper.query() {
                     Ok(query) => {
                         let mut output = [0u8; 32];

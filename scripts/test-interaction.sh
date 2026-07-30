@@ -62,6 +62,13 @@ monitor_type() {
     sleep 2
     monitor_type "swww img sunset.ppm --transition-type none"
     sleep 4
+    monitor_type "swww clear 1a2b3c"
+    sleep 2
+    echo "screendump ${repo_dir}/evidence/wallpaper-cleared.ppm"
+    monitor_type "swww query"
+    sleep 2
+    monitor_type "swww img sunset.ppm --transition-type none"
+    sleep 2
     echo "mouse_move -300 -300"
     sleep 1
     echo "mouse_button 1"
@@ -197,6 +204,8 @@ grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM"
 grep -Fq "SLOPOS-SWWW: daemon stopped" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: daemon started" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: clear color=1A2B3C output=*" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C" "${serial_log}"
 grep -Fq "SLOPOS-SHELL: view scrolled workspace=1 offset=" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window moved kind=TERMINAL" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=614 layout=scrolling" "${serial_log}"
@@ -221,6 +230,7 @@ grep -Fq "SLOPOS-DESKTOP: window closed kind=SYSTEM" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=CONFIG" "${serial_log}"
 test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
+test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
 test -s "${repo_dir}/evidence/window-moved.ppm"
 test -s "${repo_dir}/evidence/window-resized.ppm"
 test -s "${repo_dir}/evidence/column-reordered.ppm"
@@ -237,6 +247,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/terminal-status.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-switched.ppm" \
         >"${repo_dir}/evidence/wallpaper-switched.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-cleared.ppm" \
+        >"${repo_dir}/evidence/wallpaper-cleared.png"
     pnmtopng "${repo_dir}/evidence/window-moved.ppm" \
         >"${repo_dir}/evidence/window-moved.png"
     pnmtopng "${repo_dir}/evidence/window-resized.ppm" \
