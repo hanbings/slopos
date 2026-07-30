@@ -94,6 +94,12 @@ monitor_type() {
     -monitor stdio \
     -no-reboot >/dev/null
 
+grep -Fq \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=4848 blocks=2 matches_boot=true" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-PROCESS: pid=1 source=vfs path=/sbin/slop-init format=elf64" \
+    "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: reload requested generation=1 accepted=true" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: VFS load published initial=false generation=2 atomic=true" "${serial_log}"
