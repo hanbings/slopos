@@ -408,9 +408,6 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     if mount.cache.invalidations != write_probe_initial_invalidations + 2 {
         device.fail("ext4 write probe cache invalidation count mismatch");
     }
-    descriptors
-        .close(write_fd)
-        .unwrap_or_else(|_| device.fail("VFS writable descriptor close failed"));
     crate::serial::serialln(format_args!(
         "SLOPOS-VFS: writable descriptor valid fd={write_fd} inode={} physical_block={physical_block} offset=123 bytes={} writes=2 flushes=2 cache_invalidations={} restored=true path=/usr/share/slopos/write-probe.bin",
         write_probe.inode.number,
@@ -470,10 +467,17 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         metadata_transaction.final_sequence
     ));
     let allocation_transaction = mount
-        .probe_block_allocation_transactions(&mut device, &journal, &write_probe)
+        .probe_block_allocation_transactions(
+            &mut device,
+            &journal,
+            &write_probe,
+            &mut descriptors,
+            write_fd,
+        )
         .await;
     crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: allocation journal transactions valid inode={} block={} bitmap_block={} group_descriptor_block={} inode_table_block={} size=4096/8192/4096 extent_blocks=1/2/1 checksums=superblock/group/bitmap/inode transactions=2 sequences={}/{} final_sequence={} test_sequence_rewound=true restored=true",
+        "SLOPOS-EXT4: fd append journal transactions valid fd={} inode={} block={} bitmap_block={} group_descriptor_block={} inode_table_block={} append_bytes=4096 size=4096/8192/4096 extent_blocks=1/2/1 checksums=superblock/group/bitmap/inode/data transactions=2 sequences={}/{} final_sequence={} test_sequence_rewound=true restored=true",
+        write_fd,
         write_probe.inode.number,
         allocation_transaction.allocated_block,
         allocation_transaction.bitmap_block,
@@ -483,6 +487,9 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         allocation_transaction.second_sequence,
         allocation_transaction.final_sequence
     ));
+    descriptors
+        .close(write_fd)
+        .unwrap_or_else(|_| device.fail("VFS writable descriptor close failed"));
     let create_transaction = mount
         .probe_file_creation_transactions(&mut device, &journal, write_probe.parent_inode)
         .await;
@@ -918,7 +925,7 @@ impl Ext4Mount {
             device.fail("allocation replay injection requires a clean journal");
         }
         let (blocks, layout) = self
-            .prepare_block_allocation_transaction(device, file)
+            .prepare_block_allocation_transaction(device, file, &ALLOCATION_PROBE_BLOCK_DATA)
             .await;
         let targets = layout.targets;
         let descriptor_block = journal
@@ -1801,9 +1808,24 @@ impl Ext4Mount {
         device: &mut BlockDevice,
         journal: &JournalProbe,
         file: &Ext4File,
+        descriptors: &mut FileDescriptorTable<8>,
+        fd: u32,
     ) -> AllocationJournalProbe {
+        descriptors
+            .seek(fd, file.inode.size)
+            .unwrap_or_else(|_| device.fail("allocation probe append seek failed"));
+        let append_window = descriptors
+            .append_window(fd, ALLOCATION_PROBE_BLOCK_DATA.len())
+            .unwrap_or_else(|_| device.fail("allocation probe append window failed"));
+        if append_window.node.filesystem_id != ROOT_FILESYSTEM_ID
+            || append_window.node.node_id != u64::from(file.inode.number)
+            || append_window.offset != file.inode.size
+            || append_window.length != BLOCK_SIZE
+        {
+            device.fail("allocation probe append descriptor mismatch");
+        }
         let (blocks, layout) = self
-            .prepare_block_allocation_transaction(device, file)
+            .prepare_block_allocation_transaction(device, file, &ALLOCATION_PROBE_BLOCK_DATA)
             .await;
         let targets = layout.targets;
         let group_descriptor_offset = layout.group_descriptor_offset;
@@ -1837,11 +1859,34 @@ impl Ext4Mount {
             directory_block: file.directory_block,
             followed_symlink: file.followed_symlink,
         };
-        let grown_data = self.read_file_block(device, &grown_file, 1).await;
-        if grown_data.len() != BLOCK_SIZE || grown_data.iter().any(|byte| *byte != b'G') {
-            device.fail("allocation probe allocated data readback mismatch");
+        descriptors
+            .set_size(fd, grown_file.inode.size)
+            .unwrap_or_else(|_| device.fail("allocation probe descriptor growth failed"));
+        descriptors
+            .advance(fd, append_window.length)
+            .unwrap_or_else(|_| device.fail("allocation probe append advance failed"));
+        descriptors
+            .seek(fd, file.inode.size)
+            .unwrap_or_else(|_| device.fail("allocation probe readback seek failed"));
+        let mut appended_data = [0u8; BLOCK_SIZE];
+        if read_descriptor(
+            self,
+            device,
+            descriptors,
+            fd,
+            &grown_file,
+            &mut appended_data,
+        )
+        .await
+            != BLOCK_SIZE
+            || appended_data != ALLOCATION_PROBE_BLOCK_DATA
+        {
+            device.fail("allocation probe fd append readback mismatch");
         }
 
+        descriptors
+            .seek(fd, file.inode.size)
+            .unwrap_or_else(|_| device.fail("allocation probe truncate seek failed"));
         let final_sequence = self
             .commit_multi_block_journal_transaction(
                 device,
@@ -1851,6 +1896,9 @@ impl Ext4Mount {
                 &blocks.original,
             )
             .await;
+        descriptors
+            .set_size(fd, file.inode.size)
+            .unwrap_or_else(|_| device.fail("allocation probe descriptor truncation failed"));
         self.group0 = GroupDescriptor::parse(
             &blocks.original.block(1)[group_descriptor_offset..group_descriptor_end],
             0,
@@ -1906,7 +1954,11 @@ impl Ext4Mount {
         &mut self,
         device: &mut BlockDevice,
         file: &Ext4File,
+        new_data: &[u8],
     ) -> (AllocationJournalScratch, AllocationLayout) {
+        if new_data.len() != BLOCK_SIZE {
+            device.fail("allocation probe data must fill one block");
+        }
         let group_index = self
             .superblock
             .inode_group(file.inode.number)
@@ -1998,10 +2050,7 @@ impl Ext4Mount {
             true,
         )
         .unwrap_or_else(|_| device.fail("allocation probe inode growth failed"));
-        blocks
-            .modified
-            .block_mut(4)
-            .copy_from_slice(&ALLOCATION_PROBE_BLOCK_DATA);
+        blocks.modified.block_mut(4).copy_from_slice(new_data);
 
         (
             blocks,
