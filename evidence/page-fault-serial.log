@@ -4,7 +4,7 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=130952
+SLOPOS-UEFI: kernel file loaded bytes=131624
 SLOPOS-UEFI: kernel mapped 0x4000000..0x4011000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: Boot Services exited descriptors=117
@@ -25,14 +25,18 @@ SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized timer_hz=100 lapic_id=0 i
 SLOPOS-DESKTOP: interactive compositor loop entered windows=3
 SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
 SLOPOS-ASYNC: executor entered tasks=3
-SLOPOS-VIRTIO: modern block queue ready size=8 capacity_sectors=262144
-SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT block_size=4096 blocks=32768 inodes=32768 features=0x103c/0x22c2/0x46b
-SLOPOS-EXT4: root directory valid group_inode_table=49 inode=2 extent_block=18 entries=5 etc_inode=13 lost_found_inode=11 metadata_checksums=group/inode/directory
+SLOPOS-VIRTIO: modern block queue ready size=8 capacity_sectors=524288
+SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT block_size=4096 blocks=65536 inodes=32 groups=2 features=0x103c/0x22c2/0x46b
+SLOPOS-EXT4: root directory valid group_inode_table=37 inode=2 extent_block=39 entries=5 etc_inode=13 lost_found_inode=11 metadata_checksums=group/inode/directory
 SLOPOS-EXT4: async path read valid release_inode=16 release_bytes=40 config_inode=15 config_bytes=76 paths=/etc/slopos-release,/etc/slopos/system.conf
-SLOPOS-EXT4: multiblock file valid inode=20 bytes=6144 logical_blocks=2 path=/usr/share/slopos/multiblock.bin
-SLOPOS-VIRTIO: async block sequence complete requests=29 interrupts=29 queue_interrupts=29
-SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=29/29
-SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=29/29
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: multiblock file valid inode=20 inode_group=1 bytes=6144 logical_blocks=2 path=/usr/share/slopos/multiblock.bin
+SLOPOS-VIRTIO: async block sequence complete requests=33 interrupts=33 queue_interrupts=33
+SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=33/33
+SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=33/33
 SLOPOS-EXCEPTION: injecting page fault at 0x40000000
-SLOPOS-EXCEPTION: vector=14 error=0x0 rip=0x4006955 cr2=0x40000000
+SLOPOS-EXCEPTION: vector=14 error=0x0 rip=0x4006ccb cr2=0x40000000
 SLOPOS-KERNEL: FATAL unhandled CPU exception
