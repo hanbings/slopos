@@ -818,8 +818,12 @@ impl Desktop {
         } else if !left {
             self.scrolling_view = false;
         }
-        if right && !right_was_down && event.modifiers.logo {
-            self.pointer_resize_pressed();
+        if right && !right_was_down {
+            if event.modifiers.logo {
+                self.pointer_resize_pressed();
+            } else {
+                animate |= self.pointer_right_pressed();
+            }
         } else if !right {
             self.resizing_column = false;
         }
@@ -883,7 +887,7 @@ impl Desktop {
                 .get(module)
                 .and_then(|config| config.on_click)
         {
-            return self.execute_bar_action(module, action);
+            return self.execute_bar_action(module, action, "left");
         }
         for index in 0..WINDOW_COUNT {
             let Some(window) = self.positioned_window(index) else {
@@ -913,6 +917,21 @@ impl Desktop {
             return false;
         }
         false
+    }
+
+    fn pointer_right_pressed(&mut self) -> bool {
+        let Some(module) = self.bar_module_at(self.pointer_x, self.pointer_y) else {
+            return false;
+        };
+        let Some(action) = self
+            .bar
+            .module_configs
+            .get(module)
+            .and_then(|config| config.on_click_right)
+        else {
+            return false;
+        };
+        self.execute_bar_action(module, action, "right")
     }
 
     fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {
@@ -1127,7 +1146,12 @@ impl Desktop {
         animate
     }
 
-    fn execute_bar_action(&mut self, module: &'static str, action: &'static str) -> bool {
+    fn execute_bar_action(
+        &mut self,
+        module: &'static str,
+        action: &'static str,
+        button: &'static str,
+    ) -> bool {
         let saved_command = self.command;
         let saved_length = self.command_length;
         self.command.fill(0);
@@ -1148,7 +1172,7 @@ impl Desktop {
         self.command = saved_command;
         self.command_length = saved_length;
         serialln(format_args!(
-            "SLOPOS-WAYBAR: module clicked name={module} button=left action={action} accepted={allowed} animate={animate}"
+            "SLOPOS-WAYBAR: module clicked name={module} button={button} action={action} accepted={allowed} animate={animate}"
         ));
         animate
     }

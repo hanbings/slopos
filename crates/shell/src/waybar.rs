@@ -62,6 +62,7 @@ pub struct BarModuleConfig<'a> {
     pub min_length: Option<u16>,
     pub max_length: Option<u16>,
     pub on_click: Option<&'a str>,
+    pub on_click_right: Option<&'a str>,
 }
 
 impl<'a> BarModuleConfig<'a> {
@@ -76,6 +77,7 @@ impl<'a> BarModuleConfig<'a> {
             min_length: None,
             max_length: None,
             on_click: None,
+            on_click_right: None,
         }
     }
 }
@@ -427,12 +429,12 @@ struct JsonParser<'a> {
 }
 
 impl<'a> JsonParser<'a> {
-    const POSITION: u8 = 1 << 0;
-    const HEIGHT: u8 = 1 << 1;
-    const SPACING: u8 = 1 << 2;
-    const LEFT: u8 = 1 << 3;
-    const CENTER: u8 = 1 << 4;
-    const RIGHT: u8 = 1 << 5;
+    const POSITION: u16 = 1 << 0;
+    const HEIGHT: u16 = 1 << 1;
+    const SPACING: u16 = 1 << 2;
+    const LEFT: u16 = 1 << 3;
+    const CENTER: u16 = 1 << 4;
+    const RIGHT: u16 = 1 << 5;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -444,7 +446,7 @@ impl<'a> JsonParser<'a> {
     fn parse(mut self) -> Result<WaybarConfig<'a>, BarConfigError> {
         self.expect(Token::LeftBrace)?;
         let mut config = WaybarConfig::default();
-        let mut fields = 0u8;
+        let mut fields = 0u16;
         loop {
             match self.next() {
                 Token::RightBrace => break,
@@ -540,7 +542,7 @@ impl<'a> JsonParser<'a> {
             return Ok(None);
         }
         let mut module = BarModuleConfig::empty(name);
-        let mut fields = 0u8;
+        let mut fields = 0u16;
         let mut supported = false;
         loop {
             match self.next() {
@@ -590,6 +592,11 @@ impl<'a> JsonParser<'a> {
                         "on-click" => {
                             mark_once(&mut fields, 1 << 7)?;
                             module.on_click = Some(self.module_action_value()?);
+                            supported = true;
+                        }
+                        "on-click-right" => {
+                            mark_once(&mut fields, 1 << 8)?;
+                            module.on_click_right = Some(self.module_action_value()?);
                             supported = true;
                         }
                         _ => self.skip_value()?,
@@ -727,7 +734,7 @@ impl<'a> JsonParser<'a> {
     }
 }
 
-fn mark_once(fields: &mut u8, field: u8) -> Result<(), BarConfigError> {
+fn mark_once(fields: &mut u16, field: u16) -> Result<(), BarConfigError> {
     if *fields & field != 0 {
         return Err(BarConfigError::DuplicateField);
     }
@@ -775,6 +782,7 @@ mod tests {
                     "min-length": 3,
                     "max-length": 12,
                     "on-click": "status",
+                    "on-click-right": "about",
                     "calendar": { "mode": "month" }
                 },
             }
@@ -805,6 +813,7 @@ mod tests {
         assert_eq!(clock.min_length, Some(3));
         assert_eq!(clock.max_length, Some(12));
         assert_eq!(clock.on_click, Some("status"));
+        assert_eq!(clock.on_click_right, Some("about"));
     }
 
     #[test]

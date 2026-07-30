@@ -11,6 +11,7 @@ debug_log="${repo_dir}/evidence/custom-config-uefi-debugcon.log"
 qemu_log="${repo_dir}/evidence/custom-config-qemu.log"
 workspace_screenshot="${repo_dir}/evidence/custom-config-workspace-click.ppm"
 action_screenshot="${repo_dir}/evidence/custom-config-on-click.ppm"
+right_action_screenshot="${repo_dir}/evidence/custom-config-on-click-right.ppm"
 runtime_dir="$(mktemp -d /tmp/slopos-custom-config.XXXXXX)"
 runtime_esp="${runtime_dir}/slopos-esp.img"
 runtime_root="${runtime_dir}/slopos-root.ext4"
@@ -59,6 +60,7 @@ sed \
     -e '/"modules-left":/,/]/ s/"niri\/workspaces"/"niri\/window"/' \
     -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
     -e '/"clock": {/a\        "on-click": "status",' \
+    -e '/"clock": {/a\        "on-click-right": "help",' \
     "${repo_dir}/assets/waybar-config.jsonc" >"${custom_waybar}"
 custom_bytes="$(wc -c <"${custom_waybar}")"
 if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
@@ -96,6 +98,10 @@ set +e
     echo "sendkey t"
     echo "sendkey ret"
     sleep 1
+    echo "mouse_button 2"
+    echo "mouse_button 0"
+    sleep 1
+    echo "screendump ${right_action_screenshot}"
     echo "quit"
 } | timeout 14s qemu-system-x86_64 \
     -machine q35,accel=tcg \
@@ -166,15 +172,22 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-WAYBAR: module clicked name=clock button=left action=status accepted=true animate=false" \
     "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: module clicked name=clock button=right action=help accepted=true animate=false" \
+    "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=ABOUT" "${serial_log}"
+grep -Fq "SLOPOS-TERMINAL: command=HELP" "${serial_log}"
 test -s "${workspace_screenshot}"
 test -s "${action_screenshot}"
+test -s "${right_action_screenshot}"
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${workspace_screenshot}" \
         >"${repo_dir}/evidence/custom-config-workspace-click.png"
     pnmtopng "${action_screenshot}" \
         >"${repo_dir}/evidence/custom-config-on-click.png"
+    pnmtopng "${right_action_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-on-click-right.png"
 fi
 
 set +e
