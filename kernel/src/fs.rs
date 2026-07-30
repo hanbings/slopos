@@ -52,9 +52,10 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     if let Some(recovery) = mount.recovery {
         if recovery.replayed {
             crate::serial::serialln(format_args!(
-                "SLOPOS-EXT4: journal recovery replayed sequence={} start={} target_block={} escaped={} home_readback=true next_sequence={} records_cleared=true recovery=false",
+                "SLOPOS-EXT4: journal recovery replayed sequence={} start={} tags={} first_target_block={} escaped={} home_readback=true next_sequence={} records_cleared=true recovery=false",
                 recovery.sequence,
                 recovery.start,
+                recovery.tag_count,
                 recovery.target_block,
                 recovery.escaped,
                 recovery.next_sequence
@@ -69,22 +70,19 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     #[cfg(feature = "journal-replay-injection")]
     if mount.recovery.is_none() {
         let file = mount.open_file(&mut device, &WRITE_PROBE_PATH).await;
-        let target_block = mount
-            .inode_physical_block(&mut device, &file.inode, 0)
-            .await
-            .unwrap_or_else(|| device.fail("journal replay injection target is sparse"));
         let journal = mount.probe_journal(&mut device).await;
-        mount
-            .inject_committed_journal_transaction(
-                &mut device,
-                &journal,
-                target_block,
-                &WRITE_PROBE_ORIGINAL_BLOCK,
-            )
+        let allocation = mount
+            .inject_committed_allocation_transaction(&mut device, &journal, &file)
             .await;
         crate::serial::serialln(format_args!(
-            "SLOPOS-EXT4: journal crash injected sequence={} start={} target_block={} old_home=J new_home=P crash_point=after_commit_before_home writes=6 flushes=5",
-            journal.superblock.sequence, journal.superblock.first_log_block, target_block
+            "SLOPOS-EXT4: allocation crash injected sequence={} start={} tags=5 targets={}/{}/{}/{}/{} old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5",
+            journal.superblock.sequence,
+            journal.superblock.first_log_block,
+            allocation.targets[0],
+            allocation.targets[1],
+            allocation.targets[2],
+            allocation.targets[3],
+            allocation.targets[4]
         ));
         pending::<()>().await;
         unreachable!();
@@ -663,6 +661,7 @@ impl Ext4Mount {
                 replayed: false,
                 sequence: journal.superblock.sequence,
                 start,
+                tag_count: 0,
                 target_block: 0,
                 escaped: false,
                 next_sequence: journal.superblock.sequence,
@@ -879,6 +878,7 @@ impl Ext4Mount {
             replayed: true,
             sequence: journal.superblock.sequence,
             start,
+            tag_count,
             target_block: u32::try_from(target_blocks[0])
                 .unwrap_or_else(|_| device.fail("JBD2 recovery target conversion failed")),
             escaped: escaped_tags[0],
@@ -887,85 +887,141 @@ impl Ext4Mount {
     }
 
     #[cfg(feature = "journal-replay-injection")]
-    async fn inject_committed_journal_transaction(
+    async fn inject_committed_allocation_transaction(
         &mut self,
         device: &mut BlockDevice,
         journal: &JournalProbe,
-        target_block: u64,
-        new_home: &[u8],
-    ) {
-        if journal.superblock.start != 0 || new_home.len() != BLOCK_SIZE {
-            device.fail("journal replay injection requires a clean single-block journal");
+        file: &Ext4File,
+    ) -> AllocationLayout {
+        if journal.superblock.start != 0 {
+            device.fail("allocation replay injection requires a clean journal");
         }
+        let (blocks, layout) = self
+            .prepare_block_allocation_transaction(device, file)
+            .await;
+        let targets = layout.targets;
         let descriptor_block = journal
             .physical_block
             .checked_add(u64::from(journal.superblock.first_log_block))
-            .unwrap_or_else(|| device.fail("journal replay injection descriptor overflow"));
-        let data_block = descriptor_block
-            .checked_add(1)
-            .unwrap_or_else(|| device.fail("journal replay injection data overflow"));
+            .unwrap_or_else(|| device.fail("allocation replay descriptor overflow"));
         let commit_block = descriptor_block
-            .checked_add(2)
-            .unwrap_or_else(|| device.fail("journal replay injection commit overflow"));
+            .checked_add(1 + ALLOCATION_TRANSACTION_BLOCKS as u64)
+            .unwrap_or_else(|| device.fail("allocation replay commit overflow"));
         let journal_end = journal
             .physical_block
             .checked_add(u64::from(journal.superblock.max_length))
-            .unwrap_or_else(|| device.fail("journal replay injection extent overflow"));
+            .unwrap_or_else(|| device.fail("allocation replay journal extent overflow"));
         if commit_block >= journal_end {
-            device.fail("journal replay injection exceeds journal extent");
+            device.fail("allocation replay injection exceeds journal extent");
+        }
+        for (index, target) in targets.iter().enumerate() {
+            if *target >= self.superblock.block_count
+                || (*target >= journal.physical_block && *target < journal_end)
+                || targets[..index].contains(target)
+            {
+                device.fail("allocation replay target is unsafe");
+            }
         }
 
-        let filesystem_sector = block_to_sector(device, &self.superblock, 0);
-        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
-        let target_sector = block_to_sector(device, &self.superblock, target_block);
-        let mut scratch = ActiveJournalScratch::new();
-        device.read(filesystem_sector, BLOCK_SIZE).await;
-        scratch
-            .state
-            .filesystem_block_mut()
-            .copy_from_slice(device.data(BLOCK_SIZE));
+        let clean_superblock = self.superblock;
+        let filesystem_sector = block_to_sector(device, &clean_superblock, 0);
+        let journal_sector = block_to_sector(device, &clean_superblock, journal.physical_block);
+        let mut scratch = MultiJournalScratch::<ALLOCATION_TRANSACTION_BLOCKS>::new();
         device.read(journal_sector, BLOCK_SIZE).await;
         scratch
             .state
             .journal_block_mut()
             .copy_from_slice(device.data(BLOCK_SIZE));
-        device.read(target_sector, BLOCK_SIZE).await;
-        if device.data(BLOCK_SIZE) != new_home {
-            device.fail("journal replay injection new home is not the expected original");
+        if JournalSuperblock::parse(scratch.state.journal_block()) != Ok(journal.superblock) {
+            device.fail("allocation replay journal superblock changed");
         }
-        for block in [descriptor_block, data_block, commit_block] {
+        for offset in 0..ALLOCATION_TRANSACTION_BLOCKS + 2 {
+            let block = descriptor_block
+                .checked_add(offset as u64)
+                .unwrap_or_else(|| device.fail("allocation replay record overflow"));
             device
-                .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
+                .read(
+                    block_to_sector(device, &clean_superblock, block),
+                    BLOCK_SIZE,
+                )
                 .await;
             if device.data(BLOCK_SIZE).iter().any(|byte| *byte != 0) {
-                device.fail("journal replay injection record block is not empty");
+                device.fail("allocation replay record block is not empty");
             }
         }
 
-        let target_block_u32 = u32::try_from(target_block)
-            .unwrap_or_else(|_| device.fail("journal replay injection target exceeds 32 bits"));
-        {
-            let (descriptor, data, commit) = scratch.records.buffers();
-            encode_single_block_journal_transaction(
-                descriptor,
-                data,
-                commit,
-                journal.superblock.sequence,
-                target_block_u32,
-                &self.superblock.uuid,
-                new_home,
-            )
-            .unwrap_or_else(|_| device.fail("journal replay injection encoding failed"));
+        for (index, target) in targets.iter().enumerate() {
+            device
+                .write(
+                    block_to_sector(device, &clean_superblock, *target),
+                    blocks.modified.block(index),
+                )
+                .await;
+        }
+        device.flush().await;
+        for (index, target) in targets.iter().enumerate() {
+            device
+                .read(
+                    block_to_sector(device, &clean_superblock, *target),
+                    BLOCK_SIZE,
+                )
+                .await;
+            if device.data(BLOCK_SIZE) != blocks.modified.block(index) {
+                device.fail("allocation replay old home readback mismatch");
+            }
         }
 
-        device.write(target_sector, &JOURNAL_PROBE_BLOCK).await;
-        device.flush().await;
+        self.superblock = Superblock::parse(
+            &blocks.modified.block(0)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+        )
+        .unwrap_or_else(|_| device.fail("allocation replay old superblock is invalid"));
+        scratch
+            .state
+            .filesystem_block_mut()
+            .copy_from_slice(blocks.modified.block(0));
         set_superblock_recovery(
             &mut scratch.state.filesystem_block_mut()
                 [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
             true,
         )
-        .unwrap_or_else(|_| device.fail("journal replay injection recovery update failed"));
+        .unwrap_or_else(|_| device.fail("allocation replay recovery update failed"));
+        scratch
+            .desired_superblock_mut()
+            .copy_from_slice(blocks.original.block(0));
+        set_superblock_recovery(
+            &mut scratch.desired_superblock_mut()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            true,
+        )
+        .unwrap_or_else(|_| device.fail("allocation replay desired superblock update failed"));
+
+        let mut target_blocks_u32 = [0u32; ALLOCATION_TRANSACTION_BLOCKS];
+        let mut escaped_tags = [false; ALLOCATION_TRANSACTION_BLOCKS];
+        for index in 0..ALLOCATION_TRANSACTION_BLOCKS {
+            target_blocks_u32[index] = u32::try_from(targets[index])
+                .unwrap_or_else(|_| device.fail("allocation replay target exceeds 32 bits"));
+            let desired_frame = if targets[index] == 0 {
+                scratch.desired_superblock_frame
+            } else {
+                blocks.original.frames[index]
+            };
+            escaped_tags[index] = encode_journal_data_block(
+                scratch_frame_bytes_mut(scratch.data_frames[index]),
+                scratch_frame_bytes(desired_frame),
+            )
+            .unwrap_or_else(|_| device.fail("allocation replay data encoding failed"));
+        }
+        encode_journal_descriptor_block(
+            scratch.descriptor_mut(),
+            journal.superblock.sequence,
+            &target_blocks_u32,
+            &escaped_tags,
+            &self.superblock.uuid,
+        )
+        .unwrap_or_else(|_| device.fail("allocation replay descriptor encoding failed"));
+        encode_journal_commit_block(scratch.commit_mut(), journal.superblock.sequence)
+            .unwrap_or_else(|_| device.fail("allocation replay commit encoding failed"));
+
         device
             .write(filesystem_sector, scratch.state.filesystem_block())
             .await;
@@ -975,7 +1031,7 @@ impl Ext4Mount {
             journal.superblock.sequence,
             journal.superblock.first_log_block,
         )
-        .unwrap_or_else(|_| device.fail("journal replay injection state update failed"));
+        .unwrap_or_else(|_| device.fail("allocation replay state update failed"));
         device
             .write(journal_sector, scratch.state.journal_block())
             .await;
@@ -983,20 +1039,25 @@ impl Ext4Mount {
         device
             .write(
                 block_to_sector(device, &self.superblock, descriptor_block),
-                scratch.records.descriptor(),
+                scratch.descriptor(),
             )
             .await;
-        device
-            .write(
-                block_to_sector(device, &self.superblock, data_block),
-                scratch.records.data(),
-            )
-            .await;
+        for index in 0..ALLOCATION_TRANSACTION_BLOCKS {
+            let data_block = descriptor_block
+                .checked_add(1 + index as u64)
+                .unwrap_or_else(|| device.fail("allocation replay data block overflow"));
+            device
+                .write(
+                    block_to_sector(device, &self.superblock, data_block),
+                    scratch.data(index),
+                )
+                .await;
+        }
         device.flush().await;
         device
             .write(
                 block_to_sector(device, &self.superblock, commit_block),
-                scratch.records.commit(),
+                scratch.commit(),
             )
             .await;
         device.flush().await;
@@ -1007,33 +1068,52 @@ impl Ext4Mount {
                 &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
             ) != Err(ParseError::DirtyFilesystem)
         {
-            device.fail("journal replay injection dirty state readback mismatch");
+            device.fail("allocation replay dirty state readback mismatch");
         }
         device.read(journal_sector, BLOCK_SIZE).await;
         let active = JournalSuperblock::parse(device.data(BLOCK_SIZE))
-            .unwrap_or_else(|_| device.fail("journal replay injection state readback failed"));
+            .unwrap_or_else(|_| device.fail("allocation replay state readback failed"));
         if device.data(BLOCK_SIZE) != scratch.state.journal_block()
             || active.sequence != journal.superblock.sequence
             || active.start != journal.superblock.first_log_block
         {
-            device.fail("journal replay injection active state mismatch");
+            device.fail("allocation replay active state mismatch");
         }
-        for (block, expected) in [
-            (descriptor_block, scratch.records.descriptor()),
-            (data_block, scratch.records.data()),
-            (commit_block, scratch.records.commit()),
-        ] {
+        for offset in 0..ALLOCATION_TRANSACTION_BLOCKS + 2 {
+            let block = descriptor_block
+                .checked_add(offset as u64)
+                .unwrap_or_else(|| device.fail("allocation replay readback overflow"));
+            let expected = if offset == 0 {
+                scratch.descriptor()
+            } else if offset == ALLOCATION_TRANSACTION_BLOCKS + 1 {
+                scratch.commit()
+            } else {
+                scratch.data(offset - 1)
+            };
             device
                 .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
                 .await;
             if device.data(BLOCK_SIZE) != expected {
-                device.fail("journal replay injection record readback mismatch");
+                device.fail("allocation replay record readback mismatch");
             }
         }
-        device.read(target_sector, BLOCK_SIZE).await;
-        if device.data(BLOCK_SIZE).iter().any(|byte| *byte != b'J') {
-            device.fail("journal replay injection old home readback mismatch");
+        for (index, target) in targets.iter().enumerate() {
+            let expected = if *target == 0 {
+                scratch.state.filesystem_block()
+            } else {
+                blocks.modified.block(index)
+            };
+            device
+                .read(
+                    block_to_sector(device, &self.superblock, *target),
+                    BLOCK_SIZE,
+                )
+                .await;
+            if device.data(BLOCK_SIZE) != expected {
+                device.fail("allocation replay active old home changed");
+            }
         }
+        layout
     }
 
     async fn probe_root(&mut self, device: &mut BlockDevice) -> RootProbe {
@@ -1701,6 +1781,111 @@ impl Ext4Mount {
         journal: &JournalProbe,
         file: &Ext4File,
     ) -> AllocationJournalProbe {
+        let (blocks, layout) = self
+            .prepare_block_allocation_transaction(device, file)
+            .await;
+        let targets = layout.targets;
+        let group_descriptor_offset = layout.group_descriptor_offset;
+        let group_descriptor_end = layout.group_descriptor_end;
+
+        let first_sequence = journal.superblock.sequence;
+        let second_sequence = self
+            .commit_multi_block_journal_transaction(
+                device,
+                journal,
+                first_sequence,
+                &targets,
+                &blocks.modified,
+            )
+            .await;
+        self.group0 = GroupDescriptor::parse(
+            &blocks.modified.block(1)[group_descriptor_offset..group_descriptor_end],
+            0,
+            &self.superblock,
+        )
+        .unwrap_or_else(|_| device.fail("allocation probe updated group descriptor is invalid"));
+        let grown_inode = self.read_inode(device, file.inode.number).await;
+        if grown_inode.size != file.inode.size + u64::from(self.superblock.block_size)
+            || grown_inode.block_count_512 != file.inode.block_count_512 + 8
+        {
+            device.fail("allocation probe grown inode readback mismatch");
+        }
+        let grown_file = Ext4File {
+            inode: grown_inode,
+            parent_inode: file.parent_inode,
+            directory_block: file.directory_block,
+            followed_symlink: file.followed_symlink,
+        };
+        let grown_data = self.read_file_block(device, &grown_file, 1).await;
+        if grown_data.len() != BLOCK_SIZE || grown_data.iter().any(|byte| *byte != b'G') {
+            device.fail("allocation probe allocated data readback mismatch");
+        }
+
+        let final_sequence = self
+            .commit_multi_block_journal_transaction(
+                device,
+                journal,
+                second_sequence,
+                &targets,
+                &blocks.original,
+            )
+            .await;
+        self.group0 = GroupDescriptor::parse(
+            &blocks.original.block(1)[group_descriptor_offset..group_descriptor_end],
+            0,
+            &self.superblock,
+        )
+        .unwrap_or_else(|_| device.fail("allocation probe restored group descriptor is invalid"));
+        let restored_inode = self.read_inode(device, file.inode.number).await;
+        if restored_inode != file.inode {
+            device.fail("allocation probe inode restoration failed");
+        }
+        device
+            .read(
+                block_to_sector(device, &self.superblock, ALLOCATION_PROBE_BLOCK),
+                BLOCK_SIZE,
+            )
+            .await;
+        if device.data(BLOCK_SIZE) != blocks.original.block(4) {
+            device.fail("allocation probe data block restoration failed");
+        }
+
+        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
+        let mut rewind = JournalStateScratch::new();
+        device.read(journal_sector, BLOCK_SIZE).await;
+        rewind
+            .journal_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        let checkpointed = JournalSuperblock::parse(rewind.journal_block())
+            .unwrap_or_else(|_| device.fail("allocation probe journal state is invalid"));
+        if checkpointed.sequence != final_sequence || checkpointed.start != 0 {
+            device.fail("allocation probe journal final sequence mismatch");
+        }
+        set_journal_superblock_state(rewind.journal_block_mut(), first_sequence, 0)
+            .unwrap_or_else(|_| device.fail("allocation probe journal rewind failed"));
+        device.write(journal_sector, rewind.journal_block()).await;
+        device.flush().await;
+        device.read(journal_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != rewind.journal_block() {
+            device.fail("allocation probe journal rewind readback mismatch");
+        }
+
+        AllocationJournalProbe {
+            allocated_block: ALLOCATION_PROBE_BLOCK,
+            bitmap_block: targets[2],
+            group_descriptor_block: targets[1],
+            inode_table_block: targets[3],
+            first_sequence,
+            second_sequence,
+            final_sequence,
+        }
+    }
+
+    async fn prepare_block_allocation_transaction(
+        &mut self,
+        device: &mut BlockDevice,
+        file: &Ext4File,
+    ) -> (AllocationJournalScratch, AllocationLayout) {
         let group_index = self
             .superblock
             .inode_group(file.inode.number)
@@ -1797,97 +1982,14 @@ impl Ext4Mount {
             .block_mut(4)
             .copy_from_slice(&ALLOCATION_PROBE_BLOCK_DATA);
 
-        let first_sequence = journal.superblock.sequence;
-        let second_sequence = self
-            .commit_multi_block_journal_transaction(
-                device,
-                journal,
-                first_sequence,
-                &targets,
-                &blocks.modified,
-            )
-            .await;
-        self.group0 = GroupDescriptor::parse(
-            &blocks.modified.block(1)[group_descriptor_offset..group_descriptor_end],
-            0,
-            &self.superblock,
+        (
+            blocks,
+            AllocationLayout {
+                targets,
+                group_descriptor_offset,
+                group_descriptor_end,
+            },
         )
-        .unwrap_or_else(|_| device.fail("allocation probe updated group descriptor is invalid"));
-        let grown_inode = self.read_inode(device, file.inode.number).await;
-        if grown_inode.size != file.inode.size + u64::from(self.superblock.block_size)
-            || grown_inode.block_count_512 != file.inode.block_count_512 + 8
-        {
-            device.fail("allocation probe grown inode readback mismatch");
-        }
-        let grown_file = Ext4File {
-            inode: grown_inode,
-            parent_inode: file.parent_inode,
-            directory_block: file.directory_block,
-            followed_symlink: file.followed_symlink,
-        };
-        let grown_data = self.read_file_block(device, &grown_file, 1).await;
-        if grown_data.len() != BLOCK_SIZE || grown_data.iter().any(|byte| *byte != b'G') {
-            device.fail("allocation probe allocated data readback mismatch");
-        }
-
-        let final_sequence = self
-            .commit_multi_block_journal_transaction(
-                device,
-                journal,
-                second_sequence,
-                &targets,
-                &blocks.original,
-            )
-            .await;
-        self.group0 = GroupDescriptor::parse(
-            &blocks.original.block(1)[group_descriptor_offset..group_descriptor_end],
-            0,
-            &self.superblock,
-        )
-        .unwrap_or_else(|_| device.fail("allocation probe restored group descriptor is invalid"));
-        let restored_inode = self.read_inode(device, file.inode.number).await;
-        if restored_inode != file.inode {
-            device.fail("allocation probe inode restoration failed");
-        }
-        device
-            .read(
-                block_to_sector(device, &self.superblock, ALLOCATION_PROBE_BLOCK),
-                BLOCK_SIZE,
-            )
-            .await;
-        if device.data(BLOCK_SIZE) != blocks.original.block(4) {
-            device.fail("allocation probe data block restoration failed");
-        }
-
-        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
-        let mut rewind = JournalStateScratch::new();
-        device.read(journal_sector, BLOCK_SIZE).await;
-        rewind
-            .journal_block_mut()
-            .copy_from_slice(device.data(BLOCK_SIZE));
-        let checkpointed = JournalSuperblock::parse(rewind.journal_block())
-            .unwrap_or_else(|_| device.fail("allocation probe journal state is invalid"));
-        if checkpointed.sequence != final_sequence || checkpointed.start != 0 {
-            device.fail("allocation probe journal final sequence mismatch");
-        }
-        set_journal_superblock_state(rewind.journal_block_mut(), first_sequence, 0)
-            .unwrap_or_else(|_| device.fail("allocation probe journal rewind failed"));
-        device.write(journal_sector, rewind.journal_block()).await;
-        device.flush().await;
-        device.read(journal_sector, BLOCK_SIZE).await;
-        if device.data(BLOCK_SIZE) != rewind.journal_block() {
-            device.fail("allocation probe journal rewind readback mismatch");
-        }
-
-        AllocationJournalProbe {
-            allocated_block: ALLOCATION_PROBE_BLOCK,
-            bitmap_block: self.group0.block_bitmap_block,
-            group_descriptor_block: group_descriptor_location.block,
-            inode_table_block: inode_location.block,
-            first_sequence,
-            second_sequence,
-            final_sequence,
-        }
     }
 
     async fn commit_multi_block_journal_transaction<const N: usize>(
@@ -2739,6 +2841,7 @@ struct JournalRecovery {
     replayed: bool,
     sequence: u32,
     start: u32,
+    tag_count: usize,
     target_block: u32,
     escaped: bool,
     next_sequence: u32,
@@ -2765,6 +2868,13 @@ struct AllocationJournalProbe {
     first_sequence: u32,
     second_sequence: u32,
     final_sequence: u32,
+}
+
+#[derive(Clone, Copy)]
+struct AllocationLayout {
+    targets: [u64; ALLOCATION_TRANSACTION_BLOCKS],
+    group_descriptor_offset: usize,
+    group_descriptor_end: usize,
 }
 
 struct ActiveJournalScratch {

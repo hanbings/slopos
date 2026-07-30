@@ -15,12 +15,17 @@ injection_qemu="${repo_dir}/evidence/journal-injection-qemu.log"
 replay_serial="${repo_dir}/evidence/journal-replay-serial.log"
 replay_debug="${repo_dir}/evidence/journal-replay-uefi-debugcon.log"
 replay_qemu="${repo_dir}/evidence/journal-replay-qemu.log"
+home_snapshot="${repo_dir}/target/journal-replay-homes.bin"
+home_blocks=(0 1 33 38 99)
 
 restore_clean_artifacts() {
     "${cargo_bin}" build --locked --release \
         -p slopos-kernel --target x86_64-unknown-none >/dev/null
     "${repo_dir}/scripts/make-rootfs.sh" >/dev/null
     "${repo_dir}/scripts/make-image.sh" >/dev/null
+    if [[ -e "${home_snapshot}" ]]; then
+        unlink "${home_snapshot}"
+    fi
 }
 trap restore_clean_artifacts EXIT
 
@@ -46,6 +51,9 @@ mkdir -p "${repo_dir}/evidence"
     -p slopos-boot --target x86_64-unknown-uefi
 "${repo_dir}/scripts/make-rootfs.sh"
 "${repo_dir}/scripts/make-image.sh"
+for block in "${home_blocks[@]}"; do
+    dd if="${root_image}" bs=4096 skip="${block}" count=1 status=none
+done >"${home_snapshot}"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "${injection_vars}"
 
 set +e
@@ -70,10 +78,18 @@ if [[ ${injection_status} -ne 0 && ${injection_status} -ne 124 ]]; then
     exit "${injection_status}"
 fi
 grep -Fq \
-    "SLOPOS-EXT4: journal crash injected sequence=1 start=1 target_block=98 old_home=J new_home=P crash_point=after_commit_before_home writes=6 flushes=5" \
+    "SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/99 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5" \
     "${injection_serial}"
 grep -Fq "needs_recovery" <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-block_is_byte 98 74
+grep -Eq "^Free blocks:[[:space:]]+61310$" \
+    <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
+grep -Fq "Block 99 marked in use" \
+    <(/usr/sbin/debugfs -R "testb 99" "${root_image}" 2>/dev/null)
+grep -Fq "Size: 8192" \
+    <(/usr/sbin/debugfs -R "stat <25>" "${root_image}" 2>/dev/null)
+grep -Fq "Blockcount: 16" \
+    <(/usr/sbin/debugfs -R "stat <25>" "${root_image}" 2>/dev/null)
+block_is_byte 99 71
 
 "${cargo_bin}" build --locked --release \
     -p slopos-kernel --target x86_64-unknown-none
@@ -102,13 +118,13 @@ if [[ ${replay_status} -ne 0 && ${replay_status} -ne 124 ]]; then
     exit "${replay_status}"
 fi
 grep -Fq \
-    "SLOPOS-EXT4: journal recovery replayed sequence=1 start=1 target_block=98 escaped=false home_readback=true next_sequence=2 records_cleared=true recovery=false" \
+    "SLOPOS-EXT4: journal recovery replayed sequence=1 start=1 tags=5 first_target_block=0 escaped=false home_readback=true next_sequence=2 records_cleared=true recovery=false" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-EXT4: journal superblock valid inode=8 physical_block=32801 blocks=4096 first=1 sequence=2 start=0" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-VIRTIO: bounded block sequence complete requests=330 max_in_flight=2 interrupts=329 queue_interrupts=329" \
+    "SLOPOS-VIRTIO: bounded block sequence complete requests=348 max_in_flight=2 interrupts=347 queue_interrupts=347" \
     "${replay_serial}"
 grep -Fq "SLOPOS-DESKTOP: interactive compositor loop entered windows=3" "${replay_serial}"
 if grep -Fq "FATAL" "${replay_serial}"; then
@@ -119,7 +135,22 @@ if /usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null | grep -Fq "needs_recovery"
     echo "journal replay did not clear the ext4 recovery flag" >&2
     exit 1
 fi
-block_is_byte 98 80
+grep -Eq "^Free blocks:[[:space:]]+61311$" \
+    <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
+grep -Fq "Block 99 not in use" \
+    <(/usr/sbin/debugfs -R "testb 99" "${root_image}" 2>/dev/null)
+grep -Fq "Size: 4096" \
+    <(/usr/sbin/debugfs -R "stat <25>" "${root_image}" 2>/dev/null)
+grep -Fq "Blockcount: 8" \
+    <(/usr/sbin/debugfs -R "stat <25>" "${root_image}" 2>/dev/null)
+if ! cmp --silent "${home_snapshot}" <(
+    for block in "${home_blocks[@]}"; do
+        dd if="${root_image}" bs=4096 skip="${block}" count=1 status=none
+    done
+); then
+    echo "journal replay did not restore every allocation home block" >&2
+    exit 1
+fi
 /usr/sbin/e2fsck -fn "${root_image}"
 
 sed -i 's/\r$//' \
