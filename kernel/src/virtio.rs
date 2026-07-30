@@ -7,7 +7,9 @@ use core::pin::Pin;
 use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering, fence};
 use core::task::{Context, Poll};
-use slopos_ext4::{SUPERBLOCK_SIZE, Superblock};
+use slopos_ext4::{
+    DirectoryBlock, GroupDescriptor, Inode, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
+};
 use slopos_pci::{Device, VirtioRegion};
 use slopos_virtio::{
     BLOCK_REQUEST_IN, BlockRequestHeader, Descriptor, block_read_descriptors, choose_queue_size,
@@ -36,6 +38,8 @@ const COMMON_QUEUE_DEVICE: usize = 48;
 const BLOCK_STATUS_OK: u8 = 0;
 const SUPERBLOCK_SECTOR: u64 = 2;
 const QUEUE_LIMIT: u16 = 8;
+const SECTOR_SIZE: usize = 512;
+const DATA_PAGE_SIZE: usize = 4096;
 
 static ISR_BASE: AtomicU64 = AtomicU64::new(0);
 static INTERRUPT_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -43,12 +47,15 @@ static QUEUE_INTERRUPT_COUNT: AtomicU64 = AtomicU64::new(0);
 
 pub struct BlockDevice {
     common_base: usize,
+    descriptor_page: usize,
     available_page: usize,
     used_page: usize,
-    request_page: usize,
+    control_page: usize,
+    data_page: usize,
     notify_address: usize,
     queue_size: u16,
     capacity_sectors: u64,
+    available_index: u16,
 }
 
 pub fn initialize_block(
@@ -114,7 +121,8 @@ pub fn initialize_block(
     let descriptor_page = allocate_zeroed_frame();
     let available_page = allocate_zeroed_frame();
     let used_page = allocate_zeroed_frame();
-    let request_page = allocate_zeroed_frame();
+    let control_page = allocate_zeroed_frame();
+    let data_page = allocate_zeroed_frame();
     write_u64(common_base, COMMON_QUEUE_DESCRIPTOR, descriptor_page as u64);
     write_u64(common_base, COMMON_QUEUE_DRIVER, available_page as u64);
     write_u64(common_base, COMMON_QUEUE_DEVICE, used_page as u64);
@@ -138,38 +146,11 @@ pub fn initialize_block(
         fail(common_base, "virtio block capacity is zero");
     }
 
-    // SAFETY: all queue/request pages are exclusive, zeroed physical frames
+    // SAFETY: all queue pages are exclusive, zeroed physical frames
     // identity-mapped in the current address space and remain live forever.
     unsafe {
-        let request_header = request_page as *mut BlockRequestHeader;
-        ptr::write_volatile(
-            request_header,
-            BlockRequestHeader {
-                request_type: BLOCK_REQUEST_IN,
-                reserved: 0,
-                sector: SUPERBLOCK_SECTOR,
-            },
-        );
-        let data = (request_page + size_of::<BlockRequestHeader>()) as *mut u8;
-        ptr::write_bytes(data, 0, SUPERBLOCK_SIZE);
-        let status = data.add(SUPERBLOCK_SIZE);
-        ptr::write_volatile(status, 0xff);
-
-        let descriptors = descriptor_page as *mut Descriptor;
-        let chain = block_read_descriptors(
-            request_page as u64,
-            size_of::<BlockRequestHeader>() as u32,
-            data as u64,
-            SUPERBLOCK_SIZE as u32,
-            status as u64,
-        );
-        for (index, descriptor) in chain.into_iter().enumerate() {
-            ptr::write_volatile(descriptors.add(index), descriptor);
-        }
-
         let available = available_page as *mut u16;
         ptr::write_volatile(available, 0);
-        ptr::write_volatile(available.add(2), 0);
         let notify_offset = queue_notify_offset
             .checked_mul(u64::from(notify.notify_multiplier))
             .unwrap_or_else(|| fail(common_base, "virtio notify offset overflow"));
@@ -179,29 +160,17 @@ pub fn initialize_block(
         let notify_address = (notify.base + notify_offset) as usize;
         BlockDevice {
             common_base,
+            descriptor_page,
             available_page,
             used_page,
-            request_page,
+            control_page,
+            data_page,
             notify_address,
             queue_size,
             capacity_sectors,
+            available_index: 0,
         }
     }
-}
-
-pub fn submit(device: &BlockDevice) {
-    // SAFETY: initialize_block created this exclusive available ring and
-    // validated the mapped queue-notify address. The request is submitted once.
-    unsafe {
-        fence(Ordering::Release);
-        ptr::write_volatile((device.available_page + 2) as *mut u16, 1);
-        fence(Ordering::SeqCst);
-        ptr::write_volatile(device.notify_address as *mut u16, 0);
-    }
-    crate::serial::serialln(format_args!(
-        "SLOPOS-VIRTIO: modern block request submitted queue={} capacity_sectors={}",
-        device.queue_size, device.capacity_sectors
-    ));
 }
 
 pub fn interrupt_top_half() {
@@ -226,31 +195,22 @@ pub fn interrupt_counts() -> (u64, u64) {
     )
 }
 
-pub async fn completion_task(device: BlockDevice) -> ! {
-    Completion { device: &device }.await;
-    fence(Ordering::Acquire);
-    let data = (device.request_page + size_of::<BlockRequestHeader>()) as *const u8;
-    // SAFETY: completion observed the used-ring update for this live request
-    // page, so device writes to data/status are now visible.
-    let bytes = unsafe {
-        let status = data.add(SUPERBLOCK_SIZE);
-        if ptr::read_volatile(status) != BLOCK_STATUS_OK {
-            fail(device.common_base, "virtio block request returned an error");
-        }
-        core::slice::from_raw_parts(data, SUPERBLOCK_SIZE)
-    };
-    let superblock = Superblock::parse(bytes)
+pub async fn completion_task(mut device: BlockDevice) -> ! {
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VIRTIO: modern block queue ready size={} capacity_sectors={}",
+        device.queue_size, device.capacity_sectors
+    ));
+    device.read(SUPERBLOCK_SECTOR, SUPERBLOCK_SIZE).await;
+    let superblock = Superblock::parse(device.data(SUPERBLOCK_SIZE))
         .unwrap_or_else(|_| fail(device.common_base, "ext4 superblock validation failed"));
     let volume_name = core::str::from_utf8(superblock.volume_name())
         .unwrap_or_else(|_| fail(device.common_base, "ext4 volume label is not UTF-8"));
-    crate::serial::serialln(format_args!(
-        "SLOPOS-VIRTIO: async block completion queue={} capacity_sectors={} sector=2 bytes={} interrupts={} queue_interrupts={}",
-        device.queue_size,
-        device.capacity_sectors,
-        SUPERBLOCK_SIZE,
-        INTERRUPT_COUNT.load(Ordering::Acquire),
-        QUEUE_INTERRUPT_COUNT.load(Ordering::Acquire)
-    ));
+    if superblock.block_size as usize != DATA_PAGE_SIZE {
+        fail(
+            device.common_base,
+            "ext4 probe requires a 4096-byte block size",
+        );
+    }
     crate::serial::serialln(format_args!(
         "SLOPOS-EXT4: superblock valid label={volume_name} block_size={} blocks={} inodes={} features={:#x}/{:#x}/{:#x}",
         superblock.block_size,
@@ -260,26 +220,178 @@ pub async fn completion_task(device: BlockDevice) -> ! {
         superblock.feature_incompat,
         superblock.feature_read_only_compat
     ));
+
+    let descriptor_block = superblock.group_descriptor_block();
+    let descriptor_sector = block_to_sector(&device, &superblock, descriptor_block);
+    device.read(descriptor_sector, DATA_PAGE_SIZE).await;
+    let group =
+        GroupDescriptor::parse(device.data(DATA_PAGE_SIZE), 0, &superblock).unwrap_or_else(|_| {
+            fail(
+                device.common_base,
+                "ext4 group descriptor validation failed",
+            )
+        });
+
+    let root_location = superblock
+        .inode_location(ROOT_INODE, &group)
+        .unwrap_or_else(|_| fail(device.common_base, "ext4 root inode location is invalid"));
+    let inode_sector = block_to_sector(&device, &superblock, root_location.block);
+    device.read(inode_sector, DATA_PAGE_SIZE).await;
+    let inode_offset = root_location.offset as usize;
+    let inode_end = inode_offset + usize::from(superblock.inode_size);
+    if inode_end > DATA_PAGE_SIZE {
+        fail(device.common_base, "ext4 root inode crosses the read block");
+    }
+    let root_inode = Inode::parse(
+        &device.data(DATA_PAGE_SIZE)[inode_offset..inode_end],
+        ROOT_INODE,
+        &superblock,
+    )
+    .unwrap_or_else(|_| fail(device.common_base, "ext4 root inode validation failed"));
+    let root_extent = root_inode
+        .first_extent()
+        .unwrap_or_else(|_| fail(device.common_base, "ext4 root extent is unsupported"));
+    if !root_inode.is_directory()
+        || root_extent.logical_block != 0
+        || root_extent.unwritten
+        || root_extent.physical_block >= superblock.block_count
+    {
+        fail(device.common_base, "ext4 root directory extent is invalid");
+    }
+
+    let directory_sector = block_to_sector(&device, &superblock, root_extent.physical_block);
+    device.read(directory_sector, DATA_PAGE_SIZE).await;
+    let directory = DirectoryBlock::parse(device.data(DATA_PAGE_SIZE), &root_inode, &superblock)
+        .unwrap_or_else(|_| fail(device.common_base, "ext4 root directory validation failed"));
+    let etc = directory
+        .find(b"etc")
+        .unwrap_or_else(|| fail(device.common_base, "ext4 root directory is missing etc"));
+    let lost_and_found = directory.find(b"lost+found").unwrap_or_else(|| {
+        fail(
+            device.common_base,
+            "ext4 root directory is missing lost+found",
+        )
+    });
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: root directory valid group_inode_table={} inode={} extent_block={} entries={} etc_inode={} lost_found_inode={} metadata_checksums=group/inode/directory",
+        group.inode_table_block,
+        ROOT_INODE,
+        root_extent.physical_block,
+        directory.entry_count(),
+        etc.inode,
+        lost_and_found.inode
+    ));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VIRTIO: async block sequence complete requests={} interrupts={} queue_interrupts={}",
+        device.available_index,
+        INTERRUPT_COUNT.load(Ordering::Acquire),
+        QUEUE_INTERRUPT_COUNT.load(Ordering::Acquire)
+    ));
     pending::<()>().await;
     unreachable!()
 }
 
-struct Completion<'a> {
-    device: &'a BlockDevice,
+impl BlockDevice {
+    async fn read(&mut self, sector: u64, byte_count: usize) {
+        if byte_count == 0
+            || byte_count > DATA_PAGE_SIZE
+            || byte_count % SECTOR_SIZE != 0
+            || sector
+                .checked_add((byte_count / SECTOR_SIZE) as u64)
+                .is_none_or(|end| end > self.capacity_sectors)
+        {
+            fail(
+                self.common_base,
+                "virtio block read is outside device bounds",
+            );
+        }
+        let expected_used_index = self.available_index.wrapping_add(1);
+        // SAFETY: a previous request completed before this reusable descriptor
+        // chain and its exclusive control/data pages are rewritten.
+        unsafe {
+            ptr::write_volatile(
+                self.control_page as *mut BlockRequestHeader,
+                BlockRequestHeader {
+                    request_type: BLOCK_REQUEST_IN,
+                    reserved: 0,
+                    sector,
+                },
+            );
+            ptr::write_bytes(self.data_page as *mut u8, 0, byte_count);
+            let status = self.control_page + size_of::<BlockRequestHeader>();
+            ptr::write_volatile(status as *mut u8, 0xff);
+            let chain = block_read_descriptors(
+                self.control_page as u64,
+                size_of::<BlockRequestHeader>() as u32,
+                self.data_page as u64,
+                byte_count as u32,
+                status as u64,
+            );
+            let descriptors = self.descriptor_page as *mut Descriptor;
+            for (index, descriptor) in chain.into_iter().enumerate() {
+                ptr::write_volatile(descriptors.add(index), descriptor);
+            }
+            let ring_slot = usize::from(self.available_index % self.queue_size);
+            ptr::write_volatile(
+                (self.available_page + 4 + ring_slot * size_of::<u16>()) as *mut u16,
+                0,
+            );
+            fence(Ordering::Release);
+            ptr::write_volatile((self.available_page + 2) as *mut u16, expected_used_index);
+            self.available_index = expected_used_index;
+            fence(Ordering::SeqCst);
+            ptr::write_volatile(self.notify_address as *mut u16, 0);
+        }
+        Completion {
+            used_page: self.used_page,
+            expected_used_index,
+        }
+        .await;
+        fence(Ordering::Acquire);
+        // SAFETY: the used index for this chain is visible, so the device has
+        // completed its write to the one-byte status field.
+        if unsafe {
+            ptr::read_volatile((self.control_page + size_of::<BlockRequestHeader>()) as *const u8)
+        } != BLOCK_STATUS_OK
+        {
+            fail(self.common_base, "virtio block request returned an error");
+        }
+    }
+
+    fn data(&self, byte_count: usize) -> &[u8] {
+        // SAFETY: data_page is a permanently live DMA frame and callers only
+        // request the completed prefix, bounded by DATA_PAGE_SIZE.
+        unsafe { core::slice::from_raw_parts(self.data_page as *const u8, byte_count) }
+    }
 }
 
-impl Future for Completion<'_> {
+struct Completion {
+    used_page: usize,
+    expected_used_index: u16,
+}
+
+impl Future for Completion {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
         // SAFETY: used_page is a live, exclusive split used-ring frame.
-        let used_index = unsafe { ptr::read_volatile((self.device.used_page + 2) as *const u16) };
-        if used_index == 1 && QUEUE_INTERRUPT_COUNT.load(Ordering::Acquire) != 0 {
+        let used_index = unsafe { ptr::read_volatile((self.used_page + 2) as *const u16) };
+        if used_index == self.expected_used_index {
             Poll::Ready(())
         } else {
             Poll::Pending
         }
     }
+}
+
+fn block_to_sector(device: &BlockDevice, superblock: &Superblock, block: u64) -> u64 {
+    let byte_offset = block
+        .checked_mul(u64::from(superblock.block_size))
+        .unwrap_or_else(|| fail(device.common_base, "ext4 block offset overflow"));
+    if byte_offset % SECTOR_SIZE as u64 != 0 {
+        fail(device.common_base, "ext4 block is not sector aligned");
+    }
+    byte_offset / SECTOR_SIZE as u64
 }
 
 fn allocate_zeroed_frame() -> usize {

@@ -251,7 +251,6 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         "SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready"
     ));
 
-    virtio::submit(&block_device);
     executor::run(
         desktop.run(&mut framebuffer, input),
         timer::diagnostics_task(),
