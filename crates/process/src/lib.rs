@@ -331,6 +331,21 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
             })
     }
 
+    pub fn child_count(&self, parent: ProcessId) -> usize {
+        self.slots
+            .iter()
+            .filter(|slot| slot.state.is_some() && slot.parent == Some(parent))
+            .count()
+    }
+
+    pub fn first_exited_child(&self, parent: ProcessId) -> Option<ProcessSnapshot> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.parent == Some(parent) && slot.state == Some(ProcessState::Exited))
+            .filter_map(ProcessSlot::snapshot)
+            .min_by_key(|process| process.pid)
+    }
+
     pub const fn len(&self) -> usize {
         self.count
     }
@@ -705,6 +720,11 @@ mod tests {
         assert_eq!(table.record_syscall(first), Ok(2));
         table.exit(first, 7).unwrap();
         assert_eq!(table.next_schedulable_after(first), Some(second));
+        assert_eq!(table.child_count(first), 1);
+        assert_eq!(table.first_exited_child(first), None);
+        table.mark_running(second).unwrap();
+        table.exit(second, 0).unwrap();
+        assert_eq!(table.first_exited_child(first).unwrap().pid, second);
         let exited = table.snapshot(first).unwrap();
         assert_eq!(exited.state, ProcessState::Exited);
         assert_eq!(exited.exit_status, Some(7));

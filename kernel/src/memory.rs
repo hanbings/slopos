@@ -8,21 +8,29 @@ use slopos_boot_protocol::MemoryMapInfo;
 const PAGE_SIZE: u64 = 4096;
 const UEFI_CONVENTIONAL_MEMORY: u32 = 7;
 const MAX_REGIONS: usize = 128;
+const RECYCLED_FRAME_CAPACITY: usize = 256;
 
 #[derive(Clone, Copy)]
 struct Region {
+    start: u64,
     next: u64,
     end: u64,
 }
 
 impl Region {
-    const EMPTY: Self = Self { next: 0, end: 0 };
+    const EMPTY: Self = Self {
+        start: 0,
+        next: 0,
+        end: 0,
+    };
 }
 
 struct Allocator {
     regions: [Region; MAX_REGIONS],
     count: usize,
     current: usize,
+    recycled: [u64; RECYCLED_FRAME_CAPACITY],
+    recycled_count: usize,
 }
 
 impl Allocator {
@@ -31,10 +39,16 @@ impl Allocator {
             regions: [Region::EMPTY; MAX_REGIONS],
             count: 0,
             current: 0,
+            recycled: [0; RECYCLED_FRAME_CAPACITY],
+            recycled_count: 0,
         }
     }
 
     fn allocate_frame(&mut self) -> Option<u64> {
+        if self.recycled_count != 0 {
+            self.recycled_count -= 1;
+            return Some(self.recycled[self.recycled_count]);
+        }
         self.allocate_contiguous(1)
     }
 
@@ -54,6 +68,23 @@ impl Allocator {
             self.current += 1;
         }
         None
+    }
+
+    fn deallocate_frame(&mut self, frame: u64) -> Result<(), ()> {
+        if frame & (PAGE_SIZE - 1) != 0
+            || !self
+                .regions
+                .iter()
+                .take(self.count)
+                .any(|region| frame >= region.start && frame < region.next)
+            || self.recycled[..self.recycled_count].contains(&frame)
+            || self.recycled_count == RECYCLED_FRAME_CAPACITY
+        {
+            return Err(());
+        }
+        self.recycled[self.recycled_count] = frame;
+        self.recycled_count += 1;
+        Ok(())
     }
 }
 
@@ -79,6 +110,7 @@ pub fn initialize(map: MemoryMapInfo) -> MemoryStats {
     let mut guard = ALLOCATOR.lock();
     guard.count = 0;
     guard.current = 0;
+    guard.recycled_count = 0;
     let mut free_frames = 0u64;
 
     for index in 0..map.descriptor_count as usize {
@@ -103,7 +135,11 @@ pub fn initialize(map: MemoryMapInfo) -> MemoryStats {
             continue;
         }
         let region_index = guard.count;
-        guard.regions[region_index] = Region { next: start, end };
+        guard.regions[region_index] = Region {
+            start,
+            next: start,
+            end,
+        };
         guard.count += 1;
         free_frames += (end - start) / PAGE_SIZE;
     }
@@ -123,6 +159,10 @@ pub fn allocate_contiguous(page_count: usize) -> Option<u64> {
         return None;
     }
     ALLOCATOR.lock().allocate_contiguous(page_count)
+}
+
+pub fn deallocate_frame(frame: u64) -> Result<(), ()> {
+    ALLOCATOR.lock().deallocate_frame(frame)
 }
 
 struct AllocatorGuard<'a> {

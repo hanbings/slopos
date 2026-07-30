@@ -13,7 +13,7 @@ const INIT_PID: u32 = 1;
 const WORKER_PID: u32 = 2;
 pub const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
-const INIT_EXPECTED_SYSCALLS: u64 = 16;
+const INIT_EXPECTED_SYSCALLS: u64 = 17;
 const WORKER_EXPECTED_SYSCALLS: u64 = 7;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
@@ -27,9 +27,11 @@ const LINUX_SYS_CLOSE: u64 = 3;
 const LINUX_SYS_LSEEK: u64 = 8;
 const LINUX_SYS_SCHED_YIELD: u64 = 24;
 const LINUX_SYS_EXIT: u64 = 60;
+const LINUX_SYS_WAIT4: u64 = 61;
 const LINUX_SYS_OPENAT: u64 = 257;
 const LINUX_SEEK_SET: u64 = 0;
 const LINUX_EBADF: i64 = -9;
+const LINUX_ECHILD: i64 = -10;
 const LINUX_EFAULT: i64 = -14;
 const LINUX_EINVAL: i64 = -22;
 const LINUX_ENAMETOOLONG: i64 = -36;
@@ -76,6 +78,7 @@ static PROCESS_TABLE: ProcessTableStorage =
 
 #[derive(Clone, Copy)]
 struct UserMapping {
+    table_frames: [u64; 4],
     code_frame: u64,
     stack_frames: [u64; crate::paging::USER_STACK_PAGES],
     code_start: u64,
@@ -156,12 +159,19 @@ pub struct CloseRequest {
 }
 
 #[derive(Clone, Copy)]
+struct WaitRequest {
+    pid: u32,
+    status_address: u64,
+}
+
+#[derive(Clone, Copy)]
 enum PendingSyscall {
     OpenAt(OpenAtRequest),
     Read(ReadRequest),
     Write(WriteRequest),
     Close(CloseRequest),
     Yield,
+    Wait(WaitRequest),
 }
 
 #[derive(Clone, Copy)]
@@ -171,6 +181,7 @@ pub enum ProcessEvent {
     Write(WriteRequest),
     Close(CloseRequest),
     Yielded { pid: u32 },
+    Waiting { pid: u32 },
     Exited { pid: u32 },
 }
 
@@ -343,6 +354,7 @@ fn spawn_user_process(
     set_user_mapping(
         pid,
         UserMapping {
+            table_frames: address_space.table_frames,
             code_frame: address_space.code_frame,
             stack_frames: address_space.stack_frames,
             code_start: crate::paging::USER_CODE_BASE,
@@ -449,6 +461,57 @@ pub fn close_all_files(pid: u32) -> Result<usize, ProcessError> {
     process_table_mut().close_all_files(pid)
 }
 
+pub fn reap_exited_process(pid: u32) -> Option<ProcessEvent> {
+    let process = process_table()
+        .snapshot(pid)
+        .unwrap_or_else(|_| crate::fatal("reaped process disappeared"));
+    if process.state != ProcessState::Exited {
+        crate::fatal("only an exited process can be reaped");
+    }
+    let parent = process.parent;
+    let exit_status = process
+        .exit_status
+        .unwrap_or_else(|| crate::fatal("exited process has no status"));
+    process_table_mut()
+        .reap(pid)
+        .unwrap_or_else(|_| crate::fatal("process-table reap failed"));
+    let mapping = take_user_mapping(pid)
+        .unwrap_or_else(|| crate::fatal("reaped process has no user mapping"));
+    let frames = crate::paging::release_user_address_space(crate::paging::UserAddressSpace {
+        root: process.image.address_space_root,
+        code_frame: mapping.code_frame,
+        stack_frames: mapping.stack_frames,
+        table_frames: mapping.table_frames,
+    });
+    let reuse_probe = crate::memory::allocate_frame()
+        .unwrap_or_else(|| crate::fatal("released user frame was not reusable"));
+    if reuse_probe != mapping.stack_frames[crate::paging::USER_STACK_PAGES - 1] {
+        crate::fatal("frame allocator did not reuse the most recent user frame");
+    }
+    crate::memory::deallocate_frame(reuse_probe)
+        .unwrap_or_else(|_| crate::fatal("reused user frame could not be returned"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-PROCESS: pid={pid} state=reaped address_space_released=true frames={frames} reuse_probe={reuse_probe:#x}"
+    ));
+    let parent = parent?;
+    let request = match pending_syscall(parent) {
+        Some(PendingSyscall::Wait(request)) if request.pid == parent => request,
+        _ => crate::fatal("exited child has no waiting parent"),
+    };
+    let wait_status = ((exit_status & 0xff) << 8).to_ne_bytes();
+    copy_to_user(parent, request.status_address, &wait_status)
+        .unwrap_or_else(|| crate::fatal("wait4 status destination became invalid"));
+    clear_pending_syscall(parent);
+    saved_syscall_frame_mut(parent).rax = u64::from(pid);
+    process_table_mut()
+        .mark_runnable(parent)
+        .unwrap_or_else(|_| crate::fatal("waiting parent blocked-to-runnable transition failed"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-PROCESS: pid={parent} wait4 child={pid} status={exit_status} child_reaped=true"
+    ));
+    Some(run_process(parent))
+}
+
 pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> ProcessEvent {
     let pending = pending_syscall(pid)
         .unwrap_or_else(|| crate::fatal("process resume has no pending syscall"));
@@ -475,7 +538,9 @@ pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> Proces
                 crate::fatal("non-read completion carried output bytes");
             }
         }
-        PendingSyscall::Yield => crate::fatal("yield was sent through I/O completion"),
+        PendingSyscall::Yield | PendingSyscall::Wait(_) => {
+            crate::fatal("scheduler syscall was sent through I/O completion")
+        }
     }
     clear_pending_syscall(pid);
     let frame = saved_syscall_frame_mut(pid);
@@ -705,6 +770,32 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             ));
             1
         }
+        LINUX_SYS_WAIT4 => {
+            if frame.rdi != u64::MAX || frame.rdx != 0 || frame.r10 != 0 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            if process_table().child_count(pid) == 0 {
+                frame.rax = LINUX_ECHILD as u64;
+                return 0;
+            }
+            if frame.rsi == 0 || !validate_user_range(pid, frame.rsi, 4, true) {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            suspend_io_syscall(
+                pid,
+                frame,
+                PendingSyscall::Wait(WaitRequest {
+                    pid,
+                    status_address: frame.rsi,
+                }),
+            );
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=kernel nr=61 wait4 child=any state=blocked origin=cpl3"
+            ));
+            1
+        }
         LINUX_SYS_EXIT => {
             if frame.rdi > u64::from(u8::MAX) {
                 crate::fatal("user exit syscall status is invalid");
@@ -755,6 +846,9 @@ fn process_event_after_user(pid: u32) -> ProcessEvent {
         (ProcessState::Blocked, PendingSyscall::Read(request)) => ProcessEvent::Read(request),
         (ProcessState::Blocked, PendingSyscall::Write(request)) => ProcessEvent::Write(request),
         (ProcessState::Blocked, PendingSyscall::Close(request)) => ProcessEvent::Close(request),
+        (ProcessState::Blocked, PendingSyscall::Wait(request)) => {
+            ProcessEvent::Waiting { pid: request.pid }
+        }
         (ProcessState::Runnable, PendingSyscall::Yield) => ProcessEvent::Yielded { pid },
         _ => crate::fatal("process returned with an inconsistent scheduler state"),
     }
@@ -916,6 +1010,13 @@ fn user_mapping(pid: u32) -> Option<UserMapping> {
     let index = pid_index(pid);
     // SAFETY: immutable after installation for the lifetime of this process.
     unsafe { (*USER_MAPPINGS.0.get())[index] }
+}
+
+fn take_user_mapping(pid: u32) -> Option<UserMapping> {
+    let index = pid_index(pid);
+    // SAFETY: called by the block task after the process exited and can no
+    // longer issue user-copy operations.
+    unsafe { (*USER_MAPPINGS.0.get())[index].take() }
 }
 
 fn pending_syscall(pid: u32) -> Option<PendingSyscall> {

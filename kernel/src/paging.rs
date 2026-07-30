@@ -30,10 +30,12 @@ pub struct MmioRange {
     pub size: u64,
 }
 
+#[derive(Clone, Copy)]
 pub struct UserAddressSpace {
     pub root: u64,
     pub code_frame: u64,
     pub stack_frames: [u64; USER_STACK_PAGES],
+    pub table_frames: [u64; 4],
 }
 
 pub fn install(framebuffer: FramebufferInfo, mmio_ranges: &[MmioRange]) -> PagingStats {
@@ -172,7 +174,23 @@ pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressS
         root,
         code_frame,
         stack_frames,
+        table_frames: [root, process_low_pdpt, user_directory, user_table],
     }
+}
+
+pub fn release_user_address_space(address_space: UserAddressSpace) -> usize {
+    let mut released = 0usize;
+    for frame in address_space
+        .table_frames
+        .into_iter()
+        .chain([address_space.code_frame])
+        .chain(address_space.stack_frames)
+    {
+        crate::memory::deallocate_frame(frame)
+            .unwrap_or_else(|_| crate::fatal("user address-space frame release failed"));
+        released += 1;
+    }
+    released
 }
 
 fn current_root() -> u64 {

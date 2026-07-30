@@ -751,13 +751,17 @@ async fn load_and_run_init(
                 complete_process_close(&mut open_files, request)
             }
             crate::process::ProcessEvent::Yielded { pid } => crate::process::schedule_next(pid),
+            crate::process::ProcessEvent::Waiting { pid } => crate::process::schedule_next(pid),
             crate::process::ProcessEvent::Exited { pid } => {
                 release_exited_process_files(device, &mut open_files, pid);
                 exited_processes += 1;
-                if exited_processes == 2 {
+                if let Some(event) = crate::process::reap_exited_process(pid) {
+                    event
+                } else if exited_processes == 2 {
                     break;
+                } else {
+                    crate::process::schedule_next(pid)
                 }
-                crate::process::schedule_next(pid)
             }
         };
     }
@@ -948,7 +952,7 @@ fn release_exited_process_files(device: &BlockDevice, open_files: &mut ProcessOp
         device.fail("exited process descriptor/backing cleanup diverged");
     }
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={pid} exit resources released descriptors={descriptors} backing_objects={backing_objects} address_space_retained=true"
+        "SLOPOS-PROCESS: pid={pid} exit resources released descriptors={descriptors} backing_objects={backing_objects} address_space_release=pending-reap"
     ));
 }
 

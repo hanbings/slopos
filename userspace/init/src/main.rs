@@ -30,6 +30,7 @@ const SYS_CLOSE: u64 = 3;
 const SYS_LSEEK: u64 = 8;
 const SYS_SCHED_YIELD: u64 = 24;
 const SYS_EXIT: u64 = 60;
+const SYS_WAIT4: u64 = 61;
 const SYS_OPENAT: u64 = 257;
 const AT_FDCWD: i64 = -100;
 const O_RDONLY: u64 = 0;
@@ -167,7 +168,16 @@ pub extern "C" fn slopos_init_main(initial_stack: *const u64) -> ! {
         MESSAGE.as_ptr() as u64,
         MESSAGE.len() as u64,
     );
-    exit(if result == MESSAGE.len() as i64 { 0 } else { 8 })
+    if result != MESSAGE.len() as i64 {
+        exit(8);
+    }
+    let mut child_status = -1i32;
+    let child = syscall4(SYS_WAIT4, u64::MAX, (&raw mut child_status) as u64, 0, 0);
+    exit(if child == 2 && child_status == 0 {
+        0
+    } else {
+        10
+    })
 }
 
 fn initial_stack_is_valid(initial_stack: *const u64) -> bool {

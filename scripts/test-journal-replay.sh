@@ -82,7 +82,7 @@ if [[ ${injection_status} -ne 0 && ${injection_status} -ne 124 ]]; then
     exit "${injection_status}"
 fi
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26200 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26264 blocks=7 matches_boot=true" \
     "${injection_serial}"
 grep -Fq \
     "SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/117 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5" \
@@ -125,7 +125,7 @@ if [[ ${replay_status} -ne 0 && ${replay_status} -ne 124 ]]; then
     exit "${replay_status}"
 fi
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26200 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26264 blocks=7 matches_boot=true" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64" \
@@ -140,10 +140,10 @@ grep -Fq \
     "SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true flushed=true" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=1 exit resources released descriptors=1 backing_objects=1 address_space_retained=true" \
+    "SLOPOS-PROCESS: pid=1 exit resources released descriptors=1 backing_objects=1 address_space_release=pending-reap" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=2 exit resources released descriptors=0 backing_objects=0 address_space_retained=true" \
+    "SLOPOS-PROCESS: pid=2 exit resources released descriptors=0 backing_objects=0 address_space_release=pending-reap" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-EXT4: journal recovery replayed sequence=1 start=1 tags=5 first_target_block=0 escaped=false home_readback=true next_sequence=2 records_cleared=true recovery=false" \
@@ -205,7 +205,7 @@ sed -i 's/\r$//' \
 restore_clean_artifacts
 trap - EXIT
 clean_hash="$(sha256sum "${root_image}" | awk '{print $1}')"
-if [[ "${clean_hash}" != "3b59c63281b8300a0523fb3ec26dc4d03a028d52f207d5b1e5d528ae4ec20d52" ]]; then
+if [[ "${clean_hash}" != "aca219563969cb6238603a9225361e8242cd3c446c3d3581ab0ce8e5ca53c491" ]]; then
     echo "journal replay cleanup did not restore the reproducible root image" >&2
     exit 1
 fi
