@@ -11,12 +11,12 @@
 5. 只协商 `VIRTIO_F_VERSION_1`，核验 `FEATURES_OK`；
 6. 为 queue 0 选择 8-entry split ring，分别分配并清零 descriptor、available、used frame；
 7. 写入 queue physical address，启用 queue 和 `DRIVER_OK`；
-8. 先安装 vector `0x2b` 的 IOAPIC route，再向 available ring 发布 header/data/status 三 descriptor chain；
+8. 先安装 vector `0x2b` 的 IOAPIC route，再向 available ring 发布 header/data/status 三 descriptor chain，读取 root disk 的 sector 2–3；
 9. 按 capability 的 notify multiplier 写 queue notify；
 10. INTx top half 读取 ISR、累计 queue interrupt、wake block task 并发 local APIC EOI；
-11. block Future 检查 used index、block status 与 sector 末尾 `55aa`。
+11. block Future 检查 used index 与 block status，再把 1024-byte payload 交给 ext4 parser。
 
-共享 `slopos-virtio` crate 对 split-ring byte layout、power-of-two queue size 和三 descriptor block-read chain 做宿主单元测试。裸机 `make test-boot` 则验证实际 MMIO、feature negotiation、bus-master DMA、一次 INTx/ISR 和 Future completion；当前磁盘为 64 MiB，即 131072 个 512-byte sector。
+共享 `slopos-virtio` crate 对 split-ring byte layout、power-of-two queue size 和三 descriptor block-read chain 做宿主单元测试。裸机 `make test-boot` 则验证实际 MMIO、feature negotiation、bus-master DMA、一次 INTx/ISR 和 Future completion；当前 root disk 为 128 MiB，即 262144 个 512-byte sector。
 
 q35 的 slot 3 INTA 映射到 PIRQ H。当前 OVMF 仍把 PIRQ H 路由到 legacy IRQ11，MADT 对 IRQ11 指定 GSI 11、flags 13；内核按这一 firmware route 配置 active-high level entry。请求必须在 entry unmask 之后提交，否则完成边沿可能在接管期间丢失。
 

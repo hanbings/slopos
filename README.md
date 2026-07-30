@@ -6,6 +6,8 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
+QEMU 另挂载一个可重复生成的 128 MiB ext4 root disk。内核经第二个 virtio-blk 的 DMA/INTx/Future 路径读取完整 superblock，校验 CRC32C、geometry 和 feature masks；这仍只是只读 mount probe，不是已经完成 inode/directory/VFS。
+
 ![SlopOS early interactive desktop](evidence/desktop.png)
 
 早期桌面已实际验证：
@@ -27,7 +29,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 - Rust 1.88.0（由 `rust-toolchain.toml` 固定）；
 - QEMU 10.0.11；
 - OVMF 2025.02；
-- `mtools`、`dosfstools`；
+- `mtools`、`dosfstools`、`e2fsprogs`；
 - 可选 `netpbm`，用于把 QEMU PPM 截图转换为 PNG。
 
 安装 Rust target 后：
@@ -38,13 +40,14 @@ make test-acpi
 make test-ebpf
 make test-pci
 make test-virtio
+make test-ext4
 make test-boot
 make test-interaction
 make test-page-fault
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 和 block descriptor chain。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、内核接管、自有 CR3/heap、eBPF 实际执行、ACPI、PCI 与 virtio-blk DMA/INTx/Future completion、LAPIC/IOAPIC IRQ、async timer 和桌面循环的串口标记。`make test-interaction` 通过 QEMU 注入真实 PS/2 键盘和鼠标事件，执行 `STATUS` 并拖动终端窗口。`make test-page-fault` 注入未映射地址访问并核验 vector 14、RIP、error code 和 CR2。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 和 block descriptor chain，`make test-ext4` 检查 superblock/CRC32C parser。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、内核接管、自有 CR3/heap、eBPF、ACPI、PCI、virtio-blk DMA/INTx/Future completion、ext4 superblock、LAPIC/IOAPIC IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 
@@ -64,6 +67,7 @@ make run
 - [ACPI 与 APIC 中断路径](docs/acpi-apic.md)
 - [PCI 枚举边界](docs/pci.md)
 - [virtio modern block 路径](docs/virtio.md)
+- [ext4 root disk 与 parser 边界](docs/ext4.md)
 - [eBPF 子集与验证边界](docs/ebpf.md)
 - [依赖与许可证](docs/dependencies.md)
 - [已知问题](docs/known-issues.md)

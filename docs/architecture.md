@@ -54,7 +54,9 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `crates/pci` 通过 `ConfigAccess` trait 把枚举逻辑与硬件访问分离，扫描完整 bus/device/function 空间，识别 multifunction header，以 visited mask 避免 capability 链环，并解码 BAR 与 virtio vendor capability region。内核后端使用 PCI configuration mechanism 1 的 `0xcf8/0xcfc` port，并以 16-bit command write 启用 memory space/bus master 而不误清 status。
 
-`virtio.rs` 走 modern PCI transport，只协商 `VIRTIO_F_VERSION_1`，为 queue 0 分配独立 descriptor/available/used frame，并以三 descriptor chain 发出只读 sector 请求。初始化与提交分成两阶段，保证 IOAPIC gate 已安装后才 notify。INTx top half 只读取并清除 ISR、累计计数、wake block task 和 EOI；Future 在下半部检查 used ring、status 与 sector `55aa`。共享 `crates/virtio` 负责可宿主测试的 split-ring layout 与 descriptor 构造。
+`virtio.rs` 走 modern PCI transport，只协商 `VIRTIO_F_VERSION_1`，为 queue 0 分配独立 descriptor/available/used frame，并以三 descriptor chain 发出只读 sector 请求。初始化与提交分成两阶段，保证 IOAPIC gate 已安装后才 notify。INTx top half 只读取并清除 ISR、累计计数、wake block task 和 EOI；Future 在下半部检查 used ring、status，并把 sector 2–3 的 1024-byte payload 交给 ext4 parser。共享 `crates/virtio` 负责可宿主测试的 split-ring layout 与 descriptor 构造。
+
+构建产生两个 disk：64 MiB FAT32 ESP 只供 UEFI loader，128 MiB `SLOPOS_ROOT` ext4 image 作为独立 root disk。内核选择第二个 virtio-blk function，从 sector 2 连续 DMA 读取 ext4 1024-byte superblock。`crates/ext4` 校验 magic、block/inode/descriptor size、64-bit counts 和 `metadata_csum` CRC32C，并提取 label/UUID/features。尚未读取 group descriptor 或 inode，因此架构只称为 mount probe。
 
 `executor.rs` 当前固定运行 input、timer、block 三个 pinned future，以原子 ready mask 作为 task queue，以 RawWaker 标识 task，并在空闲时执行 race-free `cli` 检查和 `sti; hlt`。它仍缺动态 task arena、timer wheel、cancellation、async lock 和 SMP。
 

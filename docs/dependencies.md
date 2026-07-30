@@ -10,4 +10,4 @@
 
 项目曾在开发中评估高层 `uefi` crate，但发现其当前依赖图包含 MPL-2.0 的 `ucs2`。该依赖在首次提交前已经彻底移除；当前 `Cargo.lock` 不包含它。
 
-宿主构建工具 QEMU、OVMF、Rust、LLVM、mtools、dosfstools 和 netpbm 不链接进 SlopOS 镜像，属于外部构建/测试工具。
+宿主构建工具 QEMU、OVMF、Rust、LLVM、mtools、dosfstools、e2fsprogs 和 netpbm 不链接进 SlopOS 镜像，属于外部构建/测试工具。`mke2fs`/`debugfs` 只生成可重复的 ext4 测试 root disk。

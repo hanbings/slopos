@@ -4,7 +4,7 @@
 
 | 文件 | 生成方式 | 证明范围 |
 |---|---|---|
-| `serial.log` | `make test-boot` | OVMF 启动、UEFI loader、ELF 加载、`ExitBootServices`、XSDT/MADT、memory、eBPF 返回 42、LAPIC/IOAPIC IRQ/async 与桌面循环 |
+| `serial.log` | `make test-boot` | OVMF/UEFI、ELF、`ExitBootServices`、XSDT/MADT、memory、eBPF、PCI/virtio INTx、ext4 superblock、async 与桌面循环 |
 | `uefi-debugcon.log` | `make test-boot` | loader 独立 debugcon 日志 |
 | `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`，鼠标拖动终端 |
 | `page-fault-serial.log` | `make test-page-fault` | 自有页表的未映射访问、vector 14、error、RIP、CR2 与 fatal boundary |
@@ -37,4 +37,6 @@ ACPI parser 的宿主测试由 `make test-acpi` 执行。裸机日志记录 QEMU
 
 PCI 枚举器的宿主测试由 `make test-pci` 执行。裸机日志包含 QEMU q35 的设备总数和实际 virtio-blk BDF；当前证据为 `00:03.0`、device ID `1001`，完整 region 校验后的 capability mask `0x1e`（configuration type 1–4）。OVMF 分配的 modern BAR base 为 `0xc000000000`，因此 CR3 证据同时包含跨 PML4 slot 的 7 个 table frame。
 
-virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA 与 INTx→waker→Future：queue size 8，设备报告 131072 sectors，sector 0 末尾为 `55aa`，top half/queue interrupt 计数均为 1。当前只证明一次只读请求，不证明通用异步队列、写入或文件系统。
+virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA 与 INTx→waker→Future：queue size 8，root device 报告 262144 sectors，读取 sector 2–3 共 1024 bytes，top half/queue interrupt 计数均为 1。
+
+ext4 parser 测试由 `make test-ext4` 执行。裸机日志证明 label `SLOPOS_ROOT`、4096-byte block、32768 blocks/inodes 和 feature masks `0x103c/0x22c2/0x46b`；metadata checksum 已由内核 CRC32C 校验。固定 fake time、filesystem UUID 与 directory hash seed 后，当前 root image 的可重复 SHA-256 为 `4cf2289f4767ea338f170b065d682497f243a6adc731ce52023a2faf0549e814`。这仍不是 inode/directory mount 证据。
