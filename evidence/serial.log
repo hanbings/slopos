@@ -4,8 +4,8 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=126840
-SLOPOS-UEFI: kernel mapped 0x4000000..0x4010000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=130952
+SLOPOS-UEFI: kernel mapped 0x4000000..0x4011000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: Boot Services exited descriptors=117
 SLOPOS-UEFI: transferring control to kernel
@@ -15,7 +15,7 @@ SLOPOS-ACPI: XSDT MADT validated cpus=1 lapic=0xfee00000 ioapics=1 overrides=5 i
 SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
 SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
 SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
-SLOPOS-MM: frame allocator initialized regions=8 free_frames=53017 probe=0x100000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=53016 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
@@ -27,10 +27,11 @@ SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
 SLOPOS-ASYNC: executor entered tasks=3
 SLOPOS-VIRTIO: modern block queue ready size=8 capacity_sectors=262144
 SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT block_size=4096 blocks=32768 inodes=32768 features=0x103c/0x22c2/0x46b
-SLOPOS-EXT4: root directory valid group_inode_table=49 inode=2 extent_block=18 entries=4 etc_inode=13 lost_found_inode=11 metadata_checksums=group/inode/directory
+SLOPOS-EXT4: root directory valid group_inode_table=49 inode=2 extent_block=18 entries=5 etc_inode=13 lost_found_inode=11 metadata_checksums=group/inode/directory
 SLOPOS-EXT4: async path read valid release_inode=16 release_bytes=40 config_inode=15 config_bytes=76 paths=/etc/slopos-release,/etc/slopos/system.conf
-SLOPOS-VIRTIO: async block sequence complete requests=18 interrupts=18 queue_interrupts=18
-SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=18/18
-SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=18/18
-SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=18/18
-SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=18/18
+SLOPOS-EXT4: multiblock file valid inode=20 bytes=6144 logical_blocks=2 path=/usr/share/slopos/multiblock.bin
+SLOPOS-VIRTIO: async block sequence complete requests=29 interrupts=29 queue_interrupts=29
+SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=29/29
+SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=29/29
+SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=29/29
+SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=29/29
