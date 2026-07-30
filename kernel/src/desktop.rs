@@ -1327,6 +1327,10 @@ impl Desktop {
             }
             NiriAction::ConsumeWindowIntoColumn => self.workspaces.consume_window_into_column(),
             NiriAction::ExpelWindowFromColumn => self.workspaces.expel_window_from_column(),
+            NiriAction::SwitchPresetColumnWidth => self.workspaces.switch_preset_column_width(),
+            NiriAction::SwitchPresetColumnWidthBack => {
+                self.workspaces.switch_preset_column_width_back()
+            }
             NiriAction::SetColumnWidth(change) => self
                 .workspaces
                 .change_focused_column_width(change)
@@ -1335,6 +1339,7 @@ impl Desktop {
                 .workspaces
                 .change_focused_window_height(change)
                 .unwrap_or_else(|_| crate::fatal("niri set-window-height failed")),
+            NiriAction::ResetWindowHeight => self.workspaces.reset_focused_window_height(),
             NiriAction::CloseWindow => {
                 if let Some(window) = self.workspaces.focused_window() {
                     self.close_window(window as usize);
@@ -1356,7 +1361,12 @@ impl Desktop {
         }
         self.sync_focused_window();
         if changed
-            && matches!(action, NiriAction::SetColumnWidth(_))
+            && matches!(
+                action,
+                NiriAction::SetColumnWidth(_)
+                    | NiriAction::SwitchPresetColumnWidth
+                    | NiriAction::SwitchPresetColumnWidthBack
+            )
             && let Some(window) = self.positioned_window(self.active)
         {
             serialln(format_args!(
@@ -1366,7 +1376,10 @@ impl Desktop {
             ));
         }
         if changed
-            && matches!(action, NiriAction::SetWindowHeight(_))
+            && matches!(
+                action,
+                NiriAction::SetWindowHeight(_) | NiriAction::ResetWindowHeight
+            )
             && let Some(window) = self.positioned_window(self.active)
         {
             serialln(format_args!(
@@ -1601,8 +1614,11 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::MoveColumnToWorkspace(_) => "move-column-to-workspace",
         NiriAction::ConsumeWindowIntoColumn => "consume-window-into-column",
         NiriAction::ExpelWindowFromColumn => "expel-window-from-column",
+        NiriAction::SwitchPresetColumnWidth => "switch-preset-column-width",
+        NiriAction::SwitchPresetColumnWidthBack => "switch-preset-column-width-back",
         NiriAction::SetColumnWidth(_) => "set-column-width",
         NiriAction::SetWindowHeight(_) => "set-window-height",
+        NiriAction::ResetWindowHeight => "reset-window-height",
         NiriAction::CloseWindow => "close-window",
     }
 }

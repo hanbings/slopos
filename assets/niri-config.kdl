@@ -34,6 +34,9 @@ binds {
     Mod+Equal { set-column-width "+10%"; }
     Mod+Shift+Minus { set-window-height "-10%"; }
     Mod+Shift+Equal { set-window-height "+10%"; }
+    Mod+R { switch-preset-column-width; }
+    Mod+Shift+R { switch-preset-column-width-back; }
+    Mod+Ctrl+R { reset-window-height; }
     Mod+Q { close-window; }
 }
 
@@ -45,6 +48,11 @@ window-rule {
 layout {
     gaps 16
     center-focused-column "never"
+    preset-column-widths {
+        proportion 0.333
+        proportion 0.5
+        proportion 0.667
+    }
     default-column-width { proportion 0.5; }
 
     focus-ring {
