@@ -23,4 +23,6 @@ SLOPOS-DESKTOP: interactive compositor loop entered windows=3
 SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
 SLOPOS-ASYNC: executor entered tasks=2
 SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0
-SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0
+SLOPOS-EXCEPTION: injecting page fault at 0x40000000
+SLOPOS-EXCEPTION: vector=14 error=0x0 rip=0x4002e64 cr2=0x40000000
+SLOPOS-KERNEL: FATAL unhandled CPU exception

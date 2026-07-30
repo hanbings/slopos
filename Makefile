@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 CARGO := $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
 
-.PHONY: all build image run test-boot test-interaction clean
+.PHONY: all build image run test-boot test-interaction test-page-fault clean
 
 all: build
 
@@ -20,6 +20,9 @@ test-boot: image
 
 test-interaction: image
 	./scripts/test-interaction.sh
+
+test-page-fault: image
+	./scripts/test-page-fault.sh
 
 clean:
 	$(CARGO) clean
