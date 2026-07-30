@@ -956,7 +956,7 @@ impl Desktop {
                 if relative >= 0 && relative < text_width(workspace_label) {
                     let byte_index = usize::try_from(relative / 6).ok()?;
                     let digit = *workspace_label.as_bytes().get(byte_index)?;
-                    if (b'1'..=b'8').contains(&digit) {
+                    if (b'1'..=b'4').contains(&digit) {
                         let workspace = usize::from(digit - b'1');
                         return (workspace < self.workspaces.len()).then_some(workspace);
                     }
