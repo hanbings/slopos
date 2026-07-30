@@ -4,10 +4,14 @@
 #![no_std]
 
 mod desktop;
+mod executor;
 mod font;
 mod framebuffer;
+mod interrupts;
+mod memory;
 mod ps2;
 mod serial;
+mod timer;
 
 use core::arch::asm;
 use core::panic::PanicInfo;
@@ -70,6 +74,24 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         boot_info.initrd.base, boot_info.initrd.size
     ));
 
+    let memory_stats = memory::initialize(boot_info.memory_map);
+    let probe_frame =
+        memory::allocate_frame().unwrap_or_else(|| fatal("no physical frame available"));
+    // SAFETY: the allocator returned an exclusive conventional-memory page and
+    // this early address space still identity-maps RAM inherited from OVMF.
+    unsafe {
+        let probe = probe_frame as *mut u64;
+        probe.write_volatile(0x534c_4f50_4d45_4d21);
+        if probe.read_volatile() != 0x534c_4f50_4d45_4d21 {
+            fatal("physical frame readback failed");
+        }
+        probe.write_volatile(0);
+    }
+    serialln(format_args!(
+        "SLOPOS-MM: frame allocator initialized regions={} free_frames={} probe={:#x}",
+        memory_stats.conventional_regions, memory_stats.free_frames, probe_frame
+    ));
+
     let mut framebuffer = match Framebuffer::new(boot_info.framebuffer) {
         Some(framebuffer) => framebuffer,
         None => fatal("GOP framebuffer information is invalid"),
@@ -83,13 +105,14 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     let input = ps2::Controller::initialize();
     if input.mouse_present() {
         serialln(format_args!(
-            "SLOPOS-INPUT: PS/2 keyboard and mouse enabled"
+            "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
         ));
     } else {
         serialln(format_args!(
             "SLOPOS-INPUT: keyboard enabled; mouse handshake incomplete"
         ));
     }
+    interrupts::initialize();
 
     let mut desktop = Desktop::new(framebuffer.width(), framebuffer.height());
     desktop.render(&mut framebuffer);
@@ -100,7 +123,10 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         "SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready"
     ));
 
-    desktop.run(&mut framebuffer, input)
+    executor::run(
+        desktop.run(&mut framebuffer, input),
+        timer::diagnostics_task(),
+    )
 }
 
 fn valid_rsdp(address: u64) -> bool {

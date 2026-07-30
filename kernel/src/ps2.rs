@@ -1,11 +1,27 @@
 // SPDX-License-Identifier: 0BSD
 
 use core::arch::asm;
+use core::future::Future;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
+use core::task::{Context, Poll};
 
 const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64;
 const COMMAND: u16 = 0x64;
 const WAIT_LIMIT: usize = 100_000;
+const QUEUE_CAPACITY: usize = 128;
+
+static INPUT_QUEUE: [AtomicU16; QUEUE_CAPACITY] = [const { AtomicU16::new(0) }; QUEUE_CAPACITY];
+static QUEUE_HEAD: AtomicUsize = AtomicUsize::new(0);
+static QUEUE_TAIL: AtomicUsize = AtomicUsize::new(0);
+static DROPPED_BYTES: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy)]
+pub struct RawInputByte {
+    mouse: bool,
+    value: u8,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Key {
@@ -51,7 +67,7 @@ impl Controller {
             if write_command(0x60) {
                 // Keep IRQ delivery disabled until the kernel has installed an IDT,
                 // but enable both clocks. Preserve firmware's translation setting.
-                let _ = write_data(config & !0x23);
+                let _ = write_data((config & !0x33) | 0x03);
             }
             mouse_present = mouse_command(0xf6) && mouse_command(0xf4);
             let _ = keyboard_command(0xf4);
@@ -71,18 +87,11 @@ impl Controller {
         self.mouse_present
     }
 
-    pub fn poll(&mut self) -> Option<InputEvent> {
-        // SAFETY: reading controller status and data is the only way to consume
-        // bytes from the legacy PS/2 device selected for the QEMU target.
-        let status = unsafe { inb(STATUS) };
-        if status & 1 == 0 {
-            return None;
-        }
-        let byte = unsafe { inb(DATA) };
-        if status & 0x20 != 0 {
-            self.consume_mouse(byte)
+    pub fn consume(&mut self, byte: RawInputByte) -> Option<InputEvent> {
+        if byte.mouse {
+            self.consume_mouse(byte.value)
         } else {
-            self.consume_keyboard(byte)
+            self.consume_keyboard(byte.value)
         }
     }
 
@@ -137,6 +146,46 @@ impl Controller {
             _ => Key::Character(scancode_character(code, self.shift)?),
         };
         Some(InputEvent::Key(key))
+    }
+}
+
+pub fn enqueue_interrupt_byte(mouse: bool, value: u8) {
+    let head = QUEUE_HEAD.load(Ordering::Relaxed);
+    let next = (head + 1) % QUEUE_CAPACITY;
+    if next == QUEUE_TAIL.load(Ordering::Acquire) {
+        DROPPED_BYTES.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let encoded = u16::from(value) | if mouse { 1 << 8 } else { 0 };
+    INPUT_QUEUE[head].store(encoded, Ordering::Relaxed);
+    QUEUE_HEAD.store(next, Ordering::Release);
+    crate::executor::wake_task(crate::executor::INPUT_TASK);
+}
+
+pub async fn next_byte() -> RawInputByte {
+    NextByte.await
+}
+
+pub fn dropped_bytes() -> u64 {
+    DROPPED_BYTES.load(Ordering::Relaxed)
+}
+
+struct NextByte;
+
+impl Future for NextByte {
+    type Output = RawInputByte;
+
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        let tail = QUEUE_TAIL.load(Ordering::Relaxed);
+        if tail == QUEUE_HEAD.load(Ordering::Acquire) {
+            return Poll::Pending;
+        }
+        let encoded = INPUT_QUEUE[tail].load(Ordering::Relaxed);
+        QUEUE_TAIL.store((tail + 1) % QUEUE_CAPACITY, Ordering::Release);
+        Poll::Ready(RawInputByte {
+            mouse: encoded & (1 << 8) != 0,
+            value: encoded as u8,
+        })
     }
 }
 

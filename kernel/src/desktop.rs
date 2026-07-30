@@ -6,7 +6,6 @@ use crate::framebuffer::{
 };
 use crate::ps2::{Controller, InputEvent, Key, MouseEvent};
 use crate::serial::serialln;
-use core::arch::asm;
 
 const WINDOW_COUNT: usize = 3;
 const TITLE_HEIGHT: i32 = 30;
@@ -97,18 +96,15 @@ impl Desktop {
         }
     }
 
-    pub fn run(&mut self, framebuffer: &mut Framebuffer, mut input: Controller) -> ! {
+    pub async fn run(&mut self, framebuffer: &mut Framebuffer, mut input: Controller) -> ! {
         loop {
-            if let Some(event) = input.poll() {
+            let byte = crate::ps2::next_byte().await;
+            if let Some(event) = input.consume(byte) {
                 match event {
                     InputEvent::Key(key) => self.keyboard(key),
                     InputEvent::Mouse(mouse) => self.mouse(mouse),
                 }
                 self.render(framebuffer);
-            } else {
-                // This early PS/2 path is deliberately bounded polling. It will be
-                // replaced by the interrupt-to-async wakeup path as the IDT lands.
-                unsafe { asm!("pause", options(nomem, nostack, preserves_flags)) };
             }
         }
     }
