@@ -5,14 +5,16 @@ use core::ptr;
 use slopos_ext4::{
     DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DIRECTORY_ENTRY_SYMLINK,
     DirectoryBlock, Extent, ExtentNode, GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode,
-    JOURNAL_INODE, JournalCommit, JournalDescriptor, JournalSuperblock, ROOT_INODE,
-    SUPERBLOCK_SIZE, Superblock, encode_single_block_journal_transaction, validate_path_component,
+    JOURNAL_INODE, JournalCommit, JournalDescriptor, JournalSuperblock, ParseError, ROOT_INODE,
+    SUPERBLOCK_SIZE, Superblock, encode_single_block_journal_transaction,
+    set_journal_superblock_state, set_superblock_recovery, validate_path_component,
 };
 use slopos_vfs::{AbsolutePath, AccessMode, FileDescriptorTable, FileNode, MountTable};
 
 use crate::virtio::BlockDevice;
 
 const SUPERBLOCK_SECTOR: u64 = 2;
+const SUPERBLOCK_OFFSET: usize = 1024;
 const SECTOR_SIZE: u64 = 512;
 const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
@@ -386,6 +388,13 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         journal_records.data_block,
         journal_records.commit_block
     ));
+    let journal_state = mount
+        .probe_journal_state_transition(&mut device, &journal)
+        .await;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: journal state transition recovery=true sequence={} start={} readback=valid checkpoint_start=0 restored=true transactions=0 writes=4 flushes=4",
+        journal_state.sequence, journal_state.active_start
+    ));
 
     crate::serial::serialln(format_args!(
         "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={} invalidations={}",
@@ -698,6 +707,98 @@ impl Ext4Mount {
             descriptor_block,
             data_block,
             commit_block,
+        }
+    }
+
+    async fn probe_journal_state_transition(
+        &self,
+        device: &mut BlockDevice,
+        journal: &JournalProbe,
+    ) -> JournalStateProbe {
+        let filesystem_sector = block_to_sector(device, &self.superblock, 0);
+        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
+        let mut scratch = JournalStateScratch::new();
+
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        scratch
+            .filesystem_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        device.read(journal_sector, BLOCK_SIZE).await;
+        scratch
+            .journal_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+
+        set_superblock_recovery(
+            &mut scratch.filesystem_block_mut()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            true,
+        )
+        .unwrap_or_else(|_| device.fail("ext4 recovery flag activation failed"));
+        device
+            .write(filesystem_sector, scratch.filesystem_block())
+            .await;
+        device.flush().await;
+
+        set_journal_superblock_state(
+            scratch.journal_block_mut(),
+            journal.superblock.sequence,
+            journal.superblock.first_log_block,
+        )
+        .unwrap_or_else(|_| device.fail("JBD2 state activation failed"));
+        device.write(journal_sector, scratch.journal_block()).await;
+        device.flush().await;
+
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != scratch.filesystem_block()
+            || Superblock::parse(
+                &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            ) != Err(ParseError::DirtyFilesystem)
+        {
+            device.fail("ext4 recovery flag readback mismatch");
+        }
+        device.read(journal_sector, BLOCK_SIZE).await;
+        let active = JournalSuperblock::parse(device.data(BLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("JBD2 active state readback failed"));
+        if device.data(BLOCK_SIZE) != scratch.journal_block()
+            || active.sequence != journal.superblock.sequence
+            || active.start != journal.superblock.first_log_block
+        {
+            device.fail("JBD2 active state readback mismatch");
+        }
+
+        set_journal_superblock_state(scratch.journal_block_mut(), journal.superblock.sequence, 0)
+            .unwrap_or_else(|_| device.fail("JBD2 checkpoint state update failed"));
+        device.write(journal_sector, scratch.journal_block()).await;
+        device.flush().await;
+        set_superblock_recovery(
+            &mut scratch.filesystem_block_mut()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            false,
+        )
+        .unwrap_or_else(|_| device.fail("ext4 recovery flag clearing failed"));
+        device
+            .write(filesystem_sector, scratch.filesystem_block())
+            .await;
+        device.flush().await;
+
+        device.read(journal_sector, BLOCK_SIZE).await;
+        let restored_journal = JournalSuperblock::parse(device.data(BLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("JBD2 restored state validation failed"));
+        if device.data(BLOCK_SIZE) != scratch.journal_block() || restored_journal.start != 0 {
+            device.fail("JBD2 restored state readback mismatch");
+        }
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != scratch.filesystem_block()
+            || Superblock::parse(
+                &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            )
+            .is_err()
+        {
+            device.fail("ext4 restored superblock readback mismatch");
+        }
+        JournalStateProbe {
+            sequence: active.sequence,
+            active_start: active.start,
         }
     }
 
@@ -1023,6 +1124,11 @@ struct JournalRecordProbe {
     commit_block: u64,
 }
 
+struct JournalStateProbe {
+    sequence: u32,
+    active_start: u32,
+}
+
 struct JournalScratch {
     descriptor_frame: usize,
     data_frame: usize,
@@ -1060,6 +1166,36 @@ impl JournalScratch {
 
     fn commit(&self) -> &[u8] {
         scratch_frame_bytes(self.commit_frame)
+    }
+}
+
+struct JournalStateScratch {
+    filesystem_frame: usize,
+    journal_frame: usize,
+}
+
+impl JournalStateScratch {
+    fn new() -> Self {
+        Self {
+            filesystem_frame: allocate_scratch_frame(),
+            journal_frame: allocate_scratch_frame(),
+        }
+    }
+
+    fn filesystem_block(&self) -> &[u8] {
+        scratch_frame_bytes(self.filesystem_frame)
+    }
+
+    fn filesystem_block_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.filesystem_frame)
+    }
+
+    fn journal_block(&self) -> &[u8] {
+        scratch_frame_bytes(self.journal_frame)
+    }
+
+    fn journal_block_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.journal_frame)
     }
 }
 
@@ -1260,4 +1396,10 @@ fn allocate_scratch_frame() -> usize {
 fn scratch_frame_bytes(frame: usize) -> &'static [u8] {
     // SAFETY: journal scratch frames remain permanently allocated.
     unsafe { core::slice::from_raw_parts(frame as *const u8, BLOCK_SIZE) }
+}
+
+fn scratch_frame_bytes_mut(frame: usize) -> &'static mut [u8] {
+    // SAFETY: callers reach each exclusively owned frame through a mutable
+    // scratch object, and journal scratch frames remain permanently allocated.
+    unsafe { core::slice::from_raw_parts_mut(frame as *mut u8, BLOCK_SIZE) }
 }
