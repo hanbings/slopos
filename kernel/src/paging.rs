@@ -11,7 +11,10 @@ const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
 const WRITE_THROUGH: u64 = 1 << 3;
 const CACHE_DISABLE: u64 = 1 << 4;
+const USER_ACCESSIBLE: u64 = 1 << 2;
 const HUGE: u64 = 1 << 7;
+pub const USER_CODE_BASE: u64 = 0x4000_0000;
+pub const USER_STACK_TOP: u64 = USER_CODE_BASE + 2 * PAGE_SIZE;
 
 pub struct PagingStats {
     pub pml4: u64,
@@ -23,6 +26,12 @@ pub struct PagingStats {
 pub struct MmioRange {
     pub base: u64,
     pub size: u64,
+}
+
+pub struct UserAddressSpace {
+    pub root: u64,
+    pub code_frame: u64,
+    pub stack_frame: u64,
 }
 
 pub fn install(framebuffer: FramebufferInfo, mmio_ranges: &[MmioRange]) -> PagingStats {
@@ -88,6 +97,82 @@ pub fn install(framebuffer: FramebufferInfo, mmio_ranges: &[MmioRange]) -> Pagin
     }
 }
 
+pub fn create_user_address_space(image: &[u8]) -> UserAddressSpace {
+    if image.is_empty() || image.len() > PAGE_SIZE as usize {
+        crate::fatal("user image does not fit one page");
+    }
+    let active_root = current_root();
+    let root = table_frame();
+    for index in 0..ENTRY_COUNT {
+        set_entry(root, index, get_entry(active_root, index));
+    }
+
+    let active_low_entry = get_entry(active_root, 0);
+    if active_low_entry & PRESENT == 0 {
+        crate::fatal("kernel low address space is missing");
+    }
+    let active_low_pdpt = active_low_entry & !(PAGE_SIZE - 1);
+    let process_low_pdpt = table_frame();
+    for index in 0..ENTRY_COUNT {
+        set_entry(process_low_pdpt, index, get_entry(active_low_pdpt, index));
+    }
+    set_entry(
+        root,
+        0,
+        process_low_pdpt | PRESENT | WRITABLE | USER_ACCESSIBLE,
+    );
+
+    let user_directory = table_frame();
+    let user_table = table_frame();
+    let code_frame = data_frame();
+    let stack_frame = data_frame();
+    // SAFETY: code_frame is exclusive, writable through the kernel identity map,
+    // and the source is bounded to one page.
+    unsafe {
+        ptr::copy_nonoverlapping(image.as_ptr(), code_frame as *mut u8, image.len());
+    }
+    let pdpt_index = ((USER_CODE_BASE >> 30) & 0x1ff) as usize;
+    let directory_index = ((USER_CODE_BASE >> 21) & 0x1ff) as usize;
+    let code_index = ((USER_CODE_BASE >> 12) & 0x1ff) as usize;
+    let stack_index = code_index + 1;
+    if get_entry(process_low_pdpt, pdpt_index) & PRESENT != 0 || stack_index >= ENTRY_COUNT {
+        crate::fatal("user virtual address range overlaps a kernel mapping");
+    }
+    set_entry(
+        process_low_pdpt,
+        pdpt_index,
+        user_directory | PRESENT | WRITABLE | USER_ACCESSIBLE,
+    );
+    set_entry(
+        user_directory,
+        directory_index,
+        user_table | PRESENT | WRITABLE | USER_ACCESSIBLE,
+    );
+    set_entry(
+        user_table,
+        code_index,
+        code_frame | PRESENT | USER_ACCESSIBLE,
+    );
+    set_entry(
+        user_table,
+        stack_index,
+        stack_frame | PRESENT | WRITABLE | USER_ACCESSIBLE,
+    );
+
+    UserAddressSpace {
+        root,
+        code_frame,
+        stack_frame,
+    }
+}
+
+fn current_root() -> u64 {
+    let root: u64;
+    // SAFETY: reading CR3 is side-effect free at ring 0.
+    unsafe { asm!("mov {root}, cr3", root = out(reg) root, options(nostack, preserves_flags)) };
+    root & !(PAGE_SIZE - 1)
+}
+
 fn map_mmio_range(
     pml4: u64,
     base: u64,
@@ -137,8 +222,12 @@ fn map_mmio_range(
 }
 
 fn table_frame() -> u64 {
+    data_frame()
+}
+
+fn data_frame() -> u64 {
     let frame = crate::memory::allocate_frame()
-        .unwrap_or_else(|| crate::fatal("physical memory exhausted while building page tables"));
+        .unwrap_or_else(|| crate::fatal("physical memory exhausted while allocating a page"));
     // SAFETY: frame is exclusive and accessible through the inherited identity map.
     unsafe { ptr::write_bytes(frame as *mut u8, 0, PAGE_SIZE as usize) };
     frame

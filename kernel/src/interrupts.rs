@@ -6,6 +6,7 @@ use core::mem::size_of;
 use slopos_acpi::MadtInfo;
 
 const KERNEL_CODE_SELECTOR: u16 = 0x08;
+const TASK_STATE_SELECTOR: u16 = 0x28;
 const DIVIDE_ERROR_VECTOR: usize = 0;
 const INVALID_OPCODE_VECTOR: usize = 6;
 const DOUBLE_FAULT_VECTOR: usize = 8;
@@ -15,7 +16,9 @@ const TIMER_VECTOR: usize = 0x20;
 const KEYBOARD_VECTOR: usize = 0x21;
 const VIRTIO_VECTOR: usize = 0x2b;
 const MOUSE_VECTOR: usize = 0x2c;
+const SYSCALL_VECTOR: usize = 0x80;
 const SPURIOUS_VECTOR: usize = 0xff;
+const TSS_STACK_PAGES: usize = 4;
 
 #[repr(C, packed)]
 struct DescriptorTablePointer {
@@ -57,6 +60,12 @@ impl IdtEntry {
             reserved: 0,
         }
     }
+
+    fn user_interrupt_gate(handler: u64) -> Self {
+        let mut entry = Self::interrupt_gate(handler);
+        entry.attributes = 0xee;
+        entry
+    }
 }
 
 struct IdtStorage(UnsafeCell<[IdtEntry; 256]>);
@@ -65,7 +74,63 @@ struct IdtStorage(UnsafeCell<[IdtEntry; 256]>);
 unsafe impl Sync for IdtStorage {}
 
 static IDT: IdtStorage = IdtStorage(UnsafeCell::new([IdtEntry::MISSING; 256]));
-static GDT: [u64; 3] = [0, 0x00af_9a00_0000_ffff, 0x00cf_9200_0000_ffff];
+
+struct GdtStorage(UnsafeCell<[u64; 7]>);
+
+// GDT mutation only occurs during single-core early initialization.
+unsafe impl Sync for GdtStorage {}
+
+static GDT: GdtStorage = GdtStorage(UnsafeCell::new([
+    0,
+    0x00af_9a00_0000_ffff,
+    0x00cf_9200_0000_ffff,
+    0x00cf_f200_0000_ffff,
+    0x00af_fa00_0000_ffff,
+    0,
+    0,
+]));
+
+#[repr(C, packed)]
+struct TaskStateSegment {
+    reserved0: u32,
+    rsp0: u64,
+    rsp1: u64,
+    rsp2: u64,
+    reserved1: u64,
+    ist1: u64,
+    ist2: u64,
+    ist3: u64,
+    ist4: u64,
+    ist5: u64,
+    ist6: u64,
+    ist7: u64,
+    reserved2: u64,
+    reserved3: u16,
+    io_map_offset: u16,
+}
+
+struct TssStorage(UnsafeCell<TaskStateSegment>);
+
+// TSS mutation only occurs before LTR; the CPU reads it thereafter.
+unsafe impl Sync for TssStorage {}
+
+static TSS: TssStorage = TssStorage(UnsafeCell::new(TaskStateSegment {
+    reserved0: 0,
+    rsp0: 0,
+    rsp1: 0,
+    rsp2: 0,
+    reserved1: 0,
+    ist1: 0,
+    ist2: 0,
+    ist3: 0,
+    ist4: 0,
+    ist5: 0,
+    ist6: 0,
+    ist7: 0,
+    reserved2: 0,
+    reserved3: 0,
+    io_map_offset: 0,
+}));
 
 pub fn initialize(madt: &MadtInfo, virtio_interrupt_line: u8) {
     // SAFETY: early kernel initialization runs once with interrupts disabled.
@@ -105,11 +170,38 @@ pub fn trigger_page_fault() -> ! {
 }
 
 unsafe fn load_gdt() {
+    if size_of::<TaskStateSegment>() != 104 {
+        crate::fatal("x86-64 task state segment layout mismatch");
+    }
+    let stack_base = crate::memory::allocate_contiguous(TSS_STACK_PAGES)
+        .unwrap_or_else(|| crate::fatal("cannot allocate ring-0 privilege stack"));
+    let stack_top = stack_base + (TSS_STACK_PAGES * 4096) as u64;
+    let tss = TSS.0.get();
+    // SAFETY: this is exclusive early initialization and packed fields are
+    // written through raw pointers with unaligned stores.
+    unsafe {
+        core::ptr::addr_of_mut!((*tss).rsp0).write_unaligned(stack_top);
+        core::ptr::addr_of_mut!((*tss).io_map_offset)
+            .write_unaligned(size_of::<TaskStateSegment>() as u16);
+    }
+    let tss_base = tss as u64;
+    let tss_limit = (size_of::<TaskStateSegment>() - 1) as u64;
+    let tss_low = (tss_limit & 0xffff)
+        | ((tss_base & 0x00ff_ffff) << 16)
+        | (0x89 << 40)
+        | (((tss_limit >> 16) & 0xf) << 48)
+        | ((tss_base & 0xff00_0000) << 32);
+    let entries = GDT.0.get();
+    // SAFETY: entries 5/6 are reserved for this live static TSS.
+    unsafe {
+        (*entries)[5] = tss_low;
+        (*entries)[6] = tss_base >> 32;
+    }
     let pointer = DescriptorTablePointer {
-        limit: (size_of::<[u64; 3]>() - 1) as u16,
-        base: GDT.as_ptr() as u64,
+        limit: (size_of::<[u64; 7]>() - 1) as u16,
+        base: entries as u64,
     };
-    // SAFETY: descriptors 1 and 2 are valid long-mode kernel code/data segments.
+    // SAFETY: the GDT contains kernel/user code/data and a live 64-bit TSS.
     unsafe {
         asm!(
             "lgdt [{pointer}]",
@@ -125,7 +217,10 @@ unsafe fn load_gdt() {
             "xor eax, eax",
             "mov fs, ax",
             "mov gs, ax",
+            "mov ax, {tss_selector}",
+            "ltr ax",
             pointer = in(reg) &pointer,
+            tss_selector = const TASK_STATE_SELECTOR,
             out("rax") _,
             options(preserves_flags)
         )
@@ -151,6 +246,8 @@ unsafe fn install_idt() {
         (*entries)[VIRTIO_VECTOR] =
             IdtEntry::interrupt_gate(slopos_virtio_interrupt as usize as u64);
         (*entries)[MOUSE_VECTOR] = IdtEntry::interrupt_gate(slopos_mouse_interrupt as usize as u64);
+        (*entries)[SYSCALL_VECTOR] =
+            IdtEntry::user_interrupt_gate(slopos_syscall_interrupt as usize as u64);
         (*entries)[SPURIOUS_VECTOR] =
             IdtEntry::interrupt_gate(slopos_spurious_interrupt as usize as u64);
     }
@@ -257,6 +354,7 @@ unsafe extern "C" {
     fn slopos_keyboard_interrupt();
     fn slopos_virtio_interrupt();
     fn slopos_mouse_interrupt();
+    fn slopos_syscall_interrupt();
     fn slopos_spurious_interrupt();
 }
 

@@ -15,6 +15,7 @@ mod interrupts;
 mod memory;
 mod paging;
 mod pci;
+mod process;
 mod ps2;
 mod serial;
 mod timer;
@@ -242,6 +243,7 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         ));
     }
     interrupts::initialize(&platform.madt, virtio_block.interrupt_line);
+    process::run_probe();
 
     let mut desktop = Desktop::new(framebuffer.width(), framebuffer.height());
     desktop.render(&mut framebuffer);
