@@ -72,6 +72,11 @@ monitor_type() {
     echo "sendkey meta_l-comma 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-column-stacked.ppm"
+    echo "sendkey meta_l-shift-equal 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-window-height-increased.ppm"
+    echo "sendkey meta_l-shift-minus 50"
+    sleep 1
     echo "sendkey meta_l-ctrl-k 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-window-moved-up.ppm"
@@ -248,6 +253,12 @@ grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30
 grep -Fq "SLOPOS-SWWW: clear color=1A2B3C output=*" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1" "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=set-window-height changed=true workspace=1 name=main focused=1" "${serial_log}")" -ne 2 ]]; then
+    echo "niri set-window-height bindings did not grow and restore the focused window" >&2
+    exit 1
+fi
+grep -Fq "SLOPOS-DESKTOP: window height changed kind=SYSTEM height=412 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window height changed kind=SYSTEM height=340 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-window-up changed=true workspace=1 name=main focused=1" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-window-down changed=true workspace=1 name=main focused=1" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-window-up changed=true workspace=1 name=main focused=0" "${serial_log}"
@@ -293,6 +304,7 @@ test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
 test -s "${repo_dir}/evidence/niri-column-stacked.ppm"
+test -s "${repo_dir}/evidence/niri-window-height-increased.ppm"
 test -s "${repo_dir}/evidence/niri-window-moved-up.ppm"
 test -s "${repo_dir}/evidence/niri-window-focus-up.ppm"
 test -s "${repo_dir}/evidence/niri-column-expelled.ppm"
@@ -321,6 +333,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-cleared.png"
     pnmtopng "${repo_dir}/evidence/niri-column-stacked.ppm" \
         >"${repo_dir}/evidence/niri-column-stacked.png"
+    pnmtopng "${repo_dir}/evidence/niri-window-height-increased.ppm" \
+        >"${repo_dir}/evidence/niri-window-height-increased.png"
     pnmtopng "${repo_dir}/evidence/niri-window-moved-up.ppm" \
         >"${repo_dir}/evidence/niri-window-moved-up.png"
     pnmtopng "${repo_dir}/evidence/niri-window-focus-up.ppm" \

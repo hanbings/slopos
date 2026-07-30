@@ -138,6 +138,7 @@ pub enum LayoutError {
 #[derive(Clone, Copy)]
 struct Column<const WINDOWS: usize> {
     windows: [u32; WINDOWS],
+    window_heights: [u16; WINDOWS],
     window_count: usize,
     focused_window: usize,
     width: u16,
@@ -147,10 +148,15 @@ impl<const WINDOWS: usize> Column<WINDOWS> {
     const fn empty() -> Self {
         Self {
             windows: [0; WINDOWS],
+            window_heights: [0; WINDOWS],
             window_count: 0,
             focused_window: 0,
             width: 0,
         }
+    }
+
+    fn reset_window_heights(&mut self) {
+        self.window_heights = [0; WINDOWS];
     }
 }
 
@@ -262,6 +268,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         column.windows[column.window_count] = window;
         column.focused_window = column.window_count;
         column.window_count += 1;
+        column.reset_window_heights();
         Ok(())
     }
 
@@ -288,6 +295,8 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         self.columns[destination].windows[destination_row] = window;
         self.columns[destination].window_count += 1;
         self.columns[destination].focused_window = destination_row;
+        self.columns[destination].reset_window_heights();
+        self.columns[source].reset_window_heights();
 
         if self.columns[source].window_count == 0 {
             for index in source..self.column_count - 1 {
@@ -315,6 +324,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         self.columns[source].focused_window = self.columns[source]
             .focused_window
             .min(self.columns[source].window_count - 1);
+        self.columns[source].reset_window_heights();
 
         let destination = source + 1;
         for index in (destination..self.column_count).rev() {
@@ -341,6 +351,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         column.focused_window = column
             .focused_window
             .min(column.window_count.saturating_sub(1));
+        column.reset_window_heights();
         if column.window_count == 0 {
             for index in column_index..self.column_count - 1 {
                 self.columns[index] = self.columns[index + 1];
@@ -419,6 +430,9 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         column
             .windows
             .swap(column.focused_window, column.focused_window - 1);
+        column
+            .window_heights
+            .swap(column.focused_window, column.focused_window - 1);
         column.focused_window -= 1;
         true
     }
@@ -431,8 +445,70 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         column
             .windows
             .swap(column.focused_window, column.focused_window + 1);
+        column
+            .window_heights
+            .swap(column.focused_window, column.focused_window + 1);
         column.focused_window += 1;
         true
+    }
+
+    pub fn change_focused_window_height(
+        &mut self,
+        change: ColumnWidthChange,
+    ) -> Result<bool, LayoutError> {
+        if self.column_count == 0 {
+            return Err(LayoutError::NoFocusedWindow);
+        }
+        let column_index = self.focused_column;
+        let window_count = self.columns[column_index].window_count;
+        if window_count <= 1 {
+            return Ok(false);
+        }
+        let focused_window = self.columns[column_index].focused_window;
+        let mut heights = self.resolved_window_heights(column_index);
+        let previous = i32::from(heights[focused_window]);
+        let available_height = self.output_height.saturating_sub(self.reserved_top);
+        let requested = match change {
+            ColumnWidthChange::Set(height) => i32::from(height.resolve(available_height)),
+            ColumnWidthChange::AdjustProportion(thousandths) => previous.saturating_add(
+                i32::from(available_height).saturating_mul(i32::from(thousandths)) / 1000,
+            ),
+            ColumnWidthChange::AdjustFixed(pixels) => previous.saturating_add(pixels),
+        };
+        let total_height: i32 = heights[..window_count]
+            .iter()
+            .map(|height| i32::from(*height))
+            .sum();
+        let target = requested.clamp(1, total_height - (window_count as i32 - 1));
+        let delta = target - previous;
+        if delta == 0 {
+            return Ok(false);
+        }
+
+        if delta > 0 {
+            let mut remaining = delta;
+            for offset in 1..window_count {
+                let index = (focused_window + offset) % window_count;
+                let available = i32::from(heights[index]).saturating_sub(1);
+                let taken = available.min(remaining);
+                heights[index] -= taken as u16;
+                remaining -= taken;
+                if remaining == 0 {
+                    break;
+                }
+            }
+            heights[focused_window] = (previous + delta - remaining) as u16;
+        } else {
+            let released = -delta;
+            heights[focused_window] = target as u16;
+            let recipient = (focused_window + 1) % window_count;
+            heights[recipient] = i32::from(heights[recipient])
+                .saturating_add(released)
+                .min(i32::from(u16::MAX)) as u16;
+        }
+        let changed = heights[focused_window] != previous as u16;
+        self.columns[column_index].window_heights = heights;
+        Ok(changed)
     }
 
     pub fn set_focused_column_width(&mut self, width: ColumnWidth) -> Result<(), LayoutError> {
@@ -475,15 +551,33 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let column = self.columns[column_index];
         let gaps = i32::from(self.config.gaps);
         let x = self.column_start(column_index) - self.view_offset;
-        let available_height = i32::from(self.output_height.saturating_sub(self.reserved_top));
-        let total_gaps = gaps * (column.window_count as i32 + 1);
-        let tile_height = ((available_height - total_gaps) / column.window_count as i32).max(1);
+        let heights = self.resolved_window_heights(column_index);
+        let y = i32::from(self.reserved_top)
+            + gaps
+            + heights[..window_index]
+                .iter()
+                .map(|height| i32::from(*height) + gaps)
+                .sum::<i32>();
         Ok(Rect {
             x,
-            y: i32::from(self.reserved_top) + gaps + window_index as i32 * (tile_height + gaps),
+            y,
             width: column.width,
-            height: tile_height.min(i32::from(u16::MAX)) as u16,
+            height: heights[window_index],
         })
+    }
+
+    fn resolved_window_heights(&self, column_index: usize) -> [u16; WINDOWS] {
+        let column = self.columns[column_index];
+        if column.window_count == 0 || column.window_heights[0] != 0 {
+            return column.window_heights;
+        }
+        let available_height = i32::from(self.output_height.saturating_sub(self.reserved_top));
+        let total_gaps = i32::from(self.config.gaps) * (column.window_count as i32 + 1);
+        let equal_height = ((available_height - total_gaps) / column.window_count as i32)
+            .clamp(1, i32::from(u16::MAX)) as u16;
+        let mut heights = [0; WINDOWS];
+        heights[..column.window_count].fill(equal_height);
+        heights
     }
 
     fn reject_duplicate(&self, window: u32) -> Result<(), LayoutError> {
@@ -1081,6 +1175,22 @@ mod tests {
         assert_eq!(top.width, bottom.width);
         assert!(bottom.y > top.y);
         assert_eq!(layout.focused_window(), Some(2));
+        assert!(
+            layout
+                .change_focused_window_height(ColumnWidthChange::AdjustProportion(100))
+                .unwrap()
+        );
+        let taller_bottom = layout.tile_rect(2).unwrap();
+        let shorter_top = layout.tile_rect(1).unwrap();
+        assert_eq!(taller_bottom.height, bottom.height + 67);
+        assert_eq!(shorter_top.height, top.height - 67);
+        assert!(
+            layout
+                .change_focused_window_height(ColumnWidthChange::AdjustProportion(-100))
+                .unwrap()
+        );
+        assert_eq!(layout.tile_rect(1).unwrap(), top);
+        assert_eq!(layout.tile_rect(2).unwrap(), bottom);
         assert!(layout.move_window_up());
         assert_eq!(layout.focused_window(), Some(2));
         assert!(layout.tile_rect(2).unwrap().y < layout.tile_rect(1).unwrap().y);

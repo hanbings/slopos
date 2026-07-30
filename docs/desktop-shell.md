@@ -38,6 +38,7 @@ Config surface 的按钮或图形 monitor 的 `RELOAD` 命令会唤醒 block tas
 - 一个 column 可纵向包含多个 window，up/down focus 不改变 column width；
 - `consume-window-into-column` 把右侧 column 的顶窗追加到 focused column 底部；`expel-window-from-column` 把底窗拆到右侧并把焦点留在原列；
 - `move-window-up/down` 在同一 column 内交换 focused window 与相邻窗口，焦点跟随原 window id；
+- `set-window-height` 接受与列宽相同的固定/百分比绝对值和 `+/-` 相对值；调整 focused window 时从同列其他窗口补偿像素并保证每窗至少 1 px；
 - close 最后一个 window 会删除 column 并修正 focus/view；
 - 支持 fixed、proportional 与 client-selected width；
 - `set-column-width` 支持固定像素、绝对百分比与 `+/-` 相对像素/百分比，变更后重新执行 focused-column 可见性约束；
@@ -69,6 +70,8 @@ binds {
     Mod+Period { expel-window-from-column; }
     Mod+Minus { set-column-width "-10%"; }
     Mod+Equal { set-column-width "+10%"; }
+    Mod+Shift+Minus { set-window-height "-10%"; }
+    Mod+Shift+Equal { set-window-height "+10%"; }
     Mod+Q { close-window; }
 }
 
@@ -93,11 +96,11 @@ layout {
 }
 ```
 
-parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。workspace 状态机为每个 workspace 保留独立 column strip；声明的 named workspace 永久保留，其后维持一个匿名空 workspace，并保存 previous 索引。把列移入末尾空位会在容量允许时追加新的空位；移出、关闭或中间空洞出现时会压缩多余匿名空位，同时修正 active/previous。当前 early desktop 容量为 4，所以这是可验证的有界动态语义，不是任意数量的完整 niri workspace 管理。window rule 按出现顺序叠加，后匹配规则可覆盖先前的 `open-on-workspace`。bind chord 支持 `Mod`、`Ctrl`、`Shift`、`Alt` 与方向键、PageUp/PageDown、Return、Tab、Escape、Comma、Period 和单字符；当前 action 集为 focus column/window/workspace、`focus-workspace-previous`、同 strip 左右重排列、同列上下重排窗口、move column to workspace、consume/expel column window、`set-column-width` 与 close window。相对、索引、名称 focus 及跨 workspace 移列都会保存旧 active；previous 动作交换两个索引，所以可连续往返。`focus-workspace`/`move-column-to-workspace` 可取 1..255 的一基索引或已声明 workspace 名称；索引超过当前数量时按 niri 的 best-effort 习惯指向当前末尾空 workspace，名称则在整份 KDL parse 完成后校验，因而可引用稍后声明的 workspace，但不存在/空/过长名称会让原子配置发布失败。列宽参数当前接受整数像素或 `1%..100%`，可用前缀 `+`/`-` 表示相对调整；尚不接受小数参数。
+parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。workspace 状态机为每个 workspace 保留独立 column strip；声明的 named workspace 永久保留，其后维持一个匿名空 workspace，并保存 previous 索引。把列移入末尾空位会在容量允许时追加新的空位；移出、关闭或中间空洞出现时会压缩多余匿名空位，同时修正 active/previous。当前 early desktop 容量为 4，所以这是可验证的有界动态语义，不是任意数量的完整 niri workspace 管理。window rule 按出现顺序叠加，后匹配规则可覆盖先前的 `open-on-workspace`。bind chord 支持 `Mod`、`Ctrl`、`Shift`、`Alt` 与方向键、PageUp/PageDown、Return、Tab、Escape、Comma、Period 和单字符；当前 action 集为 focus column/window/workspace、`focus-workspace-previous`、同 strip 左右重排列、同列上下重排/调整窗口、move column to workspace、consume/expel column window、`set-column-width`、`set-window-height` 与 close window。相对、索引、名称 focus 及跨 workspace 移列都会保存旧 active；previous 动作交换两个索引，所以可连续往返。`focus-workspace`/`move-column-to-workspace` 可取 1..255 的一基索引或已声明 workspace 名称；索引超过当前数量时按 niri 的 best-effort 习惯指向当前末尾空 workspace，名称则在整份 KDL parse 完成后校验，因而可引用稍后声明的 workspace，但不存在/空/过长名称会让原子配置发布失败。列宽与窗高参数当前接受整数像素或 `1%..100%`，可用前缀 `+`/`-` 表示相对调整；尚不接受小数参数。
 
 10 项 layout 测试和 3 项 workspace/bind/rule 测试覆盖配置拒绝边界、open/focus/scroll/stack/close、绝对/相对列宽、列重排、workspace switch/move 与规则顺序。设计语义依据 [niri 默认配置](https://github.com/YaLTeR/niri/blob/main/resources/default-config.kdl)、[Layout 配置文档](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Layout)、[Key Bindings](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Key-Bindings) 与 [Window Rules](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Window-Rules)。
 
-当前 kernel desktop 用三个固定 surface 演示这些行为：Terminal/System 位于 `main`，Config 的 `app-id` 规则把它放到 `config`；顶部 workspace module 显示 active index。PS/2 parser 跟踪 Super/Ctrl/Shift/Alt 与扩展方向键，使 KDL bind 实际驱动桌面。交互回归用 `Mod+Comma` 把右侧 System consume 到 Terminal 列底部，`Mod+Ctrl+K/J` 把 focused System 移到 Terminal 上方再移回且焦点保持，`Mod+K/J` 在两窗间上下切换焦点，再用 `Mod+Period` 把底部 System expel 到右侧并验证焦点仍在 Terminal；各阶段均有截图或精确 action marker。测试还用 `Mod+Equal` 把 Terminal 从 512 px 放大至 614 px并截图，再以 `Mod+Minus` 恢复 512 px；随后用 `Mod+Shift+Right` 把整列从 x=16 重排至 x=496并截图，再以 `Mod+Shift+Left` 恢复；Super+右键横拖把列从 512 px 放大至 608 px并恢复；`Mod+2/1` 与 `Mod+C/M` 分别按索引/名称切入 `config/main`。`Mod+Ctrl+3` 把 Terminal 移入末尾空位后，workspace/Waybar 从 3 扩展到 4；`Mod+Ctrl+1` 移回后再收缩为 3；`Mod+Ctrl+C/M` 也按名称移动整列，连续两次 `Mod+Tab` 又在 `config/main` 间往返；最后还点击顶部数字 `2`/`1` 往返。niri 配置已按上述 user/system/fallback 顺序从 VFS 加载，并能整套原子重读；尚未实现超过 4 个 workspace、完整 niri action/XKB 命名、multi-output、floating/tabbed column、复杂 match、animation、overview、IPC、自动文件监听、Wayland surface 或普通用户 client。
+当前 kernel desktop 用三个固定 surface 演示这些行为：Terminal/System 位于 `main`，Config 的 `app-id` 规则把它放到 `config`；顶部 workspace module 显示 active index。PS/2 parser 跟踪 Super/Ctrl/Shift/Alt 与扩展方向键，使 KDL bind 实际驱动桌面。交互回归用 `Mod+Comma` 把右侧 System consume 到 Terminal 列底部，`Mod+Shift+Equal/Minus` 把 focused System 从 340 px 增至 412 px、相应把 Terminal 缩至 268 px，再精确恢复 340/340；`Mod+Ctrl+K/J` 把 System 移到 Terminal 上方再移回且焦点保持，`Mod+K/J` 在两窗间上下切换焦点，最后用 `Mod+Period` 把底部 System expel 到右侧并验证焦点仍在 Terminal。各阶段均有截图或精确 action marker。测试还用 `Mod+Equal` 把 Terminal 从 512 px 放大至 614 px并截图，再以 `Mod+Minus` 恢复 512 px；随后用 `Mod+Shift+Right` 把整列从 x=16 重排至 x=496并截图，再以 `Mod+Shift+Left` 恢复；Super+右键横拖把列从 512 px 放大至 608 px并恢复；`Mod+2/1` 与 `Mod+C/M` 分别按索引/名称切入 `config/main`。`Mod+Ctrl+3` 把 Terminal 移入末尾空位后，workspace/Waybar 从 3 扩展到 4；`Mod+Ctrl+1` 移回后再收缩为 3；`Mod+Ctrl+C/M` 也按名称移动整列，连续两次 `Mod+Tab` 又在 `config/main` 间往返；最后还点击顶部数字 `2`/`1` 往返。niri 配置已按上述 user/system/fallback 顺序从 VFS 加载，并能整套原子重读；尚未实现超过 4 个 workspace、完整 niri action/XKB 命名、multi-output、floating/tabbed column、复杂 match、animation、overview、IPC、自动文件监听、Wayland surface 或普通用户 client。
 
 ## Waybar 式顶部栏
 

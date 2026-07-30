@@ -71,6 +71,7 @@ pub enum NiriAction<'a> {
     ConsumeWindowIntoColumn,
     ExpelWindowFromColumn,
     SetColumnWidth(ColumnWidthChange),
+    SetWindowHeight(ColumnWidthChange),
     CloseWindow,
 }
 
@@ -482,6 +483,12 @@ impl<'a> ShellConfigParser<'a> {
                     return Err(NiriConfigError::InvalidBinding);
                 };
                 NiriAction::SetColumnWidth(parse_column_width_change(width)?)
+            }
+            "set-window-height" => {
+                let KdlToken::String(height) = self.next() else {
+                    return Err(NiriConfigError::InvalidBinding);
+                };
+                NiriAction::SetWindowHeight(parse_column_width_change(height)?)
             }
             "close-window" => NiriAction::CloseWindow,
             _ => return Err(NiriConfigError::InvalidBinding),
@@ -918,6 +925,15 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             .map_err(WorkspaceError::Layout)
     }
 
+    pub fn change_focused_window_height(
+        &mut self,
+        change: ColumnWidthChange,
+    ) -> Result<bool, WorkspaceError> {
+        self.layouts[self.active]
+            .change_focused_window_height(change)
+            .map_err(WorkspaceError::Layout)
+    }
+
     pub fn view_offset(&self) -> i32 {
         self.layouts[self.active].view_offset()
     }
@@ -1041,6 +1057,8 @@ mod tests {
                 Mod+Period { expel-window-from-column; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
+                Mod+Shift+Minus { set-window-height "-10%"; }
+                Mod+Shift+Equal { set-window-height "+10%"; }
                 Mod+Q { close-window; }
             }
             window-rule {
@@ -1060,7 +1078,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 18);
+        assert_eq!(config.bindings.len(), 20);
         assert_eq!(
             config
                 .bindings
@@ -1179,6 +1197,24 @@ mod tests {
             Some(NiriAction::SetColumnWidth(ColumnWidthChange::Set(
                 ColumnWidth::Fixed(640)
             )))
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::SHIFT),
+                BindingKey::Minus
+            ),
+            Some(NiriAction::SetWindowHeight(
+                ColumnWidthChange::AdjustProportion(-100)
+            ))
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::SHIFT),
+                BindingKey::Equal
+            ),
+            Some(NiriAction::SetWindowHeight(
+                ColumnWidthChange::AdjustProportion(100)
+            ))
         );
         assert_eq!(
             parse_column_width_change("50%"),

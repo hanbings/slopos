@@ -143,7 +143,7 @@ required_markers=(
     "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=2 owner_pid=2 event=policy-applied wake=block-task"
     "SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=config-applied after_generation=1 event_bytes=32 state=blocked origin=cpl3"
     "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=1 init=wait4 resources=retained"
-    "SLOPOS-SHELL: config loaded niri_workspaces=3 named=2 binds=28 rules=1 active_columns=2 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4 module_configs=6 css_rules=12"
+    "SLOPOS-SHELL: config loaded niri_workspaces=3 named=2 binds=30 rules=1 active_columns=2 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4 module_configs=6 css_rules=12"
     "SLOPOS-WAYBAR: formats active workspace={value} window={title} cpu=\"CPU {usage}%\" memory=\"MEM {percentage}%\" intervals=5/10/30/60 css=foreground/background/padding/margin/border-bottom"
     "SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry=1024x768 image=awaiting-user-policy transition=simple step=2 fps=30 policy_owner=user-service"
     "SLOPOS-SWWW: policy applied owner_pid=2 image=/usr/share/backgrounds/slopos-aurora.ppm output=SLOPOS-1 transition=simple step=32 fps=30"

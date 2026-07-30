@@ -1331,6 +1331,10 @@ impl Desktop {
                 .workspaces
                 .change_focused_column_width(change)
                 .unwrap_or_else(|_| crate::fatal("niri set-column-width failed")),
+            NiriAction::SetWindowHeight(change) => self
+                .workspaces
+                .change_focused_window_height(change)
+                .unwrap_or_else(|_| crate::fatal("niri set-window-height failed")),
             NiriAction::CloseWindow => {
                 if let Some(window) = self.workspaces.focused_window() {
                     self.close_window(window as usize);
@@ -1359,6 +1363,16 @@ impl Desktop {
                 "SLOPOS-DESKTOP: window resized kind={} width={} layout=scrolling",
                 title(window.kind),
                 window.width
+            ));
+        }
+        if changed
+            && matches!(action, NiriAction::SetWindowHeight(_))
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: window height changed kind={} height={} layout=scrolling",
+                title(window.kind),
+                window.height
             ));
         }
         if changed
@@ -1588,6 +1602,7 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::ConsumeWindowIntoColumn => "consume-window-into-column",
         NiriAction::ExpelWindowFromColumn => "expel-window-from-column",
         NiriAction::SetColumnWidth(_) => "set-column-width",
+        NiriAction::SetWindowHeight(_) => "set-window-height",
         NiriAction::CloseWindow => "close-window",
     }
 }
