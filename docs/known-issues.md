@@ -6,12 +6,12 @@
 - framebuffer 渲染是全屏重绘，没有 damage tracking、double buffering 或 virtio-gpu。
 - 所有窗口和工具都在 ring 0，共享同一地址空间。
 - 配置窗口只修改内存主题，不解析或持久化声明式配置。
-- `initrd.slp` 仍不是文件系统；独立 ext4 disk 目前只验证 superblock，尚无 group/inode/extent/directory/VFS/write/journal；btrfs 未实现。
+- `initrd.slp` 仍不是文件系统；独立 ext4 disk 目前能校验 group 0、root inode、depth-0 extent 与 root directory，但尚无通用多 group/deep extent/path walk/VFS/write/journal；btrfs 未实现。
 - 已有 frame allocator、自有 early page table 与 bump heap，但没有回收、用户地址空间、进程、用户态或 syscall。
 - 当前页表为 early identity map，使用 2 MiB RWX huge page；尚未施加 W^X、NX、user/supervisor 或细粒度 kernel section 权限。
 - 当前内核固定加载到物理 64 MiB；切换自有页表前的最早期初始化仍依赖 OVMF 留下的 identity mapping。
 - ACPI 当前解析 RSDP、RSDT/XSDT 和 MADT；尚未解析 MCFG、HPET、FADT，固定容量 parser 上限也不是完整 ACPICA 实现。
 - PCI 使用 configuration mechanism 1 并消费 firmware 已分配 BAR；尚未解析 bridge 拓扑或 MCFG，也没有 BAR sizing/resource allocation、MSI/MSI-X 或电源管理。
-- virtio-blk 当前只有启动时单个 1024-byte 只读请求，虽已使用 INTx→waker→Future completion，但没有 descriptor 回收、并发 request、写入、flush/discard、block cache、timeout 或错误恢复。
+- virtio-blk 当前可顺序复用一条 descriptor chain，启动时完成四次只读请求；没有多 in-flight descriptor 分配、写入、flush/discard、block cache、timeout 或错误恢复。
 - bitmap font 只覆盖 UI 使用的 ASCII 子集。
 - `capture-desktop.sh` 使用 QEMU PPM；只有安装 `pnmtopng` 时才同时生成 PNG。
