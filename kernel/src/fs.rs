@@ -5,8 +5,8 @@ use core::ptr;
 use slopos_ext4::{
     DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DIRECTORY_ENTRY_SYMLINK,
     DirectoryBlock, Extent, ExtentNode, GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode,
-    JOURNAL_INODE, JournalSuperblock, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
-    validate_path_component,
+    JOURNAL_INODE, JournalCommit, JournalDescriptor, JournalSuperblock, ROOT_INODE,
+    SUPERBLOCK_SIZE, Superblock, encode_single_block_journal_transaction, validate_path_component,
 };
 use slopos_vfs::{AbsolutePath, AccessMode, FileDescriptorTable, FileNode, MountTable};
 
@@ -17,6 +17,7 @@ const SECTOR_SIZE: u64 = 512;
 const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
 static ZERO_BLOCK: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
+static JOURNAL_PROBE_BLOCK: [u8; BLOCK_SIZE] = [b'J'; BLOCK_SIZE];
 const EXPECTED_RELEASE: &[u8] = include_bytes!("../../rootfs/etc/slopos-release");
 const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/slopos/system.conf");
 const RELEASE_PATH: [&[u8]; 2] = [b"etc", b"slopos-release"];
@@ -374,6 +375,17 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         journal.superblock.feature_incompat,
         journal.superblock.feature_read_only_compat
     ));
+    let journal_records = mount
+        .stage_inactive_journal_records(&mut device, &journal, physical_block)
+        .await;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: journal records staged sequence={} target_block={} descriptor_block={} data_block={} commit_block={} writes=6 flushes=3 verified=true restored=true active=false",
+        journal_records.sequence,
+        journal_records.target_block,
+        journal_records.descriptor_block,
+        journal_records.data_block,
+        journal_records.commit_block
+    ));
 
     crate::serial::serialln(format_args!(
         "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={} invalidations={}",
@@ -573,6 +585,119 @@ impl Ext4Mount {
         JournalProbe {
             physical_block,
             superblock,
+        }
+    }
+
+    async fn stage_inactive_journal_records(
+        &self,
+        device: &mut BlockDevice,
+        journal: &JournalProbe,
+        target_block: u64,
+    ) -> JournalRecordProbe {
+        let sequence = journal.superblock.sequence;
+        let descriptor_block = journal
+            .physical_block
+            .checked_add(u64::from(journal.superblock.first_log_block))
+            .unwrap_or_else(|| device.fail("JBD2 descriptor block overflow"));
+        let data_block = descriptor_block
+            .checked_add(1)
+            .unwrap_or_else(|| device.fail("JBD2 data block overflow"));
+        let commit_block = descriptor_block
+            .checked_add(2)
+            .unwrap_or_else(|| device.fail("JBD2 commit block overflow"));
+        let journal_end = journal
+            .physical_block
+            .checked_add(u64::from(journal.superblock.max_length))
+            .unwrap_or_else(|| device.fail("JBD2 extent end overflow"));
+        if commit_block >= journal_end {
+            device.fail("JBD2 probe transaction exceeds journal extent");
+        }
+        for block in [descriptor_block, data_block, commit_block] {
+            device
+                .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
+                .await;
+            if device.data(BLOCK_SIZE).iter().any(|byte| *byte != 0) {
+                device.fail("JBD2 probe transaction block is not empty");
+            }
+        }
+
+        let mut scratch = JournalScratch::new();
+        let target_block = u32::try_from(target_block)
+            .unwrap_or_else(|_| device.fail("JBD2 target block exceeds 32 bits"));
+        {
+            let (descriptor, data, commit) = scratch.buffers();
+            encode_single_block_journal_transaction(
+                descriptor,
+                data,
+                commit,
+                sequence,
+                target_block,
+                &self.superblock.uuid,
+                &JOURNAL_PROBE_BLOCK,
+            )
+            .unwrap_or_else(|_| device.fail("JBD2 transaction encoding failed"));
+        }
+        let descriptor = JournalDescriptor::parse(scratch.descriptor())
+            .unwrap_or_else(|_| device.fail("JBD2 descriptor self-validation failed"));
+        let commit = JournalCommit::parse(scratch.commit())
+            .unwrap_or_else(|_| device.fail("JBD2 commit self-validation failed"));
+        if descriptor.sequence != sequence
+            || descriptor.target_block != target_block
+            || descriptor.uuid != self.superblock.uuid
+            || commit.sequence != sequence
+        {
+            device.fail("JBD2 transaction identity mismatch");
+        }
+
+        device
+            .write(
+                block_to_sector(device, &self.superblock, descriptor_block),
+                scratch.descriptor(),
+            )
+            .await;
+        device
+            .write(
+                block_to_sector(device, &self.superblock, data_block),
+                scratch.data(),
+            )
+            .await;
+        device.flush().await;
+        device
+            .write(
+                block_to_sector(device, &self.superblock, commit_block),
+                scratch.commit(),
+            )
+            .await;
+        device.flush().await;
+
+        for (block, expected) in [
+            (descriptor_block, scratch.descriptor()),
+            (data_block, scratch.data()),
+            (commit_block, scratch.commit()),
+        ] {
+            device
+                .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
+                .await;
+            if device.data(BLOCK_SIZE) != expected {
+                device.fail("JBD2 staged record readback mismatch");
+            }
+        }
+
+        for block in [descriptor_block, data_block, commit_block] {
+            device
+                .write(
+                    block_to_sector(device, &self.superblock, block),
+                    &ZERO_BLOCK,
+                )
+                .await;
+        }
+        device.flush().await;
+        JournalRecordProbe {
+            sequence,
+            target_block,
+            descriptor_block,
+            data_block,
+            commit_block,
         }
     }
 
@@ -890,6 +1015,54 @@ struct JournalProbe {
     superblock: JournalSuperblock,
 }
 
+struct JournalRecordProbe {
+    sequence: u32,
+    target_block: u32,
+    descriptor_block: u64,
+    data_block: u64,
+    commit_block: u64,
+}
+
+struct JournalScratch {
+    descriptor_frame: usize,
+    data_frame: usize,
+    commit_frame: usize,
+}
+
+impl JournalScratch {
+    fn new() -> Self {
+        Self {
+            descriptor_frame: allocate_scratch_frame(),
+            data_frame: allocate_scratch_frame(),
+            commit_frame: allocate_scratch_frame(),
+        }
+    }
+
+    fn buffers(&mut self) -> (&mut [u8], &mut [u8], &mut [u8]) {
+        // SAFETY: all three fields are distinct, permanently live frames
+        // exclusively owned by this scratch object.
+        unsafe {
+            (
+                core::slice::from_raw_parts_mut(self.descriptor_frame as *mut u8, BLOCK_SIZE),
+                core::slice::from_raw_parts_mut(self.data_frame as *mut u8, BLOCK_SIZE),
+                core::slice::from_raw_parts_mut(self.commit_frame as *mut u8, BLOCK_SIZE),
+            )
+        }
+    }
+
+    fn descriptor(&self) -> &[u8] {
+        scratch_frame_bytes(self.descriptor_frame)
+    }
+
+    fn data(&self) -> &[u8] {
+        scratch_frame_bytes(self.data_frame)
+    }
+
+    fn commit(&self) -> &[u8] {
+        scratch_frame_bytes(self.commit_frame)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct CacheEntry {
     block: u64,
@@ -1074,4 +1247,17 @@ fn block_to_sector(device: &BlockDevice, superblock: &Superblock, block: u64) ->
         device.fail("ext4 block is not sector aligned");
     }
     byte_offset / SECTOR_SIZE
+}
+
+fn allocate_scratch_frame() -> usize {
+    let frame = crate::memory::allocate_frame()
+        .unwrap_or_else(|| crate::fatal("out of frames for journal scratch"));
+    // SAFETY: allocator returned an exclusive identity-mapped 4 KiB frame.
+    unsafe { ptr::write_bytes(frame as *mut u8, 0, BLOCK_SIZE) };
+    frame as usize
+}
+
+fn scratch_frame_bytes(frame: usize) -> &'static [u8] {
+    // SAFETY: journal scratch frames remain permanently allocated.
+    unsafe { core::slice::from_raw_parts(frame as *const u8, BLOCK_SIZE) }
 }
