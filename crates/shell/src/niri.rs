@@ -72,6 +72,8 @@ pub enum NiriAction<'a> {
     ExpelWindowFromColumn,
     SwitchPresetColumnWidth,
     SwitchPresetColumnWidthBack,
+    SwitchPresetWindowHeight,
+    SwitchPresetWindowHeightBack,
     SetColumnWidth(ColumnWidthChange),
     SetWindowHeight(ColumnWidthChange),
     ResetWindowHeight,
@@ -483,6 +485,8 @@ impl<'a> ShellConfigParser<'a> {
             "expel-window-from-column" => NiriAction::ExpelWindowFromColumn,
             "switch-preset-column-width" => NiriAction::SwitchPresetColumnWidth,
             "switch-preset-column-width-back" => NiriAction::SwitchPresetColumnWidthBack,
+            "switch-preset-window-height" => NiriAction::SwitchPresetWindowHeight,
+            "switch-preset-window-height-back" => NiriAction::SwitchPresetWindowHeightBack,
             "set-column-width" => {
                 let KdlToken::String(width) = self.next() else {
                     return Err(NiriConfigError::InvalidBinding);
@@ -952,6 +956,14 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].switch_preset_column_width_back()
     }
 
+    pub fn switch_preset_window_height(&mut self) -> bool {
+        self.layouts[self.active].switch_preset_window_height()
+    }
+
+    pub fn switch_preset_window_height_back(&mut self) -> bool {
+        self.layouts[self.active].switch_preset_window_height_back()
+    }
+
     pub fn view_offset(&self) -> i32 {
         self.layouts[self.active].view_offset()
     }
@@ -1079,6 +1091,8 @@ mod tests {
                 Mod+Shift+Equal { set-window-height "+10%"; }
                 Mod+R { switch-preset-column-width; }
                 Mod+Shift+R { switch-preset-column-width-back; }
+                Mod+Ctrl+Shift+R { switch-preset-window-height; }
+                Mod+Ctrl+Alt+R { switch-preset-window-height-back; }
                 Mod+Ctrl+R { reset-window-height; }
                 Mod+Q { close-window; }
             }
@@ -1099,7 +1113,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 23);
+        assert_eq!(config.bindings.len(), 25);
         assert_eq!(
             config
                 .bindings
@@ -1161,6 +1175,24 @@ mod tests {
                 BindingKey::Character(b'R')
             ),
             Some(NiriAction::ResetWindowHeight)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD
+                    .with(BindingModifiers::CTRL)
+                    .with(BindingModifiers::SHIFT),
+                BindingKey::Character(b'R')
+            ),
+            Some(NiriAction::SwitchPresetWindowHeight)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD
+                    .with(BindingModifiers::CTRL)
+                    .with(BindingModifiers::ALT),
+                BindingKey::Character(b'R')
+            ),
+            Some(NiriAction::SwitchPresetWindowHeightBack)
         );
         assert_eq!(
             config
@@ -1327,7 +1359,7 @@ mod tests {
                 .change_focused_column_width(ColumnWidthChange::AdjustProportion(100))
                 .unwrap()
         );
-        assert_eq!(workspaces.tile_rect(10).unwrap().width, 600);
+        assert_eq!(workspaces.tile_rect(10).unwrap().width, 574);
         assert_eq!(workspaces.focused_window(), Some(10));
         assert!(workspaces.move_focused_to_workspace(1).unwrap());
         assert_eq!(workspaces.active(), 1);

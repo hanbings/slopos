@@ -1331,6 +1331,10 @@ impl Desktop {
             NiriAction::SwitchPresetColumnWidthBack => {
                 self.workspaces.switch_preset_column_width_back()
             }
+            NiriAction::SwitchPresetWindowHeight => self.workspaces.switch_preset_window_height(),
+            NiriAction::SwitchPresetWindowHeightBack => {
+                self.workspaces.switch_preset_window_height_back()
+            }
             NiriAction::SetColumnWidth(change) => self
                 .workspaces
                 .change_focused_column_width(change)
@@ -1378,7 +1382,10 @@ impl Desktop {
         if changed
             && matches!(
                 action,
-                NiriAction::SetWindowHeight(_) | NiriAction::ResetWindowHeight
+                NiriAction::SetWindowHeight(_)
+                    | NiriAction::ResetWindowHeight
+                    | NiriAction::SwitchPresetWindowHeight
+                    | NiriAction::SwitchPresetWindowHeightBack
             )
             && let Some(window) = self.positioned_window(self.active)
         {
@@ -1616,6 +1623,8 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::ExpelWindowFromColumn => "expel-window-from-column",
         NiriAction::SwitchPresetColumnWidth => "switch-preset-column-width",
         NiriAction::SwitchPresetColumnWidthBack => "switch-preset-column-width-back",
+        NiriAction::SwitchPresetWindowHeight => "switch-preset-window-height",
+        NiriAction::SwitchPresetWindowHeightBack => "switch-preset-window-height-back",
         NiriAction::SetColumnWidth(_) => "set-column-width",
         NiriAction::SetWindowHeight(_) => "set-window-height",
         NiriAction::ResetWindowHeight => "reset-window-height",

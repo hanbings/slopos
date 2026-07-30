@@ -33,7 +33,7 @@ pub const DEFAULT_FOCUS_RING_WIDTH: u16 = 4;
 pub const DEFAULT_ACTIVE_COLOR: u32 = 0x7f_c8_ff;
 pub const DEFAULT_INACTIVE_COLOR: u32 = 0x50_50_50;
 pub const DEFAULT_BACKGROUND_COLOR: u32 = 0x10_14_26;
-pub const MAX_PRESET_COLUMN_WIDTHS: usize = 8;
+pub const MAX_PRESET_SIZES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CenterFocusedColumn {
@@ -57,14 +57,14 @@ pub enum ColumnWidthChange {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PresetColumnWidths {
-    entries: [ColumnWidth; MAX_PRESET_COLUMN_WIDTHS],
+pub struct PresetSizes {
+    entries: [ColumnWidth; MAX_PRESET_SIZES],
     length: usize,
 }
 
-impl PresetColumnWidths {
+impl PresetSizes {
     const fn defaults() -> Self {
-        let mut entries = [ColumnWidth::Client; MAX_PRESET_COLUMN_WIDTHS];
+        let mut entries = [ColumnWidth::Client; MAX_PRESET_SIZES];
         entries[0] = ColumnWidth::Proportion(333);
         entries[1] = ColumnWidth::Proportion(500);
         entries[2] = ColumnWidth::Proportion(667);
@@ -73,13 +73,13 @@ impl PresetColumnWidths {
 
     const fn empty() -> Self {
         Self {
-            entries: [ColumnWidth::Client; MAX_PRESET_COLUMN_WIDTHS],
+            entries: [ColumnWidth::Client; MAX_PRESET_SIZES],
             length: 0,
         }
     }
 
     fn push(&mut self, width: ColumnWidth) -> Result<(), ConfigError> {
-        if self.length == MAX_PRESET_COLUMN_WIDTHS {
+        if self.length == MAX_PRESET_SIZES {
             return Err(ConfigError::InvalidColumnWidth);
         }
         self.entries[self.length] = width;
@@ -104,14 +104,56 @@ impl PresetColumnWidths {
 }
 
 impl ColumnWidth {
-    fn resolve(self, output_width: u16) -> u16 {
+    fn resolve(self, view_size: u16, gap: u16) -> u16 {
         match self {
-            Self::Proportion(thousandths) => ((u32::from(output_width) * u32::from(thousandths))
-                / 1000)
-                .clamp(1, u32::from(u16::MAX)) as u16,
+            Self::Proportion(thousandths) => {
+                let full = u32::from(view_size.saturating_sub(gap));
+                ((full * u32::from(thousandths)) / 1000)
+                    .saturating_sub(u32::from(gap))
+                    .clamp(1, u32::from(u16::MAX)) as u16
+            }
             Self::Fixed(width) => width,
-            Self::Client => output_width / 2,
+            Self::Client => view_size / 2,
         }
+    }
+}
+
+fn next_preset_index(
+    presets: PresetSizes,
+    current: u16,
+    view_size: u16,
+    gap: u16,
+    backwards: bool,
+) -> usize {
+    let length = presets.len();
+    let exact = (0..length).find(|index| {
+        presets
+            .get(*index)
+            .is_some_and(|size| size.resolve(view_size, gap) == current)
+    });
+    if let Some(index) = exact {
+        if backwards {
+            (index + length - 1) % length
+        } else {
+            (index + 1) % length
+        }
+    } else if backwards {
+        (0..length)
+            .rev()
+            .find(|index| {
+                presets
+                    .get(*index)
+                    .is_some_and(|size| size.resolve(view_size, gap) < current)
+            })
+            .unwrap_or(length - 1)
+    } else {
+        (0..length)
+            .find(|index| {
+                presets
+                    .get(*index)
+                    .is_some_and(|size| size.resolve(view_size, gap) > current)
+            })
+            .unwrap_or(0)
     }
 }
 
@@ -129,7 +171,8 @@ pub struct LayoutConfig {
     pub center_focused_column: CenterFocusedColumn,
     pub always_center_single_column: bool,
     pub default_column_width: ColumnWidth,
-    pub preset_column_widths: PresetColumnWidths,
+    pub preset_column_widths: PresetSizes,
+    pub preset_window_heights: PresetSizes,
     pub focus_ring: FocusRing,
     pub background_color: u32,
 }
@@ -141,7 +184,8 @@ impl Default for LayoutConfig {
             center_focused_column: CenterFocusedColumn::Never,
             always_center_single_column: false,
             default_column_width: ColumnWidth::Proportion(500),
-            preset_column_widths: PresetColumnWidths::defaults(),
+            preset_column_widths: PresetSizes::defaults(),
+            preset_window_heights: PresetSizes::defaults(),
             focus_ring: FocusRing {
                 enabled: true,
                 width: DEFAULT_FOCUS_RING_WIDTH,
@@ -297,7 +341,10 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let mut column = Column::empty();
         column.windows[0] = window;
         column.window_count = 1;
-        column.width = self.config.default_column_width.resolve(self.output_width);
+        column.width = self
+            .config
+            .default_column_width
+            .resolve(self.output_width, self.config.gaps);
         self.columns[insert_at] = column;
         self.column_count += 1;
         self.focused_column = insert_at;
@@ -511,20 +558,30 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         }
         let column_index = self.focused_column;
         let window_count = self.columns[column_index].window_count;
-        if window_count <= 1 {
-            return Ok(false);
+        if window_count == 0 {
+            return Err(LayoutError::NoFocusedWindow);
         }
         let focused_window = self.columns[column_index].focused_window;
         let mut heights = self.resolved_window_heights(column_index);
         let previous = i32::from(heights[focused_window]);
         let available_height = self.output_height.saturating_sub(self.reserved_top);
         let requested = match change {
-            ColumnWidthChange::Set(height) => i32::from(height.resolve(available_height)),
+            ColumnWidthChange::Set(height) => {
+                i32::from(height.resolve(available_height, self.config.gaps))
+            }
             ColumnWidthChange::AdjustProportion(thousandths) => previous.saturating_add(
-                i32::from(available_height).saturating_mul(i32::from(thousandths)) / 1000,
+                i32::from(available_height.saturating_sub(self.config.gaps))
+                    .saturating_mul(i32::from(thousandths))
+                    / 1000,
             ),
             ColumnWidthChange::AdjustFixed(pixels) => previous.saturating_add(pixels),
         };
+        if window_count == 1 {
+            let maximum = available_height.saturating_sub(self.config.gaps.saturating_mul(2));
+            let target = requested.clamp(1, i32::from(maximum.max(1))) as u16;
+            self.columns[column_index].window_heights[0] = target;
+            return Ok(target != previous as u16);
+        }
         let total_height: i32 = heights[..window_count]
             .iter()
             .map(|height| i32::from(*height))
@@ -581,46 +638,58 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         self.switch_preset_column_width_in_direction(true)
     }
 
+    pub fn switch_preset_window_height(&mut self) -> bool {
+        self.switch_preset_window_height_in_direction(false)
+    }
+
+    pub fn switch_preset_window_height_back(&mut self) -> bool {
+        self.switch_preset_window_height_in_direction(true)
+    }
+
+    fn switch_preset_window_height_in_direction(&mut self, backwards: bool) -> bool {
+        if self.column_count == 0 || self.config.preset_window_heights.is_empty() {
+            return false;
+        }
+        let column_index = self.focused_column;
+        let focused_window = self.columns[column_index].focused_window;
+        if focused_window >= self.columns[column_index].window_count {
+            return false;
+        }
+        let available_height = self.output_height.saturating_sub(self.reserved_top);
+        let current = self.resolved_window_heights(column_index)[focused_window];
+        let presets = self.config.preset_window_heights;
+        let target_index = next_preset_index(
+            presets,
+            current,
+            available_height,
+            self.config.gaps,
+            backwards,
+        );
+        self.change_focused_window_height(ColumnWidthChange::Set(
+            presets
+                .get(target_index)
+                .expect("preset index stays within the fixed list"),
+        ))
+        .unwrap_or(false)
+    }
+
     fn switch_preset_column_width_in_direction(&mut self, backwards: bool) -> bool {
         if self.column_count == 0 || self.config.preset_column_widths.is_empty() {
             return false;
         }
         let presets = self.config.preset_column_widths;
         let current = self.columns[self.focused_column].width;
-        let length = presets.len();
-        let exact = (0..length).find(|index| {
-            presets
-                .get(*index)
-                .is_some_and(|width| width.resolve(self.output_width) == current)
-        });
-        let target_index = if let Some(index) = exact {
-            if backwards {
-                (index + length - 1) % length
-            } else {
-                (index + 1) % length
-            }
-        } else if backwards {
-            (0..length)
-                .rev()
-                .find(|index| {
-                    presets
-                        .get(*index)
-                        .is_some_and(|width| width.resolve(self.output_width) < current)
-                })
-                .unwrap_or(length - 1)
-        } else {
-            (0..length)
-                .find(|index| {
-                    presets
-                        .get(*index)
-                        .is_some_and(|width| width.resolve(self.output_width) > current)
-                })
-                .unwrap_or(0)
-        };
+        let target_index = next_preset_index(
+            presets,
+            current,
+            self.output_width,
+            self.config.gaps,
+            backwards,
+        );
         let width = presets
             .get(target_index)
             .expect("preset index stays within the fixed list")
-            .resolve(self.output_width);
+            .resolve(self.output_width, self.config.gaps);
         if width == current {
             return false;
         }
@@ -645,9 +714,13 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             .ok_or(LayoutError::NoFocusedWindow)?;
         let previous = column.width;
         let adjusted = match change {
-            ColumnWidthChange::Set(width) => i32::from(width.resolve(self.output_width)),
+            ColumnWidthChange::Set(width) => {
+                i32::from(width.resolve(self.output_width, self.config.gaps))
+            }
             ColumnWidthChange::AdjustProportion(thousandths) => {
-                let delta = i32::from(self.output_width) * i32::from(thousandths) / 1000;
+                let delta = i32::from(self.output_width.saturating_sub(self.config.gaps))
+                    * i32::from(thousandths)
+                    / 1000;
                 i32::from(previous).saturating_add(delta)
             }
             ColumnWidthChange::AdjustFixed(pixels) => i32::from(previous).saturating_add(pixels),
@@ -919,7 +992,11 @@ impl<'a> ConfigParser<'a> {
                 }
                 Token::Identifier("preset-column-widths") => {
                     self.expect_block()?;
-                    config.preset_column_widths = self.parse_preset_column_widths()?;
+                    config.preset_column_widths = self.parse_preset_sizes()?;
+                }
+                Token::Identifier("preset-window-heights") => {
+                    self.expect_block()?;
+                    config.preset_window_heights = self.parse_preset_sizes()?;
                 }
                 Token::Identifier("focus-ring") => {
                     self.expect_block()?;
@@ -967,19 +1044,20 @@ impl<'a> ConfigParser<'a> {
         }
     }
 
-    fn parse_preset_column_widths(&mut self) -> Result<PresetColumnWidths, ConfigError> {
-        let mut widths = PresetColumnWidths::empty();
+    fn parse_preset_sizes(&mut self) -> Result<PresetSizes, ConfigError> {
+        let mut sizes = PresetSizes::empty();
         loop {
             match self.next_non_end_node() {
-                Token::RightBrace => return Ok(widths),
+                Token::RightBrace if sizes.is_empty() => return Ok(PresetSizes::defaults()),
+                Token::RightBrace => return Ok(sizes),
                 Token::Identifier("proportion") => {
-                    widths.push(ColumnWidth::Proportion(parse_thousandths(
+                    sizes.push(ColumnWidth::Proportion(parse_thousandths(
                         self.value_number()?,
                     )?))?;
                     self.finish_node()?;
                 }
                 Token::Identifier("fixed") => {
-                    widths.push(ColumnWidth::Fixed(parse_rounded_u16(self.value_number()?)?))?;
+                    sizes.push(ColumnWidth::Fixed(parse_rounded_u16(self.value_number()?)?))?;
                     self.finish_node()?;
                 }
                 Token::Identifier(_) | Token::Other | Token::Number(_) | Token::String(_) => {
@@ -1222,6 +1300,10 @@ mod tests {
                     proportion 0.5
                     fixed 900
                 }
+                preset-window-heights {
+                    fixed 240
+                    proportion 0.5
+                }
                 focus-ring {
                     width 3
                     active-color "#89b4fa"
@@ -1252,6 +1334,11 @@ mod tests {
             config.preset_column_widths.get(2),
             Some(ColumnWidth::Fixed(900))
         );
+        assert_eq!(config.preset_window_heights.len(), 2);
+        assert_eq!(
+            config.preset_window_heights.get(0),
+            Some(ColumnWidth::Fixed(240))
+        );
         assert_eq!(config.focus_ring.width, 3);
         assert_eq!(config.focus_ring.active_color, 0x89_b4_fa);
         assert_eq!(config.focus_ring.inactive_color, 0x45_47_5a);
@@ -1272,11 +1359,16 @@ mod tests {
                 .default_column_width,
             ColumnWidth::Client
         );
-        assert!(
-            parse_niri_layout("layout { preset-column-widths {} }")
-                .unwrap()
-                .preset_column_widths
-                .is_empty()
+        assert_eq!(
+            parse_niri_layout(
+                "layout {
+                    preset-column-widths {}
+                    preset-window-heights {}
+                }"
+            )
+            .unwrap()
+            .preset_window_heights,
+            LayoutConfig::default().preset_window_heights
         );
     }
 
@@ -1296,7 +1388,7 @@ mod tests {
         );
         assert_eq!(
             parse_niri_layout(
-                "layout { preset-column-widths {
+                "layout { preset-window-heights {
                     fixed 1; fixed 2; fixed 3; fixed 4; fixed 5;
                     fixed 6; fixed 7; fixed 8; fixed 9;
                 } }"
@@ -1314,7 +1406,7 @@ mod tests {
         layout.open_window(20).unwrap();
         let first_after = layout.tile_rect(10).unwrap();
         let second = layout.tile_rect(20).unwrap();
-        assert_eq!(first.width, 500);
+        assert_eq!(first.width, 476);
         assert_eq!(first.width, first_after.width);
         assert_eq!(first_strip_x, first_after.x + layout.view_offset());
         assert!(second.x > first.x);
@@ -1357,12 +1449,17 @@ mod tests {
         );
         let taller_bottom = layout.tile_rect(2).unwrap();
         let shorter_top = layout.tile_rect(1).unwrap();
-        assert_eq!(taller_bottom.height, bottom.height + 67);
-        assert_eq!(shorter_top.height, top.height - 67);
+        assert_eq!(taller_bottom.height, bottom.height + 65);
+        assert_eq!(shorter_top.height, top.height - 65);
         assert!(layout.reset_focused_window_height());
         assert_eq!(layout.tile_rect(1).unwrap(), top);
         assert_eq!(layout.tile_rect(2).unwrap(), bottom);
         assert!(!layout.reset_focused_window_height());
+        assert!(layout.switch_preset_window_height());
+        assert_eq!(layout.tile_rect(2).unwrap().height, 420);
+        assert!(layout.switch_preset_window_height_back());
+        assert_eq!(layout.tile_rect(2).unwrap().height, 311);
+        assert!(layout.reset_focused_window_height());
         assert!(
             layout
                 .change_focused_window_height(ColumnWidthChange::AdjustProportion(100))
@@ -1424,21 +1521,21 @@ mod tests {
         let mut layout = ScrollLayout::<3, 1>::new(1000, 700, 30, LayoutConfig::default());
         layout.open_window(1).unwrap();
         assert!(layout.switch_preset_column_width());
-        assert_eq!(layout.tile_rect(1).unwrap().width, 667);
+        assert_eq!(layout.tile_rect(1).unwrap().width, 640);
         assert!(layout.switch_preset_column_width_back());
-        assert_eq!(layout.tile_rect(1).unwrap().width, 500);
+        assert_eq!(layout.tile_rect(1).unwrap().width, 476);
         assert!(
             layout
                 .change_focused_column_width(ColumnWidthChange::AdjustProportion(100))
                 .unwrap()
         );
-        assert_eq!(layout.tile_rect(1).unwrap().width, 600);
+        assert_eq!(layout.tile_rect(1).unwrap().width, 574);
         assert!(
             layout
                 .change_focused_column_width(ColumnWidthChange::AdjustFixed(-50))
                 .unwrap()
         );
-        assert_eq!(layout.tile_rect(1).unwrap().width, 550);
+        assert_eq!(layout.tile_rect(1).unwrap().width, 524);
         assert!(
             layout
                 .change_focused_column_width(ColumnWidthChange::Set(ColumnWidth::Fixed(720)))
@@ -1457,6 +1554,19 @@ mod tests {
     }
 
     #[test]
+    fn cycles_a_single_window_through_gap_aware_height_presets() {
+        let mut layout = ScrollLayout::<1, 1>::new(1000, 700, 30, LayoutConfig::default());
+        layout.open_window(1).unwrap();
+        assert_eq!(layout.tile_rect(1).unwrap().height, 638);
+        assert!(layout.switch_preset_window_height());
+        assert_eq!(layout.tile_rect(1).unwrap().height, 201);
+        assert!(layout.switch_preset_window_height_back());
+        assert_eq!(layout.tile_rect(1).unwrap().height, 420);
+        assert!(layout.reset_focused_window_height());
+        assert_eq!(layout.tile_rect(1).unwrap().height, 638);
+    }
+
+    #[test]
     fn moves_the_focused_column_without_changing_its_contents() {
         let mut layout = ScrollLayout::<3, 2>::new(1000, 700, 30, LayoutConfig::default());
         layout.open_window(10).unwrap();
@@ -1468,15 +1578,15 @@ mod tests {
         assert!(layout.move_column_right());
         assert_eq!(layout.focused_column(), Some(1));
         assert_eq!(layout.focused_window(), Some(10));
-        assert_eq!(layout.tile_rect(10).unwrap().x, 484);
-        assert_eq!(layout.tile_rect(11).unwrap().x, 484);
-        assert_eq!(layout.tile_rect(20).unwrap().x, -32);
+        assert_eq!(layout.tile_rect(10).unwrap().x, 508);
+        assert_eq!(layout.tile_rect(11).unwrap().x, 508);
+        assert_eq!(layout.tile_rect(20).unwrap().x, 16);
 
         assert!(!layout.move_column_right());
         assert!(layout.move_column_left());
         assert_eq!(layout.focused_column(), Some(0));
         assert_eq!(layout.focused_window(), Some(10));
         assert_eq!(layout.tile_rect(10).unwrap().x, 16);
-        assert_eq!(layout.tile_rect(20).unwrap().x, 532);
+        assert_eq!(layout.tile_rect(20).unwrap().x, 508);
     }
 }

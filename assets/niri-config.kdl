@@ -36,6 +36,7 @@ binds {
     Mod+Shift+Equal { set-window-height "+10%"; }
     Mod+R { switch-preset-column-width; }
     Mod+Shift+R { switch-preset-column-width-back; }
+    Mod+Ctrl+Shift+R { switch-preset-window-height; }
     Mod+Ctrl+R { reset-window-height; }
     Mod+Q { close-window; }
 }
@@ -49,6 +50,11 @@ layout {
     gaps 16
     center-focused-column "never"
     preset-column-widths {
+        proportion 0.333
+        proportion 0.5
+        proportion 0.667
+    }
+    preset-window-heights {
         proportion 0.333
         proportion 0.5
         proportion 0.667

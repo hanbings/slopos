@@ -77,6 +77,13 @@ monitor_type() {
     echo "screendump ${repo_dir}/evidence/niri-window-height-increased.ppm"
     echo "sendkey meta_l-ctrl-r 50"
     sleep 1
+    echo "sendkey meta_l-ctrl-shift-r 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-preset-window-height.ppm"
+    echo "sendkey meta_l-ctrl-shift-r 50"
+    sleep 1
+    echo "sendkey meta_l-ctrl-shift-r 50"
+    sleep 1
     echo "sendkey meta_l-shift-minus 50"
     sleep 1
     echo "sendkey meta_l-shift-equal 50"
@@ -266,10 +273,16 @@ if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=set-window-height changed=true wo
     echo "niri set-window-height bindings did not cover grow, shrink, and restore" >&2
     exit 1
 fi
-grep -Fq "SLOPOS-DESKTOP: window height changed kind=SYSTEM height=412 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window height changed kind=SYSTEM height=411 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=reset-window-height changed=true workspace=1 name=main focused=1" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window height changed kind=SYSTEM height=340 layout=scrolling" "${serial_log}"
-grep -Fq "SLOPOS-DESKTOP: window height changed kind=SYSTEM height=268 layout=scrolling" "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=switch-preset-window-height changed=true workspace=1 name=main focused=1" "${serial_log}")" -ne 3 ]]; then
+    echo "niri switch-preset-window-height did not cycle 50% -> 66.7% -> 33.3% -> 50%" >&2
+    exit 1
+fi
+grep -Fq "SLOPOS-DESKTOP: window height changed kind=SYSTEM height=458 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window height changed kind=SYSTEM height=221 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window height changed kind=SYSTEM height=269 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-window-up changed=true workspace=1 name=main focused=1" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-window-down changed=true workspace=1 name=main focused=1" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-window-up changed=true workspace=1 name=main focused=0" "${serial_log}"
@@ -277,14 +290,14 @@ grep -Fq "SLOPOS-NIRI: binding action=focus-window-down changed=true workspace=1
 grep -Fq "SLOPOS-NIRI: binding action=expel-window-from-column changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=switch-preset-column-width changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=0" "${serial_log}"
-grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=683 layout=scrolling" "${serial_log}"
-grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=512 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=656 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-SHELL: view scrolled workspace=1 offset=" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window moved kind=TERMINAL" "${serial_log}"
-grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=614 layout=scrolling" "${serial_log}"
-grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=512 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=588 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=set-column-width changed=true workspace=1 name=main focused=0" "${serial_log}"
-grep -Fq "SLOPOS-DESKTOP: column reordered kind=TERMINAL x=496 direction=move-column-right layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: column reordered kind=TERMINAL x=520 direction=move-column-right layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-column-right changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0" "${serial_log}"
@@ -302,8 +315,8 @@ grep -Fq "SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=nam
 grep -Fq "SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=main" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-previous changed=true workspace=2 name=config focused=2" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-previous changed=true workspace=1 name=main focused=0" "${serial_log}"
-grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=608 delta=96 gesture=mod-right-drag" "${serial_log}"
-grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=512 delta=-96 gesture=mod-right-drag" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=584 delta=96 gesture=mod-right-drag" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=488 delta=-96 gesture=mod-right-drag" "${serial_log}"
 grep -Fq \
     "SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=true module=niri/workspaces" \
     "${serial_log}"
@@ -320,6 +333,7 @@ test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
 test -s "${repo_dir}/evidence/niri-column-stacked.ppm"
 test -s "${repo_dir}/evidence/niri-window-height-increased.ppm"
+test -s "${repo_dir}/evidence/niri-preset-window-height.ppm"
 test -s "${repo_dir}/evidence/niri-window-moved-up.ppm"
 test -s "${repo_dir}/evidence/niri-window-focus-up.ppm"
 test -s "${repo_dir}/evidence/niri-column-expelled.ppm"
@@ -351,6 +365,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-column-stacked.png"
     pnmtopng "${repo_dir}/evidence/niri-window-height-increased.ppm" \
         >"${repo_dir}/evidence/niri-window-height-increased.png"
+    pnmtopng "${repo_dir}/evidence/niri-preset-window-height.ppm" \
+        >"${repo_dir}/evidence/niri-preset-window-height.png"
     pnmtopng "${repo_dir}/evidence/niri-window-moved-up.ppm" \
         >"${repo_dir}/evidence/niri-window-moved-up.png"
     pnmtopng "${repo_dir}/evidence/niri-window-focus-up.ppm" \
