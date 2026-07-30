@@ -4,25 +4,27 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=269704
-SLOPOS-UEFI: kernel mapped 0x4000000..0x402d000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=265800
+SLOPOS-UEFI: kernel mapped 0x4000000..0x402c000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
-SLOPOS-UEFI: Boot Services exited descriptors=117
+SLOPOS-UEFI: user ELF loaded bytes=4848 base=0xe60a000
+SLOPOS-UEFI: Boot Services exited descriptors=118
 SLOPOS-UEFI: transferring control to kernel
 SLOPOS-KERNEL: entry reached
-SLOPOS-KERNEL: boot info valid memory_descriptors=117
+SLOPOS-KERNEL: boot info valid memory_descriptors=118
 SLOPOS-ACPI: XSDT MADT validated cpus=1 lapic=0xfee00000 ioapics=1 overrides=5 irq11=11/13
 SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
+SLOPOS-KERNEL: user ELF available base=0xe60a000 bytes=4848
 SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
 SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
-SLOPOS-MM: frame allocator initialized regions=8 free_frames=52988 probe=0x100000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=52987 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
 SLOPOS-KERNEL: framebuffer ownership accepted 1024x768
 SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed
 SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized timer_hz=100 lapic_id=0 ioapic_id=0 redirections=24 routes=2/1/12/10
-SLOPOS-PROCESS: pid=1 format=elf64 entry=0x40000000 segments=1 file_bytes=4242 load_bytes=146 memory_bytes=4096 address_space=0x213000 user_code=0x40000000 user_stack=0x40002000 code_frame=0x217000 stack_frame=0x218000 code=user-readonly stack=user-writable kernel=supervisor
+SLOPOS-PROCESS: pid=1 source=boot format=elf64 entry=0x40000000 segments=1 file_bytes=4848 load_bytes=66 memory_bytes=66 address_space=0x213000 user_code=0x40000000 user_stack=0x40002000 code_frame=0x217000 stack_frame=0x218000 code=user-readonly stack=user-writable kernel=supervisor
 SLOPOS-SYSCALL: pid=1 abi=x86_64 trap=int80 nr=1 write fd=1 bytes=18 cpl=3 result=18
 SLOPOS-SYSCALL: pid=1 abi=x86_64 trap=int80 nr=60 exit status=0 cpl=3
 SLOPOS-PROCESS: pid=1 exited status=0 syscalls=2 kernel_return=true
