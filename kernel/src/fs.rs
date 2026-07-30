@@ -5,7 +5,8 @@ use core::ptr;
 use slopos_ext4::{
     DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DIRECTORY_ENTRY_SYMLINK,
     DirectoryBlock, Extent, ExtentNode, GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode,
-    ROOT_INODE, SUPERBLOCK_SIZE, Superblock, validate_path_component,
+    JOURNAL_INODE, JournalSuperblock, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
+    validate_path_component,
 };
 use slopos_vfs::{AbsolutePath, AccessMode, FileDescriptorTable, FileNode, MountTable};
 
@@ -360,6 +361,20 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         mount.cache.invalidations
     ));
 
+    let journal = mount.probe_journal(&mut device).await;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: journal superblock valid inode={JOURNAL_INODE} physical_block={} blocks={} first={} sequence={} start={} users={} features={:#x}/{:#x}/{:#x} uuid=match endian=big",
+        journal.physical_block,
+        journal.superblock.max_length,
+        journal.superblock.first_log_block,
+        journal.superblock.sequence,
+        journal.superblock.start,
+        journal.superblock.user_count,
+        journal.superblock.feature_compat,
+        journal.superblock.feature_incompat,
+        journal.superblock.feature_read_only_compat
+    ));
+
     crate::serial::serialln(format_args!(
         "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={} invalidations={}",
         mount.cache.hits, mount.cache.misses, mount.cache.batched_pairs, mount.cache.invalidations
@@ -514,6 +529,50 @@ impl Ext4Mount {
             entry_count: directory.entry_count(),
             etc_inode: etc.inode,
             lost_and_found_inode: lost_and_found.inode,
+        }
+    }
+
+    async fn probe_journal(&mut self, device: &mut BlockDevice) -> JournalProbe {
+        if self.superblock.journal_inode != JOURNAL_INODE {
+            device.fail("ext4 internal journal inode is unsupported");
+        }
+        let inode = self.read_inode(device, JOURNAL_INODE).await;
+        if !inode.is_regular_file() || inode.extent_depth() != Ok(0) {
+            device.fail("ext4 journal inode layout is unsupported");
+        }
+        let extent = inode
+            .extent_for_logical_block(0)
+            .unwrap_or_else(|_| device.fail("ext4 journal extent is invalid"))
+            .unwrap_or_else(|| device.fail("ext4 journal extent is missing"));
+        let expected_blocks = inode.size / u64::from(self.superblock.block_size);
+        if inode.size % u64::from(self.superblock.block_size) != 0
+            || extent.logical_block != 0
+            || extent.unwritten
+            || u64::from(extent.block_count) != expected_blocks
+        {
+            device.fail("ext4 journal extent geometry is unsupported");
+        }
+        let physical_block = extent.physical_block;
+        let block = self
+            .cache
+            .read_block(device, &self.superblock, physical_block)
+            .await;
+        let superblock = JournalSuperblock::parse(block)
+            .unwrap_or_else(|_| device.fail("JBD2 superblock validation failed"));
+        if superblock.block_size != self.superblock.block_size
+            || u64::from(superblock.max_length) != expected_blocks
+            || superblock.first_log_block != 1
+            || superblock.sequence == 0
+            || superblock.start != 0
+            || superblock.error != 0
+            || superblock.user_count != 1
+            || superblock.uuid != self.superblock.uuid
+        {
+            device.fail("JBD2 journal geometry or identity mismatch");
+        }
+        JournalProbe {
+            physical_block,
+            superblock,
         }
     }
 
@@ -824,6 +883,11 @@ struct RootProbe {
     entry_count: usize,
     etc_inode: u32,
     lost_and_found_inode: u32,
+}
+
+struct JournalProbe {
+    physical_block: u64,
+    superblock: JournalSuperblock,
 }
 
 #[derive(Clone, Copy)]

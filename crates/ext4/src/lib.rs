@@ -10,6 +10,9 @@ pub const FEATURE_READ_ONLY_COMPAT_METADATA_CHECKSUM: u32 = 0x0400;
 pub const INODE_FLAG_EXTENTS: u32 = 0x0008_0000;
 pub const INODE_FLAG_DIRECTORY_INDEX: u32 = 0x0000_1000;
 pub const ROOT_INODE: u32 = 2;
+pub const JOURNAL_INODE: u32 = 8;
+pub const JOURNAL_SUPERBLOCK_SIZE: usize = 1024;
+pub const JOURNAL_MAGIC: u32 = 0xc03b_3998;
 pub const DIRECTORY_ENTRY_REGULAR_FILE: u8 = 1;
 pub const DIRECTORY_ENTRY_DIRECTORY: u8 = 2;
 pub const DIRECTORY_ENTRY_SYMLINK: u8 = 7;
@@ -55,6 +58,7 @@ pub enum ParseError {
     NotSymlink,
     UnsupportedSymlink,
     InvalidSymlink,
+    InvalidJournal,
 }
 
 pub fn validate_path_component(component: &[u8]) -> Result<(), ParseError> {
@@ -93,6 +97,7 @@ pub struct Superblock {
     pub checksum_type: u8,
     pub checksum: u32,
     pub checksum_seed: u32,
+    pub journal_inode: u32,
 }
 
 impl Superblock {
@@ -207,6 +212,7 @@ impl Superblock {
             checksum_type,
             checksum,
             checksum_seed,
+            journal_inode: read_u32(bytes, 224)?,
         })
     }
 
@@ -283,6 +289,72 @@ impl Superblock {
         Ok(InodeLocation {
             block: byte_offset / u64::from(self.block_size),
             offset: (byte_offset % u64::from(self.block_size)) as u32,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JournalSuperblock {
+    pub block_size: u32,
+    pub max_length: u32,
+    pub first_log_block: u32,
+    pub sequence: u32,
+    pub start: u32,
+    pub error: u32,
+    pub feature_compat: u32,
+    pub feature_incompat: u32,
+    pub feature_read_only_compat: u32,
+    pub uuid: [u8; 16],
+    pub user_count: u32,
+}
+
+impl JournalSuperblock {
+    pub fn parse(bytes: &[u8]) -> Result<Self, ParseError> {
+        if bytes.len() < JOURNAL_SUPERBLOCK_SIZE {
+            return Err(ParseError::Truncated);
+        }
+        if read_be_u32(bytes, 0)? != JOURNAL_MAGIC || read_be_u32(bytes, 4)? != 4 {
+            return Err(ParseError::InvalidMagic);
+        }
+        if read_be_u32(bytes, 8)? != 0 {
+            return Err(ParseError::InvalidJournal);
+        }
+        let block_size = read_be_u32(bytes, 12)?;
+        let max_length = read_be_u32(bytes, 16)?;
+        let first_log_block = read_be_u32(bytes, 20)?;
+        let start = read_be_u32(bytes, 28)?;
+        if block_size < 1024
+            || !block_size.is_power_of_two()
+            || first_log_block == 0
+            || first_log_block >= max_length
+            || (start != 0 && (start < first_log_block || start >= max_length))
+        {
+            return Err(ParseError::InvalidJournal);
+        }
+        let feature_compat = read_be_u32(bytes, 36)?;
+        let feature_incompat = read_be_u32(bytes, 40)?;
+        let feature_read_only_compat = read_be_u32(bytes, 44)?;
+        if feature_compat != 0 || feature_incompat != 0 || feature_read_only_compat != 0 {
+            return Err(ParseError::UnsupportedFeature);
+        }
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(&bytes[48..64]);
+        let user_count = read_be_u32(bytes, 64)?;
+        if user_count == 0 {
+            return Err(ParseError::InvalidJournal);
+        }
+        Ok(Self {
+            block_size,
+            max_length,
+            first_log_block,
+            sequence: read_be_u32(bytes, 24)?,
+            start,
+            error: read_be_u32(bytes, 32)?,
+            feature_compat,
+            feature_incompat,
+            feature_read_only_compat,
+            uuid,
+            user_count,
         })
     }
 }
@@ -887,6 +959,11 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ParseError> {
     Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
 }
 
+fn read_be_u32(bytes: &[u8], offset: usize) -> Result<u32, ParseError> {
+    let value = bytes.get(offset..offset + 4).ok_or(ParseError::Truncated)?;
+    Ok(u32::from_be_bytes([value[0], value[1], value[2], value[3]]))
+}
+
 fn read_u16_or_zero(bytes: &[u8], offset: usize) -> u16 {
     read_u16(bytes, offset).unwrap_or(0)
 }
@@ -914,6 +991,7 @@ mod tests {
         bytes[100..104].copy_from_slice(&0x46bu32.to_le_bytes());
         bytes[104..120].copy_from_slice(&[0x53; 16]);
         bytes[120..131].copy_from_slice(b"SLOPOS_ROOT");
+        bytes[224..228].copy_from_slice(&JOURNAL_INODE.to_le_bytes());
         bytes[254..256].copy_from_slice(&64u16.to_le_bytes());
         bytes[336..340].copy_from_slice(&3u32.to_le_bytes());
         bytes[344..348].copy_from_slice(&2u32.to_le_bytes());
@@ -1004,6 +1082,7 @@ mod tests {
         assert_eq!(superblock.free_block_count, (2u64 << 32) | 30000);
         assert_eq!(superblock.inode_size, 256);
         assert_eq!(superblock.descriptor_size, 64);
+        assert_eq!(superblock.journal_inode, JOURNAL_INODE);
         assert_eq!(superblock.volume_name(), b"SLOPOS_ROOT");
         assert_eq!(
             superblock.checksum,
@@ -1067,6 +1146,61 @@ mod tests {
     #[test]
     fn requires_complete_superblock() {
         assert_eq!(Superblock::parse(&[0u8; 512]), Err(ParseError::Truncated));
+    }
+
+    #[test]
+    fn parses_big_endian_journal_superblock() {
+        let mut bytes = [0u8; JOURNAL_SUPERBLOCK_SIZE];
+        bytes[0..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
+        bytes[4..8].copy_from_slice(&4u32.to_be_bytes());
+        bytes[12..16].copy_from_slice(&4096u32.to_be_bytes());
+        bytes[16..20].copy_from_slice(&4096u32.to_be_bytes());
+        bytes[20..24].copy_from_slice(&1u32.to_be_bytes());
+        bytes[24..28].copy_from_slice(&7u32.to_be_bytes());
+        bytes[28..32].copy_from_slice(&0u32.to_be_bytes());
+        bytes[48..64].copy_from_slice(&[0x53; 16]);
+        bytes[64..68].copy_from_slice(&1u32.to_be_bytes());
+
+        let journal = JournalSuperblock::parse(&bytes).unwrap();
+        assert_eq!(journal.block_size, 4096);
+        assert_eq!(journal.max_length, 4096);
+        assert_eq!(journal.first_log_block, 1);
+        assert_eq!(journal.sequence, 7);
+        assert_eq!(journal.start, 0);
+        assert_eq!(journal.uuid, [0x53; 16]);
+    }
+
+    #[test]
+    fn rejects_invalid_or_unsupported_journals() {
+        assert_eq!(
+            JournalSuperblock::parse(&[0u8; 512]),
+            Err(ParseError::Truncated)
+        );
+        let mut bytes = [0u8; JOURNAL_SUPERBLOCK_SIZE];
+        bytes[0..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
+        bytes[4..8].copy_from_slice(&4u32.to_be_bytes());
+        bytes[12..16].copy_from_slice(&4096u32.to_be_bytes());
+        bytes[16..20].copy_from_slice(&4096u32.to_be_bytes());
+        bytes[20..24].copy_from_slice(&1u32.to_be_bytes());
+        bytes[48..64].copy_from_slice(&[0x53; 16]);
+        bytes[64..68].copy_from_slice(&1u32.to_be_bytes());
+        bytes[8..12].copy_from_slice(&1u32.to_be_bytes());
+        assert_eq!(
+            JournalSuperblock::parse(&bytes),
+            Err(ParseError::InvalidJournal)
+        );
+        bytes[8..12].fill(0);
+        bytes[40..44].copy_from_slice(&0x10u32.to_be_bytes());
+        assert_eq!(
+            JournalSuperblock::parse(&bytes),
+            Err(ParseError::UnsupportedFeature)
+        );
+        bytes[40..44].fill(0);
+        bytes[20..24].copy_from_slice(&4096u32.to_be_bytes());
+        assert_eq!(
+            JournalSuperblock::parse(&bytes),
+            Err(ParseError::InvalidJournal)
+        );
     }
 
     #[test]
