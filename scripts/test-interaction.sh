@@ -23,9 +23,9 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "${ovmf_vars}"
     echo "sendkey ret"
     sleep 1
     echo "screendump ${repo_dir}/evidence/terminal-status.ppm"
-    echo "mouse_move -300 -275"
+    echo "mouse_move -300 -300"
     echo "mouse_button 1"
-    echo "mouse_move 110 65"
+    echo "mouse_move -110 0"
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${repo_dir}/evidence/window-moved.ppm"
@@ -46,6 +46,7 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "${ovmf_vars}"
     -no-reboot >/dev/null
 
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
+grep -Fq "SLOPOS-SHELL: view scrolled offset=" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window moved kind=TERMINAL" "${serial_log}"
 test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/window-moved.ppm"

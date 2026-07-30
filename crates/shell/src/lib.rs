@@ -180,6 +180,14 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         }
     }
 
+    pub fn focus_window(&mut self, window: u32) -> Result<(), LayoutError> {
+        let (column, row) = self.find_window(window).ok_or(LayoutError::UnknownWindow)?;
+        self.focused_column = column;
+        self.columns[column].focused_window = row;
+        self.ensure_focused_visible();
+        Ok(())
+    }
+
     pub const fn view_offset(&self) -> i32 {
         self.view_offset
     }

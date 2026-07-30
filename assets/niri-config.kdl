@@ -1,0 +1,14 @@
+// SlopOS niri-compatible layout seed.
+layout {
+    gaps 16
+    center-focused-column "never"
+    default-column-width { proportion 0.5; }
+
+    focus-ring {
+        width 3
+        active-color "#7fc8ff"
+        inactive-color "#505050"
+    }
+
+    background-color "#101426"
+}

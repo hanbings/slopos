@@ -20,5 +20,6 @@ slopos-ebpf = { path = "../ebpf" }
 slopos-elf = { path = "../crates/elf" }
 slopos-ext4 = { path = "../crates/ext4" }
 slopos-pci = { path = "../crates/pci" }
+slopos-shell = { path = "../crates/shell" }
 slopos-vfs = { path = "../crates/vfs" }
 slopos-virtio = { path = "../crates/virtio" }

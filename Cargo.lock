@@ -50,6 +50,7 @@ dependencies = [
  "slopos-elf",
  "slopos-ext4",
  "slopos-pci",
+ "slopos-shell",
  "slopos-vfs",
  "slopos-virtio",
 ]

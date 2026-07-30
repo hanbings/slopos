@@ -12,11 +12,9 @@ pub const INDIGO: Color = 0x6558f5;
 pub const CYAN: Color = 0x4dd8e5;
 pub const GREEN: Color = 0x5ee28a;
 pub const RED: Color = 0xff667d;
-pub const AMBER: Color = 0xf7c65c;
 pub const MUTED: Color = 0x9ba3c7;
 pub const WINDOW: Color = 0x20263a;
 pub const WINDOW_ALT: Color = 0x171c2b;
-pub const DESKTOP: Color = 0x101426;
 
 pub struct Framebuffer {
     base: *mut u32,
