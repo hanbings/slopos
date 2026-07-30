@@ -6,9 +6,12 @@ use slopos_ext4::{
     DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DIRECTORY_ENTRY_SYMLINK,
     DirectoryBlock, Extent, ExtentNode, FEATURE_INCOMPAT_RECOVER, GroupDescriptor,
     INODE_FLAG_DIRECTORY_INDEX, Inode, JOURNAL_INODE, JournalCommit, JournalDescriptor,
-    JournalSuperblock, ParseError, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
-    decode_single_block_journal_transaction, encode_single_block_journal_transaction,
-    set_inode_size, set_journal_superblock_state, set_superblock_recovery, validate_path_component,
+    JournalDescriptorBlock, JournalSuperblock, ParseError, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
+    decode_journal_tag_data, encode_journal_commit_block, encode_journal_data_block,
+    encode_journal_descriptor_block, encode_single_block_journal_transaction,
+    resize_regular_file_by_one_block, set_block_allocation, set_inode_size,
+    set_journal_superblock_state, set_superblock_free_block_count, set_superblock_recovery,
+    validate_path_component,
 };
 use slopos_vfs::{AbsolutePath, AccessMode, FileDescriptorTable, FileNode, MountTable};
 
@@ -19,8 +22,12 @@ const SUPERBLOCK_OFFSET: usize = 1024;
 const SECTOR_SIZE: u64 = 512;
 const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
+const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
+const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
+const ALLOCATION_PROBE_BLOCK: u64 = 99;
 static ZERO_BLOCK: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
 static JOURNAL_PROBE_BLOCK: [u8; BLOCK_SIZE] = [b'J'; BLOCK_SIZE];
+static ALLOCATION_PROBE_BLOCK_DATA: [u8; BLOCK_SIZE] = [b'G'; BLOCK_SIZE];
 static WRITE_PROBE_ORIGINAL_BLOCK: [u8; BLOCK_SIZE] = [b'P'; BLOCK_SIZE];
 const EXPECTED_RELEASE: &[u8] = include_bytes!("../../rootfs/etc/slopos-release");
 const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/slopos/system.conf");
@@ -458,6 +465,20 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         metadata_transaction.second_sequence,
         metadata_transaction.final_sequence
     ));
+    let allocation_transaction = mount
+        .probe_block_allocation_transactions(&mut device, &journal, &write_probe)
+        .await;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: allocation journal transactions valid inode={} block={} bitmap_block={} group_descriptor_block={} inode_table_block={} size=4096/8192/4096 extent_blocks=1/2/1 checksums=superblock/group/bitmap/inode transactions=2 sequences={}/{} final_sequence={} test_sequence_rewound=true restored=true",
+        write_probe.inode.number,
+        allocation_transaction.allocated_block,
+        allocation_transaction.bitmap_block,
+        allocation_transaction.group_descriptor_block,
+        allocation_transaction.inode_table_block,
+        allocation_transaction.first_sequence,
+        allocation_transaction.second_sequence,
+        allocation_transaction.final_sequence
+    ));
 
     crate::serial::serialln(format_args!(
         "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={} invalidations={}",
@@ -601,12 +622,12 @@ impl Ext4Mount {
         };
         if recovery_required {
             let journal = mount.probe_journal(device).await;
-            mount.recovery = Some(mount.replay_single_block_journal(device, &journal).await);
+            mount.recovery = Some(mount.replay_journal_transaction(device, &journal).await);
         }
         mount
     }
 
-    async fn replay_single_block_journal(
+    async fn replay_journal_transaction(
         &mut self,
         device: &mut BlockDevice,
         journal: &JournalProbe,
@@ -651,31 +672,21 @@ impl Ext4Mount {
             .physical_block
             .checked_add(u64::from(start))
             .unwrap_or_else(|| device.fail("JBD2 recovery descriptor block overflow"));
-        let data_block = descriptor_block
-            .checked_add(1)
-            .unwrap_or_else(|| device.fail("JBD2 recovery data block overflow"));
-        let commit_block = descriptor_block
-            .checked_add(2)
-            .unwrap_or_else(|| device.fail("JBD2 recovery commit block overflow"));
         let journal_end = journal
             .physical_block
             .checked_add(u64::from(journal.superblock.max_length))
             .unwrap_or_else(|| device.fail("JBD2 recovery extent overflow"));
-        if commit_block >= journal_end {
-            device.fail("wrapped JBD2 recovery transaction is unsupported");
-        }
 
         let filesystem_sector = block_to_sector(device, &self.superblock, 0);
         let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
         let mut scratch = JournalReplayScratch::new();
         device.read(filesystem_sector, BLOCK_SIZE).await;
         scratch
-            .transaction
             .state
             .filesystem_block_mut()
             .copy_from_slice(device.data(BLOCK_SIZE));
         if Superblock::parse(
-            &scratch.transaction.state.filesystem_block()
+            &scratch.state.filesystem_block()
                 [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
         ) != Err(ParseError::DirtyFilesystem)
         {
@@ -683,13 +694,10 @@ impl Ext4Mount {
         }
         device.read(journal_sector, BLOCK_SIZE).await;
         scratch
-            .transaction
             .state
             .journal_block_mut()
             .copy_from_slice(device.data(BLOCK_SIZE));
-        if JournalSuperblock::parse(scratch.transaction.state.journal_block())
-            != Ok(journal.superblock)
-        {
+        if JournalSuperblock::parse(scratch.state.journal_block()) != Ok(journal.superblock) {
             device.fail("JBD2 recovery superblock changed during mount");
         }
 
@@ -699,81 +707,119 @@ impl Ext4Mount {
                 BLOCK_SIZE,
             )
             .await;
-        scratch
-            .transaction
-            .records
-            .descriptor_mut()
-            .copy_from_slice(device.data(BLOCK_SIZE));
-        device
-            .read(
-                block_to_sector(device, &self.superblock, data_block),
-                BLOCK_SIZE,
-            )
-            .await;
-        scratch
-            .transaction
-            .records
-            .data_mut()
-            .copy_from_slice(device.data(BLOCK_SIZE));
+        scratch_frame_bytes_mut(scratch.descriptor_frame).copy_from_slice(device.data(BLOCK_SIZE));
+        let descriptor =
+            JournalDescriptorBlock::parse(scratch_frame_bytes(scratch.descriptor_frame))
+                .unwrap_or_else(|_| device.fail("JBD2 recovery descriptor validation failed"));
+        if descriptor.sequence != journal.superblock.sequence
+            || descriptor.uuid != self.superblock.uuid
+            || descriptor.tag_count == 0
+            || descriptor.tag_count > MULTI_TRANSACTION_MAX_BLOCKS
+        {
+            device.fail("JBD2 recovery descriptor identity mismatch");
+        }
+        let tag_count = descriptor.tag_count;
+        let commit_block = descriptor_block
+            .checked_add(1 + u64::try_from(tag_count).unwrap_or(u64::MAX))
+            .unwrap_or_else(|| device.fail("JBD2 recovery commit block overflow"));
+        if commit_block >= journal_end {
+            device.fail("wrapped JBD2 recovery transaction is unsupported");
+        }
+        for index in 0..tag_count {
+            let data_block = descriptor_block
+                .checked_add(1 + u64::try_from(index).unwrap_or(u64::MAX))
+                .unwrap_or_else(|| device.fail("JBD2 recovery data block overflow"));
+            device
+                .read(
+                    block_to_sector(device, &self.superblock, data_block),
+                    BLOCK_SIZE,
+                )
+                .await;
+            scratch
+                .data_block_mut(index)
+                .copy_from_slice(device.data(BLOCK_SIZE));
+        }
         device
             .read(
                 block_to_sector(device, &self.superblock, commit_block),
                 BLOCK_SIZE,
             )
             .await;
-        scratch
-            .transaction
-            .records
-            .commit_mut()
-            .copy_from_slice(device.data(BLOCK_SIZE));
+        scratch_frame_bytes_mut(scratch.commit_frame).copy_from_slice(device.data(BLOCK_SIZE));
+        let commit = JournalCommit::parse(scratch_frame_bytes(scratch.commit_frame))
+            .unwrap_or_else(|_| device.fail("JBD2 recovery commit validation failed"));
+        if commit.sequence != journal.superblock.sequence {
+            device.fail("JBD2 recovery commit sequence mismatch");
+        }
 
-        let descriptor = decode_single_block_journal_transaction(
-            scratch_frame_bytes_mut(scratch.home_frame),
-            scratch_frame_bytes(scratch.transaction.records.descriptor_frame),
-            scratch_frame_bytes(scratch.transaction.records.data_frame),
-            scratch_frame_bytes(scratch.transaction.records.commit_frame),
-            journal.superblock.sequence,
-            &self.superblock.uuid,
-        )
-        .unwrap_or_else(|_| device.fail("JBD2 recovery transaction validation failed"));
-        let target_block = u64::from(descriptor.target_block);
-        if target_block == 0
-            || target_block >= self.superblock.block_count
-            || (target_block >= journal.physical_block && target_block < journal_end)
+        let mut target_blocks = [0u64; MULTI_TRANSACTION_MAX_BLOCKS];
+        let mut escaped_tags = [false; MULTI_TRANSACTION_MAX_BLOCKS];
+        for index in 0..tag_count {
+            let tag = descriptor
+                .tag(index)
+                .unwrap_or_else(|_| device.fail("JBD2 recovery tag validation failed"));
+            let target_block = u64::from(tag.target_block);
+            if target_block >= self.superblock.block_count
+                || (target_block >= journal.physical_block && target_block < journal_end)
+                || target_blocks[..index].contains(&target_block)
+            {
+                device.fail("JBD2 recovery target block is unsafe");
+            }
+            decode_journal_tag_data(
+                scratch_frame_bytes_mut(scratch.home_frames[index]),
+                scratch_frame_bytes(scratch.data_frames[index]),
+                &tag,
+            )
+            .unwrap_or_else(|_| device.fail("JBD2 recovery data decoding failed"));
+            target_blocks[index] = target_block;
+            escaped_tags[index] = tag.escaped;
+        }
+        if let Some(index) = target_blocks[..tag_count]
+            .iter()
+            .position(|target| *target == 0)
         {
-            device.fail("JBD2 recovery target block is unsafe");
+            let superblock_bytes =
+                &scratch.home_block(index)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE];
+            if Superblock::parse(superblock_bytes) != Err(ParseError::DirtyFilesystem)
+                || Superblock::parse_for_recovery(superblock_bytes).is_err()
+            {
+                device.fail("JBD2 recovery superblock home is not active");
+            }
         }
 
-        device
-            .write(
-                block_to_sector(device, &self.superblock, target_block),
-                scratch.home_block(),
-            )
-            .await;
-        device.flush().await;
-        device
-            .read(
-                block_to_sector(device, &self.superblock, target_block),
-                BLOCK_SIZE,
-            )
-            .await;
-        if device.data(BLOCK_SIZE) != scratch.home_block() {
-            device.fail("JBD2 recovery home-block readback mismatch");
+        for (index, target_block) in target_blocks[..tag_count].iter().enumerate() {
+            device
+                .write(
+                    block_to_sector(device, &self.superblock, *target_block),
+                    scratch.home_block(index),
+                )
+                .await;
         }
-        self.cache.invalidate(target_block);
+        device.flush().await;
+        for (index, target_block) in target_blocks[..tag_count].iter().enumerate() {
+            device
+                .read(
+                    block_to_sector(device, &self.superblock, *target_block),
+                    BLOCK_SIZE,
+                )
+                .await;
+            if device.data(BLOCK_SIZE) != scratch.home_block(index) {
+                device.fail("JBD2 recovery home-block readback mismatch");
+            }
+            self.cache.invalidate(*target_block);
+        }
 
         let next_sequence = journal
             .superblock
             .sequence
             .checked_add(1)
             .unwrap_or_else(|| device.fail("JBD2 recovery sequence overflow"));
-        set_journal_superblock_state(
-            scratch.transaction.state.journal_block_mut(),
-            next_sequence,
-            0,
-        )
-        .unwrap_or_else(|_| device.fail("JBD2 recovery checkpoint update failed"));
-        for block in [descriptor_block, data_block, commit_block] {
+        set_journal_superblock_state(scratch.state.journal_block_mut(), next_sequence, 0)
+            .unwrap_or_else(|_| device.fail("JBD2 recovery checkpoint update failed"));
+        for offset in 0..tag_count + 2 {
+            let block = descriptor_block
+                .checked_add(u64::try_from(offset).unwrap_or(u64::MAX))
+                .unwrap_or_else(|| device.fail("JBD2 recovery clear block overflow"));
             device
                 .write(
                     block_to_sector(device, &self.superblock, block),
@@ -782,29 +828,33 @@ impl Ext4Mount {
                 .await;
         }
         device
-            .write(journal_sector, scratch.transaction.state.journal_block())
+            .write(journal_sector, scratch.state.journal_block())
             .await;
         device.flush().await;
         self.cache.invalidate(journal.physical_block);
 
+        let superblock_home_index = target_blocks[..tag_count]
+            .iter()
+            .position(|target| *target == 0);
+        let final_filesystem_block = if let Some(index) = superblock_home_index {
+            scratch.home_block_mut(index)
+        } else {
+            scratch.state.filesystem_block_mut()
+        };
         set_superblock_recovery(
-            &mut scratch.transaction.state.filesystem_block_mut()
-                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            &mut final_filesystem_block[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
             false,
         )
         .unwrap_or_else(|_| device.fail("ext4 recovery flag clearing failed"));
         device
-            .write(
-                filesystem_sector,
-                scratch.transaction.state.filesystem_block(),
-            )
+            .write(filesystem_sector, final_filesystem_block)
             .await;
         device.flush().await;
 
         device.read(journal_sector, BLOCK_SIZE).await;
         let checkpointed = JournalSuperblock::parse(device.data(BLOCK_SIZE))
             .unwrap_or_else(|_| device.fail("JBD2 recovery checkpoint readback failed"));
-        if device.data(BLOCK_SIZE) != scratch.transaction.state.journal_block()
+        if device.data(BLOCK_SIZE) != scratch.state.journal_block()
             || checkpointed.sequence != next_sequence
             || checkpointed.start != 0
         {
@@ -815,7 +865,12 @@ impl Ext4Mount {
             &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
         )
         .unwrap_or_else(|_| device.fail("ext4 recovery cleanup validation failed"));
-        if device.data(BLOCK_SIZE) != scratch.transaction.state.filesystem_block() {
+        let expected_filesystem_block = if let Some(index) = superblock_home_index {
+            scratch.home_block(index)
+        } else {
+            scratch.state.filesystem_block()
+        };
+        if device.data(BLOCK_SIZE) != expected_filesystem_block {
             device.fail("ext4 recovery cleanup readback mismatch");
         }
         self.superblock = clean_superblock;
@@ -824,8 +879,9 @@ impl Ext4Mount {
             replayed: true,
             sequence: journal.superblock.sequence,
             start,
-            target_block: descriptor.target_block,
-            escaped: descriptor.escaped,
+            target_block: u32::try_from(target_blocks[0])
+                .unwrap_or_else(|_| device.fail("JBD2 recovery target conversion failed")),
+            escaped: escaped_tags[0],
             next_sequence,
         }
     }
@@ -1639,6 +1695,487 @@ impl Ext4Mount {
         }
     }
 
+    async fn probe_block_allocation_transactions(
+        &mut self,
+        device: &mut BlockDevice,
+        journal: &JournalProbe,
+        file: &Ext4File,
+    ) -> AllocationJournalProbe {
+        let group_index = self
+            .superblock
+            .inode_group(file.inode.number)
+            .unwrap_or_else(|_| device.fail("allocation probe inode number is invalid"));
+        let inode_group = if group_index == 0 {
+            self.group0
+        } else {
+            read_group_descriptor(device, &self.superblock, group_index, &mut self.cache).await
+        };
+        let inode_location = self
+            .superblock
+            .inode_location(file.inode.number, &inode_group)
+            .unwrap_or_else(|_| device.fail("allocation probe inode location is invalid"));
+        let inode_offset = inode_location.offset as usize;
+        let inode_end = inode_offset + usize::from(self.superblock.inode_size);
+        if inode_end > BLOCK_SIZE {
+            device.fail("allocation probe inode crosses its table block");
+        }
+        let group_descriptor_location = self
+            .superblock
+            .group_descriptor_location(0)
+            .unwrap_or_else(|_| device.fail("allocation probe group descriptor is invalid"));
+        let group_descriptor_offset = group_descriptor_location.offset as usize;
+        let group_descriptor_end =
+            group_descriptor_offset + usize::from(self.superblock.descriptor_size);
+        if group_descriptor_end > BLOCK_SIZE {
+            device.fail("allocation probe group descriptor crosses its block");
+        }
+        let targets = [
+            0,
+            group_descriptor_location.block,
+            self.group0.block_bitmap_block,
+            inode_location.block,
+            ALLOCATION_PROBE_BLOCK,
+        ];
+        for (index, target) in targets.iter().enumerate() {
+            if targets[..index].contains(target) {
+                device.fail("allocation probe home blocks overlap");
+            }
+        }
+
+        let mut blocks = AllocationJournalScratch::new();
+        for (index, target) in targets.iter().enumerate() {
+            device
+                .read(
+                    block_to_sector(device, &self.superblock, *target),
+                    BLOCK_SIZE,
+                )
+                .await;
+            blocks
+                .original
+                .block_mut(index)
+                .copy_from_slice(device.data(BLOCK_SIZE));
+            blocks
+                .modified
+                .block_mut(index)
+                .copy_from_slice(device.data(BLOCK_SIZE));
+        }
+
+        let free_blocks = self.superblock.free_block_count;
+        let allocated_free_blocks = free_blocks
+            .checked_sub(1)
+            .unwrap_or_else(|| device.fail("allocation probe has no free blocks"));
+        set_superblock_free_block_count(
+            &mut blocks.modified.block_mut(0)
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            allocated_free_blocks,
+        )
+        .unwrap_or_else(|_| device.fail("allocation probe superblock update failed"));
+        {
+            let descriptor_frame = blocks.modified.frames[1];
+            let bitmap_frame = blocks.modified.frames[2];
+            set_block_allocation(
+                scratch_frame_bytes_mut(bitmap_frame),
+                &mut scratch_frame_bytes_mut(descriptor_frame)
+                    [group_descriptor_offset..group_descriptor_end],
+                0,
+                ALLOCATION_PROBE_BLOCK,
+                true,
+                &self.superblock,
+            )
+            .unwrap_or_else(|_| device.fail("allocation probe bitmap update failed"));
+        }
+        resize_regular_file_by_one_block(
+            &mut blocks.modified.block_mut(3)[inode_offset..inode_end],
+            file.inode.number,
+            &self.superblock,
+            ALLOCATION_PROBE_BLOCK,
+            true,
+        )
+        .unwrap_or_else(|_| device.fail("allocation probe inode growth failed"));
+        blocks
+            .modified
+            .block_mut(4)
+            .copy_from_slice(&ALLOCATION_PROBE_BLOCK_DATA);
+
+        let first_sequence = journal.superblock.sequence;
+        let second_sequence = self
+            .commit_multi_block_journal_transaction(
+                device,
+                journal,
+                first_sequence,
+                &targets,
+                &blocks.modified,
+            )
+            .await;
+        self.group0 = GroupDescriptor::parse(
+            &blocks.modified.block(1)[group_descriptor_offset..group_descriptor_end],
+            0,
+            &self.superblock,
+        )
+        .unwrap_or_else(|_| device.fail("allocation probe updated group descriptor is invalid"));
+        let grown_inode = self.read_inode(device, file.inode.number).await;
+        if grown_inode.size != file.inode.size + u64::from(self.superblock.block_size)
+            || grown_inode.block_count_512 != file.inode.block_count_512 + 8
+        {
+            device.fail("allocation probe grown inode readback mismatch");
+        }
+        let grown_file = Ext4File {
+            inode: grown_inode,
+            parent_inode: file.parent_inode,
+            directory_block: file.directory_block,
+            followed_symlink: file.followed_symlink,
+        };
+        let grown_data = self.read_file_block(device, &grown_file, 1).await;
+        if grown_data.len() != BLOCK_SIZE || grown_data.iter().any(|byte| *byte != b'G') {
+            device.fail("allocation probe allocated data readback mismatch");
+        }
+
+        let final_sequence = self
+            .commit_multi_block_journal_transaction(
+                device,
+                journal,
+                second_sequence,
+                &targets,
+                &blocks.original,
+            )
+            .await;
+        self.group0 = GroupDescriptor::parse(
+            &blocks.original.block(1)[group_descriptor_offset..group_descriptor_end],
+            0,
+            &self.superblock,
+        )
+        .unwrap_or_else(|_| device.fail("allocation probe restored group descriptor is invalid"));
+        let restored_inode = self.read_inode(device, file.inode.number).await;
+        if restored_inode != file.inode {
+            device.fail("allocation probe inode restoration failed");
+        }
+        device
+            .read(
+                block_to_sector(device, &self.superblock, ALLOCATION_PROBE_BLOCK),
+                BLOCK_SIZE,
+            )
+            .await;
+        if device.data(BLOCK_SIZE) != blocks.original.block(4) {
+            device.fail("allocation probe data block restoration failed");
+        }
+
+        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
+        let mut rewind = JournalStateScratch::new();
+        device.read(journal_sector, BLOCK_SIZE).await;
+        rewind
+            .journal_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        let checkpointed = JournalSuperblock::parse(rewind.journal_block())
+            .unwrap_or_else(|_| device.fail("allocation probe journal state is invalid"));
+        if checkpointed.sequence != final_sequence || checkpointed.start != 0 {
+            device.fail("allocation probe journal final sequence mismatch");
+        }
+        set_journal_superblock_state(rewind.journal_block_mut(), first_sequence, 0)
+            .unwrap_or_else(|_| device.fail("allocation probe journal rewind failed"));
+        device.write(journal_sector, rewind.journal_block()).await;
+        device.flush().await;
+        device.read(journal_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != rewind.journal_block() {
+            device.fail("allocation probe journal rewind readback mismatch");
+        }
+
+        AllocationJournalProbe {
+            allocated_block: ALLOCATION_PROBE_BLOCK,
+            bitmap_block: self.group0.block_bitmap_block,
+            group_descriptor_block: group_descriptor_location.block,
+            inode_table_block: inode_location.block,
+            first_sequence,
+            second_sequence,
+            final_sequence,
+        }
+    }
+
+    async fn commit_multi_block_journal_transaction<const N: usize>(
+        &mut self,
+        device: &mut BlockDevice,
+        journal: &JournalProbe,
+        sequence: u32,
+        target_blocks: &[u64; N],
+        home_blocks: &BlockSet<N>,
+    ) -> u32 {
+        if N == 0 || N > MULTI_TRANSACTION_MAX_BLOCKS {
+            device.fail("multi-block JBD2 transaction capacity is unsupported");
+        }
+        let filesystem_sector = block_to_sector(device, &self.superblock, 0);
+        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
+        let descriptor_block = journal
+            .physical_block
+            .checked_add(u64::from(journal.superblock.first_log_block))
+            .unwrap_or_else(|| device.fail("multi-block JBD2 descriptor overflow"));
+        let commit_block = descriptor_block
+            .checked_add(1 + u64::try_from(N).unwrap_or(u64::MAX))
+            .unwrap_or_else(|| device.fail("multi-block JBD2 commit overflow"));
+        let journal_end = journal
+            .physical_block
+            .checked_add(u64::from(journal.superblock.max_length))
+            .unwrap_or_else(|| device.fail("multi-block JBD2 extent overflow"));
+        if commit_block >= journal_end {
+            device.fail("multi-block JBD2 transaction exceeds journal extent");
+        }
+        for (index, target) in target_blocks.iter().enumerate() {
+            if *target >= self.superblock.block_count
+                || (*target >= journal.physical_block && *target < journal_end)
+                || target_blocks[..index].contains(target)
+            {
+                device.fail("multi-block JBD2 target is unsafe");
+            }
+        }
+
+        let mut scratch = MultiJournalScratch::<N>::new();
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        scratch
+            .state
+            .filesystem_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        if Superblock::parse(
+            &scratch.state.filesystem_block()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+        )
+        .is_err()
+        {
+            device.fail("multi-block JBD2 transaction requires a clean filesystem");
+        }
+        device.read(journal_sector, BLOCK_SIZE).await;
+        scratch
+            .state
+            .journal_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        let initial_journal = JournalSuperblock::parse(scratch.state.journal_block())
+            .unwrap_or_else(|_| device.fail("multi-block JBD2 initial state is invalid"));
+        if initial_journal.sequence != sequence || initial_journal.start != 0 {
+            device.fail("multi-block JBD2 initial sequence mismatch");
+        }
+        for offset in 0..N + 2 {
+            let block = descriptor_block
+                .checked_add(u64::try_from(offset).unwrap_or(u64::MAX))
+                .unwrap_or_else(|| device.fail("multi-block JBD2 record block overflow"));
+            device
+                .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
+                .await;
+            if device.data(BLOCK_SIZE).iter().any(|byte| *byte != 0) {
+                device.fail("multi-block JBD2 record block is not empty");
+            }
+        }
+
+        set_superblock_recovery(
+            &mut scratch.state.filesystem_block_mut()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            true,
+        )
+        .unwrap_or_else(|_| device.fail("multi-block JBD2 recovery activation failed"));
+        let superblock_target = target_blocks.iter().position(|target| *target == 0);
+        if let Some(index) = superblock_target {
+            scratch
+                .desired_superblock_mut()
+                .copy_from_slice(home_blocks.block(index));
+            set_superblock_recovery(
+                &mut scratch.desired_superblock_mut()
+                    [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+                true,
+            )
+            .unwrap_or_else(|_| device.fail("multi-block JBD2 home superblock activation failed"));
+        }
+
+        let mut target_blocks_u32 = [0u32; N];
+        let mut escaped_tags = [false; N];
+        for index in 0..N {
+            target_blocks_u32[index] = u32::try_from(target_blocks[index])
+                .unwrap_or_else(|_| device.fail("multi-block JBD2 target exceeds 32 bits"));
+            let home_frame = if Some(index) == superblock_target {
+                scratch.desired_superblock_frame
+            } else {
+                home_blocks.frames[index]
+            };
+            escaped_tags[index] = encode_journal_data_block(
+                scratch_frame_bytes_mut(scratch.data_frames[index]),
+                scratch_frame_bytes(home_frame),
+            )
+            .unwrap_or_else(|_| device.fail("multi-block JBD2 data encoding failed"));
+        }
+        encode_journal_descriptor_block(
+            scratch.descriptor_mut(),
+            sequence,
+            &target_blocks_u32,
+            &escaped_tags,
+            &self.superblock.uuid,
+        )
+        .unwrap_or_else(|_| device.fail("multi-block JBD2 descriptor encoding failed"));
+        encode_journal_commit_block(scratch.commit_mut(), sequence)
+            .unwrap_or_else(|_| device.fail("multi-block JBD2 commit encoding failed"));
+
+        device
+            .write(filesystem_sector, scratch.state.filesystem_block())
+            .await;
+        device.flush().await;
+        set_journal_superblock_state(
+            scratch.state.journal_block_mut(),
+            sequence,
+            journal.superblock.first_log_block,
+        )
+        .unwrap_or_else(|_| device.fail("multi-block JBD2 state activation failed"));
+        device
+            .write(journal_sector, scratch.state.journal_block())
+            .await;
+        device.flush().await;
+        device
+            .write(
+                block_to_sector(device, &self.superblock, descriptor_block),
+                scratch.descriptor(),
+            )
+            .await;
+        for index in 0..N {
+            let data_block = descriptor_block
+                .checked_add(1 + u64::try_from(index).unwrap_or(u64::MAX))
+                .unwrap_or_else(|| device.fail("multi-block JBD2 data location overflow"));
+            device
+                .write(
+                    block_to_sector(device, &self.superblock, data_block),
+                    scratch.data(index),
+                )
+                .await;
+        }
+        device.flush().await;
+        device
+            .write(
+                block_to_sector(device, &self.superblock, commit_block),
+                scratch.commit(),
+            )
+            .await;
+        device.flush().await;
+
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != scratch.state.filesystem_block()
+            || Superblock::parse(
+                &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            ) != Err(ParseError::DirtyFilesystem)
+        {
+            device.fail("multi-block JBD2 active filesystem state mismatch");
+        }
+        device.read(journal_sector, BLOCK_SIZE).await;
+        let active_journal = JournalSuperblock::parse(device.data(BLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("multi-block JBD2 active state is invalid"));
+        if device.data(BLOCK_SIZE) != scratch.state.journal_block()
+            || active_journal.sequence != sequence
+            || active_journal.start != journal.superblock.first_log_block
+        {
+            device.fail("multi-block JBD2 active state mismatch");
+        }
+        for offset in 0..N + 2 {
+            let block = descriptor_block
+                .checked_add(u64::try_from(offset).unwrap_or(u64::MAX))
+                .unwrap_or_else(|| device.fail("multi-block JBD2 readback block overflow"));
+            let expected = if offset == 0 {
+                scratch.descriptor()
+            } else if offset == N + 1 {
+                scratch.commit()
+            } else {
+                scratch.data(offset - 1)
+            };
+            device
+                .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
+                .await;
+            if device.data(BLOCK_SIZE) != expected {
+                device.fail("multi-block JBD2 record readback mismatch");
+            }
+        }
+
+        for (index, target) in target_blocks.iter().enumerate() {
+            let home = if Some(index) == superblock_target {
+                scratch.desired_superblock()
+            } else {
+                home_blocks.block(index)
+            };
+            device
+                .write(block_to_sector(device, &self.superblock, *target), home)
+                .await;
+        }
+        device.flush().await;
+        for (index, target) in target_blocks.iter().enumerate() {
+            let expected = if Some(index) == superblock_target {
+                scratch.desired_superblock()
+            } else {
+                home_blocks.block(index)
+            };
+            device
+                .read(
+                    block_to_sector(device, &self.superblock, *target),
+                    BLOCK_SIZE,
+                )
+                .await;
+            if device.data(BLOCK_SIZE) != expected {
+                device.fail("multi-block JBD2 home readback mismatch");
+            }
+            self.cache.invalidate(*target);
+        }
+
+        let next_sequence = sequence
+            .checked_add(1)
+            .unwrap_or_else(|| device.fail("multi-block JBD2 sequence overflow"));
+        set_journal_superblock_state(scratch.state.journal_block_mut(), next_sequence, 0)
+            .unwrap_or_else(|_| device.fail("multi-block JBD2 checkpoint update failed"));
+        for offset in 0..N + 2 {
+            let block = descriptor_block
+                .checked_add(u64::try_from(offset).unwrap_or(u64::MAX))
+                .unwrap_or_else(|| device.fail("multi-block JBD2 clear block overflow"));
+            device
+                .write(
+                    block_to_sector(device, &self.superblock, block),
+                    &ZERO_BLOCK,
+                )
+                .await;
+        }
+        device
+            .write(journal_sector, scratch.state.journal_block())
+            .await;
+        device.flush().await;
+        self.cache.invalidate(journal.physical_block);
+
+        let final_filesystem_block = if superblock_target.is_some() {
+            scratch.desired_superblock_mut()
+        } else {
+            scratch.state.filesystem_block_mut()
+        };
+        set_superblock_recovery(
+            &mut final_filesystem_block[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            false,
+        )
+        .unwrap_or_else(|_| device.fail("multi-block JBD2 recovery clearing failed"));
+        device
+            .write(filesystem_sector, final_filesystem_block)
+            .await;
+        device.flush().await;
+
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        let clean_superblock = Superblock::parse(
+            &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+        )
+        .unwrap_or_else(|_| device.fail("multi-block JBD2 final superblock is invalid"));
+        let expected_filesystem_block = if superblock_target.is_some() {
+            scratch.desired_superblock()
+        } else {
+            scratch.state.filesystem_block()
+        };
+        if device.data(BLOCK_SIZE) != expected_filesystem_block {
+            device.fail("multi-block JBD2 final superblock mismatch");
+        }
+        device.read(journal_sector, BLOCK_SIZE).await;
+        let final_journal = JournalSuperblock::parse(device.data(BLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("multi-block JBD2 final state is invalid"));
+        if device.data(BLOCK_SIZE) != scratch.state.journal_block()
+            || final_journal.sequence != next_sequence
+            || final_journal.start != 0
+        {
+            device.fail("multi-block JBD2 final state mismatch");
+        }
+        self.superblock = clean_superblock;
+        next_sequence
+    }
+
     async fn commit_single_block_journal_transaction(
         &mut self,
         device: &mut BlockDevice,
@@ -2220,6 +2757,16 @@ struct MetadataJournalProbe {
     final_sequence: u32,
 }
 
+struct AllocationJournalProbe {
+    allocated_block: u64,
+    bitmap_block: u64,
+    group_descriptor_block: u64,
+    inode_table_block: u64,
+    first_sequence: u32,
+    second_sequence: u32,
+    final_sequence: u32,
+}
+
 struct ActiveJournalScratch {
     records: JournalScratch,
     state: JournalStateScratch,
@@ -2235,20 +2782,116 @@ impl ActiveJournalScratch {
 }
 
 struct JournalReplayScratch {
-    transaction: ActiveJournalScratch,
-    home_frame: usize,
+    descriptor_frame: usize,
+    data_frames: [usize; MULTI_TRANSACTION_MAX_BLOCKS],
+    commit_frame: usize,
+    home_frames: [usize; MULTI_TRANSACTION_MAX_BLOCKS],
+    state: JournalStateScratch,
 }
 
 impl JournalReplayScratch {
     fn new() -> Self {
         Self {
-            transaction: ActiveJournalScratch::new(),
-            home_frame: allocate_scratch_frame(),
+            descriptor_frame: allocate_scratch_frame(),
+            data_frames: core::array::from_fn(|_| allocate_scratch_frame()),
+            commit_frame: allocate_scratch_frame(),
+            home_frames: core::array::from_fn(|_| allocate_scratch_frame()),
+            state: JournalStateScratch::new(),
         }
     }
 
-    fn home_block(&self) -> &[u8] {
-        scratch_frame_bytes(self.home_frame)
+    fn data_block_mut(&mut self, index: usize) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.data_frames[index])
+    }
+
+    fn home_block(&self, index: usize) -> &[u8] {
+        scratch_frame_bytes(self.home_frames[index])
+    }
+
+    fn home_block_mut(&mut self, index: usize) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.home_frames[index])
+    }
+}
+
+struct MultiJournalScratch<const N: usize> {
+    descriptor_frame: usize,
+    data_frames: [usize; N],
+    commit_frame: usize,
+    state: JournalStateScratch,
+    desired_superblock_frame: usize,
+}
+
+impl<const N: usize> MultiJournalScratch<N> {
+    fn new() -> Self {
+        Self {
+            descriptor_frame: allocate_scratch_frame(),
+            data_frames: core::array::from_fn(|_| allocate_scratch_frame()),
+            commit_frame: allocate_scratch_frame(),
+            state: JournalStateScratch::new(),
+            desired_superblock_frame: allocate_scratch_frame(),
+        }
+    }
+
+    fn descriptor(&self) -> &[u8] {
+        scratch_frame_bytes(self.descriptor_frame)
+    }
+
+    fn descriptor_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.descriptor_frame)
+    }
+
+    fn data(&self, index: usize) -> &[u8] {
+        scratch_frame_bytes(self.data_frames[index])
+    }
+
+    fn commit(&self) -> &[u8] {
+        scratch_frame_bytes(self.commit_frame)
+    }
+
+    fn commit_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.commit_frame)
+    }
+
+    fn desired_superblock(&self) -> &[u8] {
+        scratch_frame_bytes(self.desired_superblock_frame)
+    }
+
+    fn desired_superblock_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.desired_superblock_frame)
+    }
+}
+
+struct BlockSet<const N: usize> {
+    frames: [usize; N],
+}
+
+impl<const N: usize> BlockSet<N> {
+    fn new() -> Self {
+        Self {
+            frames: core::array::from_fn(|_| allocate_scratch_frame()),
+        }
+    }
+
+    fn block(&self, index: usize) -> &[u8] {
+        scratch_frame_bytes(self.frames[index])
+    }
+
+    fn block_mut(&mut self, index: usize) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.frames[index])
+    }
+}
+
+struct AllocationJournalScratch {
+    original: BlockSet<ALLOCATION_TRANSACTION_BLOCKS>,
+    modified: BlockSet<ALLOCATION_TRANSACTION_BLOCKS>,
+}
+
+impl AllocationJournalScratch {
+    fn new() -> Self {
+        Self {
+            original: BlockSet::new(),
+            modified: BlockSet::new(),
+        }
     }
 }
 
@@ -2313,24 +2956,12 @@ impl JournalScratch {
         scratch_frame_bytes(self.descriptor_frame)
     }
 
-    fn descriptor_mut(&mut self) -> &mut [u8] {
-        scratch_frame_bytes_mut(self.descriptor_frame)
-    }
-
     fn data(&self) -> &[u8] {
         scratch_frame_bytes(self.data_frame)
     }
 
-    fn data_mut(&mut self) -> &mut [u8] {
-        scratch_frame_bytes_mut(self.data_frame)
-    }
-
     fn commit(&self) -> &[u8] {
         scratch_frame_bytes(self.commit_frame)
-    }
-
-    fn commit_mut(&mut self) -> &mut [u8] {
-        scratch_frame_bytes_mut(self.commit_frame)
     }
 }
 

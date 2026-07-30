@@ -108,7 +108,7 @@ grep -Fq \
     "SLOPOS-EXT4: journal superblock valid inode=8 physical_block=32801 blocks=4096 first=1 sequence=2 start=0" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-VIRTIO: bounded block sequence complete requests=205 max_in_flight=2 interrupts=204 queue_interrupts=204" \
+    "SLOPOS-VIRTIO: bounded block sequence complete requests=330 max_in_flight=2 interrupts=329 queue_interrupts=329" \
     "${replay_serial}"
 grep -Fq "SLOPOS-DESKTOP: interactive compositor loop entered windows=3" "${replay_serial}"
 if grep -Fq "FATAL" "${replay_serial}"; then
