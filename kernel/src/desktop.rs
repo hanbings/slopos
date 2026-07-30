@@ -5,12 +5,14 @@ use crate::framebuffer::{
 };
 use crate::ps2::{Controller, InputEvent, Key, MouseEvent};
 use crate::serial::serialln;
-use slopos_shell::{LayoutConfig, ScrollLayout, parse_niri_layout};
+use slopos_shell::{
+    BarPosition, ScrollLayout, WaybarConfig, parse_niri_layout, parse_waybar_config,
+};
 
 const WINDOW_COUNT: usize = 3;
 const TITLE_HEIGHT: i32 = 30;
-const BAR_HEIGHT: i32 = 40;
 const NIRI_CONFIG: &str = include_str!("../../assets/niri-config.kdl");
+const WAYBAR_CONFIG: &str = include_str!("../../assets/waybar-config.jsonc");
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum WindowKind {
@@ -34,6 +36,7 @@ pub struct Desktop {
     screen_height: i32,
     windows: [Window; WINDOW_COUNT],
     layout: ScrollLayout<WINDOW_COUNT, 1>,
+    bar: WaybarConfig<'static>,
     active: usize,
     pointer_x: i32,
     pointer_y: i32,
@@ -50,11 +53,17 @@ impl Desktop {
     pub fn new(width: usize, height: usize) -> Self {
         let width = width as i32;
         let height = height as i32;
-        let config = parse_niri_layout(NIRI_CONFIG).unwrap_or_else(|_| LayoutConfig::default());
+        let config = parse_niri_layout(NIRI_CONFIG)
+            .unwrap_or_else(|_| crate::fatal("niri layout config failed validation"));
+        let bar = parse_waybar_config(WAYBAR_CONFIG)
+            .unwrap_or_else(|_| crate::fatal("Waybar JSONC config failed validation"));
+        if bar.position != BarPosition::Top {
+            crate::fatal("early Waybar renderer currently requires position=top");
+        }
         let mut layout = ScrollLayout::new(
             u16::try_from(width).unwrap_or(u16::MAX),
             u16::try_from(height).unwrap_or(u16::MAX),
-            BAR_HEIGHT as u16,
+            bar.height,
             config,
         );
         for window in 0..WINDOW_COUNT {
@@ -95,6 +104,7 @@ impl Desktop {
                 },
             ],
             layout,
+            bar,
             active: 0,
             pointer_x: width / 2,
             pointer_y: height / 2,
@@ -107,8 +117,13 @@ impl Desktop {
             alternate_theme: false,
         };
         serialln(format_args!(
-            "SLOPOS-SHELL: niri layout config loaded columns=3 gaps={} default_width=50% center=never bar=top",
-            desktop.layout.config().gaps
+            "SLOPOS-SHELL: config loaded niri_columns=3 gaps={} default_width=50% center=never waybar_position=top height={} spacing={} modules={}/{}/{}",
+            desktop.layout.config().gaps,
+            desktop.bar.height,
+            desktop.bar.spacing,
+            desktop.bar.modules_left.len(),
+            desktop.bar.modules_center.len(),
+            desktop.bar.modules_right.len()
         ));
         desktop
     }
@@ -127,6 +142,7 @@ impl Desktop {
     }
 
     pub fn render(&self, framebuffer: &mut Framebuffer) {
+        let bar_height = i32::from(self.bar.height);
         framebuffer.rect(
             0,
             0,
@@ -137,33 +153,14 @@ impl Desktop {
         for band in 0..8 {
             framebuffer.rect(
                 0,
-                BAR_HEIGHT + band * ((self.screen_height - BAR_HEIGHT) / 8),
+                bar_height + band * ((self.screen_height - bar_height) / 8),
                 self.screen_width,
-                (self.screen_height - BAR_HEIGHT) / 8,
+                (self.screen_height - bar_height) / 8,
                 if band % 2 == 0 { 0x11172d } else { 0x131a32 },
             );
         }
 
-        framebuffer.rect(0, 0, self.screen_width, BAR_HEIGHT, PANEL);
-        framebuffer.rect(10, 7, 26, 26, self.accent());
-        framebuffer.text(18, 14, "S", WHITE, 2);
-        framebuffer.text(47, 12, "1", WHITE, 1);
-        framebuffer.text(65, 12, "2", MUTED, 1);
-        framebuffer.text(83, 12, "3", MUTED, 1);
-        framebuffer.text(
-            self.screen_width / 2 - 30,
-            12,
-            title(self.windows[self.active].kind),
-            WHITE,
-            1,
-        );
-        framebuffer.text(
-            self.screen_width - 226,
-            12,
-            "NET --  CPU OK  MEM 36%  UTC",
-            GREEN,
-            1,
-        );
+        self.render_bar(framebuffer);
 
         for index in 0..WINDOW_COUNT {
             if self.windows[index].open {
@@ -171,6 +168,62 @@ impl Desktop {
             }
         }
         framebuffer.cursor(self.pointer_x, self.pointer_y);
+    }
+
+    fn render_bar(&self, framebuffer: &mut Framebuffer) {
+        let bar_height = i32::from(self.bar.height);
+        let baseline = ((bar_height - 7) / 2).max(2);
+        framebuffer.rect(0, 0, self.screen_width, bar_height, PANEL);
+        framebuffer.rect(10, 7, 26, 26, self.accent());
+        framebuffer.text(18, 14, "S", WHITE, 2);
+
+        let mut left_x = 47;
+        for module in self.bar.modules_left.iter() {
+            let text = self.bar_module_text(module);
+            framebuffer.text(left_x, baseline, text, WHITE, 1);
+            left_x += text_width(text) + i32::from(self.bar.spacing);
+        }
+
+        let mut center_width = 0;
+        for module in self.bar.modules_center.iter() {
+            if center_width != 0 {
+                center_width += i32::from(self.bar.spacing);
+            }
+            center_width += text_width(self.bar_module_text(module));
+        }
+        let mut center_x = (self.screen_width - center_width) / 2;
+        for module in self.bar.modules_center.iter() {
+            let text = self.bar_module_text(module);
+            framebuffer.text(center_x, baseline, text, WHITE, 1);
+            center_x += text_width(text) + i32::from(self.bar.spacing);
+        }
+
+        let mut right_width = 0;
+        for module in self.bar.modules_right.iter() {
+            if right_width != 0 {
+                right_width += i32::from(self.bar.spacing);
+            }
+            right_width += text_width(self.bar_module_text(module));
+        }
+        let mut right_x = self.screen_width - right_width - 12;
+        for module in self.bar.modules_right.iter() {
+            let text = self.bar_module_text(module);
+            framebuffer.text(right_x, baseline, text, GREEN, 1);
+            right_x += text_width(text) + i32::from(self.bar.spacing);
+        }
+    }
+
+    fn bar_module_text<'a>(&self, module: &'a str) -> &'a str {
+        match module {
+            "niri/workspaces" => "1  2  3",
+            "niri/window" => title(self.windows[self.active].kind),
+            "custom/launcher" => "SLOPOS",
+            "network" => "NET --",
+            "cpu" => "CPU OK",
+            "memory" => "MEM 36%",
+            "clock" => "UTC",
+            _ => module,
+        }
     }
 
     fn render_window(&self, framebuffer: &mut Framebuffer, index: usize) {
@@ -455,4 +508,8 @@ fn title(kind: WindowKind) -> &'static str {
 
 fn inside(x: i32, y: i32, window: Window) -> bool {
     x >= window.x && x < window.x + window.width && y >= window.y && y < window.y + window.height
+}
+
+fn text_width(text: &str) -> i32 {
+    i32::try_from(text.len()).unwrap_or(i32::MAX / 6) * 6
 }

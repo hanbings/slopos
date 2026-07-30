@@ -2,6 +2,12 @@
 
 #![no_std]
 
+mod waybar;
+
+pub use waybar::{
+    BarConfigError, BarModuleList, BarPosition, MAX_BAR_MODULES, WaybarConfig, parse_waybar_config,
+};
+
 pub const DEFAULT_GAPS: u16 = 16;
 pub const DEFAULT_FOCUS_RING_WIDTH: u16 = 4;
 pub const DEFAULT_ACTIVE_COLOR: u32 = 0x7f_c8_ff;

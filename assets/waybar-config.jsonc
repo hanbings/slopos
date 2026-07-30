@@ -1,0 +1,26 @@
+// SlopOS Waybar-compatible top bar seed.
+{
+    "position": "top",
+    "height": 40,
+    "spacing": 10,
+
+    "modules-left": [
+        "niri/workspaces"
+    ],
+    "modules-center": [
+        "niri/window"
+    ],
+    "modules-right": [
+        "network",
+        "cpu",
+        "memory",
+        "clock"
+    ],
+
+    "niri/workspaces": {
+        "format": "{value}"
+    },
+    "clock": {
+        "format": "UTC"
+    }
+}

@@ -82,7 +82,7 @@ required_markers=(
     "SLOPOS-SYSCALL: pid=1 abi=x86_64 trap=int80 nr=1 write fd=1 bytes=18 cpl=3 result=18"
     "SLOPOS-SYSCALL: pid=1 abi=x86_64 trap=int80 nr=60 exit status=0 cpl=3"
     "SLOPOS-PROCESS: pid=1 exited status=0 syscalls=2 kernel_return=true"
-    "SLOPOS-SHELL: niri layout config loaded columns=3 gaps=16 default_width=50% center=never bar=top"
+    "SLOPOS-SHELL: config loaded niri_columns=3 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4"
     "SLOPOS-DESKTOP: interactive compositor loop entered"
     "SLOPOS-ASYNC: executor entered tasks=3"
     "SLOPOS-ASYNC: timer future completed"
