@@ -4,8 +4,8 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=364816
-SLOPOS-UEFI: kernel mapped 0x4000000..0x403c000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=410488
+SLOPOS-UEFI: kernel mapped 0x4000000..0x4046000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: user ELF loaded bytes=4848 base=0xe60a000
 SLOPOS-UEFI: Boot Services exited descriptors=118
@@ -17,7 +17,7 @@ SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
 SLOPOS-KERNEL: user ELF available base=0xe60a000 bytes=4848
 SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
 SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
-SLOPOS-MM: frame allocator initialized regions=8 free_frames=52971 probe=0x100000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=52961 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
@@ -40,6 +40,6 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/99 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5
+SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/103 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5
 SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=60/60
 SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=60/60
