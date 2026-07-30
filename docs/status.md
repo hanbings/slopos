@@ -10,9 +10,9 @@
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
 | 进程/线程/调度 | 尚未实现 | 当前只有一个内核执行流；没有用户态、地址空间或 preemption。 |
 | 内存管理 | 部分实现 | kernel 解析 firmware descriptor stride，建立 frame allocator、自有四级页表并切换 CR3，建立 1 MiB kernel bump heap；frame/heap 读回与真实 vector-14 diagnostic 已验证。没有 user address space、细粒度页权限、COW 或 demand paging。 |
-| ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 fd 原位 write、active data/metadata transaction；两阶段测试在 commit 后/home 前停止，普通 kernel 重启后 mount-time replay 并继续进入桌面。replay 仅支持单块、零 feature、非 wrap transaction；无 allocation/extent/directory update，btrfs 未实现。 |
+| ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 fd 原位 write、active data/metadata transaction，以及五 tag block allocation/extent growth transaction；两阶段重启验证 mount-time replay。尚无 inode/directory allocation、面向 fd 的 grow/truncate，btrfs 未实现。 |
 | VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 4 项宿主测试；QEMU 把 ext4 挂到 `/`，以 fd 3 分块读/seek，再复用读写 fd 3 在 offset 123 覆写/读回/恢复 73 bytes。仍是 block task 局部、root-only、固定 file size 状态，不是每进程 POSIX VFS。 |
-| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，193 个请求由 192 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
+| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，clean boot 的 318 个请求由 317 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
 | 图形系统与 Wayland | 部分实现 | framebuffer renderer 和早期 window manager 可用；所有 Wayland wire/object/global/xdg 功能尚未实现。 |
 | 声明式配置 | 部分实现 | UI 中可原子切换一个内存主题预览；没有 parser、types、schema、module、diff、持久化或 rollback。 |
 | 文本编辑器 | 尚未实现 | kernel monitor 只编辑当前命令行，不是普通文本或配置文件编辑器。 |
@@ -35,7 +35,7 @@
 - 最后成功 ACPI 单元测试：2026-07-30，`make test-acpi`，3 项。
 - 最后成功 PCI 单元测试：2026-07-30，`make test-pci`，3 项。
 - 最后成功 virtio 单元测试：2026-07-30，`make test-virtio`，4 项。
-- 最后成功 ext4 单元测试：2026-07-30，`make test-ext4`，20 项。
+- 最后成功 ext4 单元测试：2026-07-30，`make test-ext4`，24 项。
 - 最后成功 VFS 单元测试：2026-07-30，`make test-vfs`，4 项。
 - 已验证的 kernel entry：`0x04000000`。
 - 已验证 GOP mode：1024×768，stride 1024。
@@ -43,4 +43,4 @@
 
 ## 下一项最高价值工作
 
-下一阶段应扩展 JBD2 scan 到多 tag、多 transaction 与 ring wrap，再增加 ext4 bitmap/extent/directory metadata transaction，把受限 inode-size probe 和原位整块 write 提升为可创建、增长、截断的 fd write；同时把局部 VFS 提升为内核全局对象，并把两个固定请求槽扩展为通用 descriptor allocator。之后需要可回收 heap、动态 task arena 和首个隔离用户地址空间；eBPF 仍需 map、program type、attach point 与 ELF relocation。
+下一阶段应把已验证的 block allocation/extent growth engine 接入 VFS append，并增加 inode bitmap、directory entry 与 checksum transaction 以支持 create/unlink；JBD2 还需多 transaction、revoke 与 ring wrap。同时把局部 VFS 提升为内核全局对象，并把两个固定请求槽扩展为通用 descriptor allocator。之后需要可回收 heap、动态 task arena 和首个隔离用户地址空间；eBPF 仍需 map、program type、attach point 与 ELF relocation。
