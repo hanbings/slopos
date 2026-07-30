@@ -4,7 +4,7 @@
 
 | 文件 | 生成方式 | 证明范围 |
 |---|---|---|
-| `serial.log` | `make test-boot` | OVMF/UEFI、ELF、`ExitBootServices`、XSDT/MADT、memory、eBPF、PCI/virtio INTx、ext4 superblock、async 与桌面循环 |
+| `serial.log` | `make test-boot` | OVMF/UEFI、ELF、`ExitBootServices`、XSDT/MADT、memory、CPL3 PID 1、eBPF、PCI/virtio INTx、ext4、async 与桌面循环 |
 | `uefi-debugcon.log` | `make test-boot` | loader 独立 debugcon 日志 |
 | `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`，鼠标拖动终端 |
 | `page-fault-serial.log` | `make test-page-fault` | 自有页表的未映射访问、vector 14、error、RIP、CR2 与 fatal boundary |
@@ -32,6 +32,8 @@ qemu-system-x86_64
   -monitor none
   -no-reboot
 ```
+
+用户进程证据位于所有串口启动日志的中断初始化之后、桌面 marker 之前。`SLOPOS-PROCESS` 记录独立 CR3、`0x40000000` code、`0x40002000` stack、不同 physical frame 与 `code=user-readonly stack=user-writable kernel=supervisor`；两个 `SLOPOS-SYSCALL` marker 分别证明 write 返回 18、exit status 0，且 CPU trap frame 的 CPL 为 3；最终 marker 证明两次 syscall 后恢复 kernel continuation。交互、page-fault 和 journal 两阶段测试都重复经过这条路径。它只证明同步内嵌单页程序、TSS privilege stack 与临时 `int 0x80` gate，不证明 ELF、`SYSCALL/SYSRET`、调度、多进程或通用 user-pointer handling。
 
 eBPF 的宿主边界测试由 `make test-ebpf` 执行；裸机证据是 `serial.log` 中的 `SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42`。它只证明文档所列子集，不证明 map、attach point 或 Linux eBPF 兼容性。
 
@@ -61,4 +63,4 @@ JBD2 宿主测试解析 big-endian v2 superblock，并拒绝 truncation、非法
 
 两阶段 recovery 证据来自独立 injection/replay 日志。phase 1 marker 明确记录 sequence 1/start 1、五个 targets 0/1/33/38/99、`allocated/grown` 旧状态、`free/original` 新状态与 `after_commit_before_home` 停止点；宿主同时确认 feature、free count、bitmap、inode size/blockcount 与全 G data。phase 2 普通 kernel 在任何 ext4 path read 前报告五 tag replay、全部 home readback、next sequence 2、records cleared 和 recovery false，随后用 sequence 2 继续全部 probes并进入桌面；最终 marker 为 477 requests/476 queue interrupts。宿主把五个 crash home 与注入前快照逐块比较，确认 block 99 释放并运行五阶段 fsck；脚本最后恢复固定-hash 标准镜像。
 
-VFS 宿主测试由 `make test-vfs` 执行。4 项测试覆盖 path/mount/fd offset 与 access mode。裸机 `SLOPOS-VFS` marker 证明 normalized absolute path 经 root mount 解析到 filesystem 1，为 inode 16 分配 fd 3，以 5 个 chunk 读取 76 bytes，并在 offset 7 再读取 11 bytes；关闭后复用 fd 3，以读写模式完成 inode 25 的 73-byte write/read/restore。mount/fd table 当前仍只是 block task 局部的固定容量状态。
+VFS 宿主测试由 `make test-vfs` 执行。5 项测试覆盖 path/mount/fd offset、access mode 与 EOF growth。裸机 `SLOPOS-VFS` marker 证明 normalized absolute path 经 root mount 解析到 filesystem 1，为 inode 16 分配 fd 3，以 5 个 chunk 读取 76 bytes，并在 offset 7 再读取 11 bytes；关闭后复用 fd 3，以读写模式完成 inode 25 的 73-byte write/read/restore。后续 marker 覆盖 append/truncate 与 create/open/close/unlink。mount/fd table 当前仍只是 block task 局部的固定容量状态。

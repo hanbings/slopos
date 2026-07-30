@@ -19,6 +19,9 @@ OVMF
       -> establish frame allocator, page tables, heap, and eBPF self-test
       -> accept GOP framebuffer ownership
       -> initialize PS/2 keyboard and mouse
+      -> initialize GDT/IDT/TSS and APIC interrupt routing
+      -> enter PID 1 through a private CR3 at CPL3
+      -> handle write/exit traps and restore kernel CR3/stack
       -> interactive early desktop loop
 ```
 
@@ -46,11 +49,13 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `memory.rs` 按 firmware 报告的 descriptor stride 解析 UEFI map，只收集 conventional memory，并提供并发保护的物理 frame/contiguous bump allocator。启动时实际分配一个 frame、volatile 写入、读回并清零。
 
-`paging.rs` 从 frame allocator 建立新的 x86-64 PML4/PDPT/PD，以 2 MiB page identity-map 当前 RAM，并以 cache-disabled 映射覆盖 GOP framebuffer、LAPIC、IOAPIC 和 PCI BAR MMIO，然后写入并读回 CR3。映射器可建立多个 lower-canonical PML4 slot；这对 OVMF 分配在 768 GiB 的 virtio 64-bit BAR 是实际必需的。`heap.rs` 从 contiguous frames 保留 1 MiB，提供 alignment-aware、并发保护的 bump allocation；启动路径实际分配 128 bytes 并验证首尾。
+`paging.rs` 从 frame allocator 建立新的 x86-64 PML4/PDPT/PD，以 2 MiB page identity-map 当前 RAM，并以 cache-disabled 映射覆盖 GOP framebuffer、LAPIC、IOAPIC 和 PCI BAR MMIO，然后写入并读回 CR3。映射器可建立多个 lower-canonical PML4 slot；这对 OVMF 分配在 768 GiB 的 virtio 64-bit BAR 是实际必需的。PID 1 的 PML4 复制 kernel entries，但克隆 low PDPT 后在 1 GiB 位置增加独立 user hierarchy；原 low 1 GiB huge-page entry 不带 U/S，因此 kernel identity map 在 CPL3 不可访问。code page 为 user read-only，stack page 为 user writable；两者使用不同 physical frame。当前还未启用 NX 或 kernel section W^X。`heap.rs` 从 contiguous frames 保留 1 MiB，提供 alignment-aware、并发保护的 bump allocation；启动路径实际分配 128 bytes 并验证首尾。
 
 `crates/acpi` 校验 ACPI 1.0/2.0 RSDP、RSDT/XSDT 和 SDT checksum，并解析 MADT 的 local APIC、I/O APIC、processor、local APIC override 与 interrupt-source override。`apic.rs` 通过 MADT 路由把 PIT、keyboard、mouse 送入 IOAPIC，屏蔽 8259，启用 xAPIC 并从 local APIC 发 EOI；QEMU 的 IRQ0 实际按 override 路由到 GSI 2。
 
-`interrupts.rs` 安装自有 GDT/IDT，配置 100 Hz PIT，并为 timer、keyboard、mouse、APIC spurious 及关键 CPU exception 安装 gate。汇编 stub 只保存上下文、对齐栈并调用有界 Rust top half。PS/2 top half 读取一个字节、确认 local APIC 并写入固定 SPSC ring；`desktop` future 负责扫描码和 mouse packet 的复杂解析。独立测试会访问未映射的 1 GiB 地址，实际验证 page-fault vector、error、RIP 和 CR2。
+`interrupts.rs` 安装包含 kernel/user code/data 与 64-bit TSS 的 GDT、加载 task register、安装 IDT、配置 100 Hz PIT，并为 timer、keyboard、mouse、APIC spurious 及关键 CPU exception 安装 gate。TSS 的 `RSP0` 指向专用 16 KiB privilege stack；vector `0x80` 是临时 DPL3 interrupt gate。汇编 stub 保存上下文、对齐栈并调用有界 Rust top half；syscall stub 则保存 15 个 GPR，在 Rust handler 核验 CPL3/参数后 `IRETQ` 返回用户态，或在 exit 路径恢复 kernel CR3/stack。PS/2 top half 读取一个字节、确认 local APIC 并写入固定 SPSC ring；`desktop` future 负责扫描码和 mouse packet 的复杂解析。独立测试会在 PID 1 退出后访问 kernel CR3 中未映射的 1 GiB 地址，实际验证 page-fault vector、error、RIP 和 CR2。
+
+`process.rs` 构造单页 PID 1 image，在独立 CR3 下以 `CS=0x23`、`SS=0x1b` 和 `IRETQ` 进入 CPL3。程序按 Linux x86-64 寄存器/编号约定执行 `write(1, ..., 18)` 和 `exit(0)`，但入口目前是 DPL3 `int 0x80`，不是 `SYSCALL/SYSRET`；image 也不是 ELF。完整边界见 [processes.md](processes.md)。
 
 `crates/pci` 通过 `ConfigAccess` trait 把枚举逻辑与硬件访问分离，扫描完整 bus/device/function 空间，识别 multifunction header，以 visited mask 避免 capability 链环，并解码 BAR 与 virtio vendor capability region。内核后端使用 PCI configuration mechanism 1 的 `0xcf8/0xcfc` port，并以 16-bit command write 启用 memory space/bus master 而不误清 status。
 
@@ -72,17 +77,21 @@ VFS create probe 复用相同 engine，把 blocks 0/1/36/38/83 作为一个原�
 
 ## 汇编用途与安全边界
 
-没有独立汇编文件。内联汇编限于：
+没有独立 `.S` 文件；Rust 中的 `asm!`/`global_asm!` 限于：
 
 - `in` / `out`：COM1、QEMU debugcon 和 i8042 PS/2 port；
-- `cli`：内核接管后、建立自己的 IDT 前屏蔽 maskable interrupt；
+- `cli` / `sti`：中断初始化与 race-free idle；
 - `pause`：当前早期轮询和 fatal loop 的处理器提示；
-- `hlt`：panic 后停止处理器。
+- `hlt`：panic 后停止处理器或等待下一个 IRQ；
+- `lgdt` / `lidt` / `ltr`、segment reload 与 interrupt/exception entry；
+- `mov cr3` 和 `IRETQ`：切换 PID 1 地址空间与 CPL；
+- vector `0x80` entry/exit：完整保存 GPR、调用 Rust handler、返回 CPL3 或恢复 kernel continuation。
 
 调用约定：
 
 - UEFI 入口和 firmware function pointer 使用 `extern "efiapi"`；
 - loader 到 kernel 使用 `extern "sysv64"`；
 - `BootInfo` 指针放在 SysV 第一个整数参数寄存器。
+- 汇编到 Rust interrupt/syscall handler 使用 SysV64；stub 在调用前保证栈对齐。
 
-每个 I/O port wrapper 都是局部 `unsafe`，调用点说明目标平台假设。framebuffer 和 BootInfo 的 raw pointer 在转为引用或写入前均检查范围或依赖加载器独占分配不变量。
+每个 I/O port wrapper 都是局部 `unsafe`，调用点说明目标平台假设。framebuffer 和 BootInfo 的 raw pointer 在转为引用或写入前均检查范围或依赖加载器独占分配不变量。用户指针当前不是通用接口：handler 只接受一个精确地址和固定长度，先验证整段位于已知 code page，再构造 slice。单个同步 probe 通过静态保存点恢复 kernel CR3/stack，因此尚不能支持嵌套用户入口、并发进程或抢占。

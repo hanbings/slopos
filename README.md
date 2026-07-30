@@ -2,7 +2,9 @@
 
 SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEMU 的独立操作系统项目。
 
-当前仓库已经有一个可重复启动的早期系统，而不是完成版操作系统：0BSD Rust UEFI 加载器会从 FAT ESP 读取并解析独立的 ELF64 内核，取得 ACPI RSDP 与 GOP，加载 bootstrap image，取得最终 memory map，调用 `ExitBootServices`，再把控制权交给 SlopOS 内核。内核接管串口、GOP framebuffer 与 PS/2 键鼠，并直接进入一个早期交互桌面。
+当前仓库已经有一个可重复启动的早期系统，而不是完成版操作系统：0BSD Rust UEFI 加载器会从 FAT ESP 读取并解析独立的 ELF64 内核，取得 ACPI RSDP 与 GOP，加载 bootstrap image，取得最终 memory map，调用 `ExitBootServices`，再把控制权交给 SlopOS 内核。内核接管串口、GOP framebuffer 与 PS/2 键鼠，先运行一个有独立 CR3 的 CPL3 PID 1 probe，再进入早期交互桌面。
+
+PID 1 使用独立 user code/stack page、GDT user segments、TSS `RSP0` privilege stack 与 DPL3 trap gate。它按 Linux x86-64 的寄存器和编号约定发出 `write(1, ..., 18)` 与 `exit(0)`，内核验证 CPL、参数、payload、返回值和调用顺序后恢复 kernel CR3/stack。当前入口仍是内嵌单页机器码，trap 暂用 `int 0x80`；尚无 ELF 用户程序装载、`SYSCALL/SYSRET`、调度或通用 syscall 层。
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
@@ -19,7 +21,7 @@ QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk�
 - 系统状态窗口；
 - 可点击应用的内存主题配置预览。
 
-这些功能目前仍在内核态，不能视为已经实现用户进程、隔离、多任务、声明式配置语言或 Wayland。完整、保守的完成度见 [docs/status.md](docs/status.md)。
+这些桌面功能目前仍在内核态。CPL3 probe 证明了首个隔离地址空间和 privilege transition，但不能视为已经实现通用用户进程、多任务、声明式配置语言或 Wayland。完整、保守的完成度见 [docs/status.md](docs/status.md)。
 
 ## 构建与运行
 
@@ -49,7 +51,7 @@ make test-journal-replay
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode 与 EOF growth。`make test-boot` 在 OVMF 中验证上述硬件路径、447 次 virtio 请求及 446 次 INTx completion、fd overwrite/append/truncate、active transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、477 次请求/476 次 completion、桌面继续运行和宿主 fsck。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode 与 EOF growth。`make test-boot` 在 OVMF 中验证真实 CPL3 enter/trap/exit、上述硬件路径、447 次 virtio 请求及 446 次 INTx completion、fd overwrite/append/truncate、active transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 在用户进程退出并恢复 kernel CR3 后核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、477 次请求/476 次 completion、桌面继续运行和宿主 fsck。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 
@@ -58,12 +60,13 @@ make run
 - SlopOS 原创源码均为 Rust，许可证为 0BSD。
 - 当前只使用三个 MIT/Apache-2.0 Rust 依赖；见 [docs/dependencies.md](docs/dependencies.md)。
 - UEFI 高层包装由 SlopOS 自己实现，仅使用宽松许可证的 `uefi-raw` 数据布局和函数表绑定。
-- 内联汇编只用于 x86 I/O port、`cli`、`pause` 和 `hlt`；安全边界见 [docs/architecture.md](docs/architecture.md)。
+- 内联/全局汇编只用于 x86 I/O port、interrupt entry、CR3/segment 操作、CPL3 transition、`cli`、`pause` 和 `hlt`；安全边界见 [docs/architecture.md](docs/architecture.md)。
 - 不依赖 Linux、GRUB 或宿主桌面来运行 SlopOS 代码。
 
 ## 文档
 
 - [架构和启动协议](docs/architecture.md)
+- [首个用户进程与 syscall trap](docs/processes.md)
 - [逐子系统完成度](docs/status.md)
 - [异步内核设计状态](docs/async-kernel.md)
 - [ACPI 与 APIC 中断路径](docs/acpi-apic.md)

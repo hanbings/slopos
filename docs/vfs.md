@@ -11,13 +11,13 @@
 
 内核当前建立容量 4 的 namespace，把 ext4 注册为 filesystem 1 并挂到 `/`；容量 8 的 fd table 为 `/etc/./slopos/../slopos/system.conf` 分配只读 fd 3。裸机测试将规范化后的相对 component 交给 ext4，使用 17-byte request 分五次读完 76-byte 文件，再 seek 到 offset 7 读取 11 bytes，最后 close。关闭后的 fd 3 会被复用于 inode 25 的 `ReadWrite` descriptor；它 seek 到 offset 123，写入 73 bytes，通过同一 fd 读回边界内容，再恢复原始 bytes。
 
-`make test-vfs` 的 4 项宿主测试覆盖路径规范化、root/`/mnt`/`/mnt/data` 最长挂载匹配、fd offset 生命周期，以及 `ReadOnly`/`WriteOnly`/`ReadWrite` 权限错误。`make test-boot` 验证同一状态机驱动真实 ext4 cache 与 virtio DMA。
+`make test-vfs` 的 5 项宿主测试覆盖路径规范化、root/`/mnt`/`/mnt/data` 最长挂载匹配、fd offset 生命周期、EOF growth，以及 `ReadOnly`/`WriteOnly`/`ReadWrite` 权限错误。`make test-boot` 验证同一状态机驱动真实 ext4 cache 与 virtio DMA。
 
 当前边界：
 
 - mount table 和 fd table 只活在 block task 内，不是全局或每进程对象；
 - 只有一个 root filesystem，没有 mount/unmount 生命周期或引用计数；
 - 只有 regular-file read/原位 write/seek/close，没有 directory fd、stat、dup、poll、mmap、owner/mode 权限或文件增长；
-- 没有 syscall，因此用户程序尚不能访问这些 fd；
+- PID 1 的临时 syscall trap 只处理固定 stdout write/exit，尚未连接这些 fd；
 - fd write 可覆写已有 initialized block；在 descriptor 位于 EOF 时还可取得 append window，由 ext4 五-home transaction 分配一个连续 block，随后更新 node size/offset并经同一 fd 读回。truncate probe 把 offset/size 与 block metadata 一起恢复。当前只支持单块增长；create/unlink 也仍未抽象为通用 VFS namespace API。
 - create transaction checkpoint 后，path walker 将新 inode 26 转为 `FileNode`，固定表复用读写 fd 3，空文件 read 返回 EOF；close 后才执行 unlink transaction。它证明 ext4 namespace mutation 与 descriptor 生命周期相接，但尚未抽象为可复用 VFS create/unlink API。

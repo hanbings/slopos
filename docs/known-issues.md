@@ -7,8 +7,8 @@
 - 所有窗口和工具都在 ring 0，共享同一地址空间。
 - 配置窗口只修改内存主题，不解析或持久化声明式配置。
 - `initrd.slp` 仍不是文件系统；独立 ext4 disk 已有 fd 原位写与严格单块 EOF append/truncate、最多八 tag 的 active JBD2 transaction、block/inode allocation、线性目录 create→fd open→unlink 和启动时 replay。scanner 当前只接受零 feature、单个非 wrap transaction；mutation 仍是启动回归流程，尚无可复用 namespace API/syscall、多块或非连续 growth、revoke、多 transaction、通用权限或 btrfs。
-- 已有 frame allocator、自有 early page table 与 bump heap，但没有回收、用户地址空间、进程、用户态或 syscall。
-- 当前页表为 early identity map，使用 2 MiB RWX huge page；尚未施加 W^X、NX、user/supervisor 或细粒度 kernel section 权限。
+- 已有 frame allocator、自有 early page table、bump heap 和一个同步 PID 1 user address space，但没有回收、process table、thread、scheduler、preemption 或通用 syscall/VFS 接口。
+- kernel 仍使用 2 MiB RWX identity huge page；PID 1 的 private page table 已隔离 supervisor kernel map，并区分 user read-only code 与 user-writable stack，但尚未施加 NX、完整 W^X 或细粒度 kernel section 权限。
 - 当前内核固定加载到物理 64 MiB；切换自有页表前的最早期初始化仍依赖 OVMF 留下的 identity mapping。
 - ACPI 当前解析 RSDP、RSDT/XSDT 和 MADT；尚未解析 MCFG、HPET、FADT，固定容量 parser 上限也不是完整 ACPICA 实现。
 - PCI 使用 configuration mechanism 1 并消费 firmware 已分配 BAR；尚未解析 bridge 拓扑或 MCFG，也没有 BAR sizing/resource allocation、MSI/MSI-X 或电源管理。
