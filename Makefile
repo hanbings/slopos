@@ -6,6 +6,7 @@ CARGO := $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
 all: build
 
 build:
+	$(CARGO) build --locked --release -p slopos-init --target x86_64-unknown-none
 	$(CARGO) build --locked --release -p slopos-kernel --target x86_64-unknown-none
 	$(CARGO) build --locked --release -p slopos-boot --target x86_64-unknown-uefi
 

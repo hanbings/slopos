@@ -11,6 +11,7 @@ members = [
     "crates/virtio",
     "ebpf",
     "kernel",
+    "userspace/init",
 ]
 
 [workspace.package]
