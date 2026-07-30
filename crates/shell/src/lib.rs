@@ -236,6 +236,7 @@ struct Column<const WINDOWS: usize> {
     window_count: usize,
     focused_window: usize,
     width: u16,
+    maximized: bool,
 }
 
 impl<const WINDOWS: usize> Column<WINDOWS> {
@@ -246,6 +247,7 @@ impl<const WINDOWS: usize> Column<WINDOWS> {
             window_count: 0,
             focused_window: 0,
             width: 0,
+            maximized: false,
         }
     }
 
@@ -638,6 +640,16 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         self.switch_preset_column_width_in_direction(true)
     }
 
+    pub fn toggle_maximize_focused_column(&mut self) -> bool {
+        if self.column_count == 0 {
+            return false;
+        }
+        let column = &mut self.columns[self.focused_column];
+        column.maximized = !column.maximized;
+        self.ensure_focused_visible();
+        true
+    }
+
     pub fn switch_preset_window_height(&mut self) -> bool {
         self.switch_preset_window_height_in_direction(false)
     }
@@ -678,7 +690,8 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             return false;
         }
         let presets = self.config.preset_column_widths;
-        let current = self.columns[self.focused_column].width;
+        let current = self.effective_column_width(self.focused_column);
+        let was_maximized = self.columns[self.focused_column].maximized;
         let target_index = next_preset_index(
             presets,
             current,
@@ -690,10 +703,11 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             .get(target_index)
             .expect("preset index stays within the fixed list")
             .resolve(self.output_width, self.config.gaps);
-        if width == current {
+        if width == current && !was_maximized {
             return false;
         }
         self.columns[self.focused_column].width = width;
+        self.columns[self.focused_column].maximized = false;
         self.ensure_focused_visible();
         true
     }
@@ -707,12 +721,18 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         &mut self,
         change: ColumnWidthChange,
     ) -> Result<bool, LayoutError> {
+        let maximized_width = self.maximized_column_width();
         let column = self
             .columns
             .get_mut(self.focused_column)
             .filter(|_| self.column_count != 0)
             .ok_or(LayoutError::NoFocusedWindow)?;
-        let previous = column.width;
+        let was_maximized = column.maximized;
+        let previous = if was_maximized {
+            maximized_width
+        } else {
+            column.width
+        };
         let adjusted = match change {
             ColumnWidthChange::Set(width) => {
                 i32::from(width.resolve(self.output_width, self.config.gaps))
@@ -726,7 +746,8 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             ColumnWidthChange::AdjustFixed(pixels) => i32::from(previous).saturating_add(pixels),
         };
         column.width = adjusted.clamp(1, i32::from(u16::MAX)) as u16;
-        let changed = column.width != previous;
+        column.maximized = false;
+        let changed = was_maximized || column.width != previous;
         self.ensure_focused_visible();
         Ok(changed)
     }
@@ -739,7 +760,6 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     pub fn tile_rect(&self, window: u32) -> Result<Rect, LayoutError> {
         let (column_index, window_index) =
             self.find_window(window).ok_or(LayoutError::UnknownWindow)?;
-        let column = self.columns[column_index];
         let gaps = i32::from(self.config.gaps);
         let x = self.column_start(column_index) - self.view_offset;
         let heights = self.resolved_window_heights(column_index);
@@ -752,7 +772,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         Ok(Rect {
             x,
             y,
-            width: column.width,
+            width: self.effective_column_width(column_index),
             height: heights[window_index],
         })
     }
@@ -794,9 +814,23 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     fn column_start(&self, column_index: usize) -> i32 {
         let mut x = i32::from(self.config.gaps);
         for index in 0..column_index {
-            x += i32::from(self.columns[index].width) + i32::from(self.config.gaps);
+            x += i32::from(self.effective_column_width(index)) + i32::from(self.config.gaps);
         }
         x
+    }
+
+    fn maximized_column_width(&self) -> u16 {
+        self.output_width
+            .saturating_sub(self.config.gaps.saturating_mul(2))
+            .max(1)
+    }
+
+    fn effective_column_width(&self, column_index: usize) -> u16 {
+        if self.columns[column_index].maximized {
+            self.maximized_column_width()
+        } else {
+            self.columns[column_index].width
+        }
     }
 
     fn maximum_view_offset(&self) -> i32 {
@@ -805,7 +839,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         }
         let last = self.column_count - 1;
         (self.column_start(last)
-            + i32::from(self.columns[last].width)
+            + i32::from(self.effective_column_width(last))
             + i32::from(self.config.gaps)
             - i32::from(self.output_width))
         .max(0)
@@ -817,7 +851,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             return;
         }
         let start = self.column_start(self.focused_column);
-        let end = start + i32::from(self.columns[self.focused_column].width);
+        let end = start + i32::from(self.effective_column_width(self.focused_column));
         let output_width = i32::from(self.output_width);
         let gap = i32::from(self.config.gaps);
         let centered = (start + end) / 2 - output_width / 2;
@@ -1564,6 +1598,35 @@ mod tests {
         assert_eq!(layout.tile_rect(1).unwrap().height, 420);
         assert!(layout.reset_focused_window_height());
         assert_eq!(layout.tile_rect(1).unwrap().height, 638);
+    }
+
+    #[test]
+    fn maximizes_a_column_and_restores_its_previous_width() {
+        let mut layout = ScrollLayout::<2, 1>::new(1000, 700, 30, LayoutConfig::default());
+        layout.open_window(1).unwrap();
+        assert_eq!(layout.tile_rect(1).unwrap().width, 476);
+        assert!(layout.toggle_maximize_focused_column());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 968);
+        assert!(layout.toggle_maximize_focused_column());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 476);
+        assert!(layout.toggle_maximize_focused_column());
+        assert!(
+            layout
+                .change_focused_column_width(ColumnWidthChange::Set(ColumnWidth::Fixed(720)))
+                .unwrap()
+        );
+        assert_eq!(layout.tile_rect(1).unwrap().width, 720);
+        assert!(layout.toggle_maximize_focused_column());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 968);
+        assert!(layout.toggle_maximize_focused_column());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 720);
+        assert!(layout.toggle_maximize_focused_column());
+        assert!(layout.switch_preset_column_width());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 311);
+        assert!(layout.toggle_maximize_focused_column());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 968);
+        assert!(layout.toggle_maximize_focused_column());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 311);
     }
 
     #[test]

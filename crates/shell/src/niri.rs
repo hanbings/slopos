@@ -74,6 +74,7 @@ pub enum NiriAction<'a> {
     SwitchPresetColumnWidthBack,
     SwitchPresetWindowHeight,
     SwitchPresetWindowHeightBack,
+    MaximizeColumn,
     SetColumnWidth(ColumnWidthChange),
     SetWindowHeight(ColumnWidthChange),
     ResetWindowHeight,
@@ -487,6 +488,7 @@ impl<'a> ShellConfigParser<'a> {
             "switch-preset-column-width-back" => NiriAction::SwitchPresetColumnWidthBack,
             "switch-preset-window-height" => NiriAction::SwitchPresetWindowHeight,
             "switch-preset-window-height-back" => NiriAction::SwitchPresetWindowHeightBack,
+            "maximize-column" => NiriAction::MaximizeColumn,
             "set-column-width" => {
                 let KdlToken::String(width) = self.next() else {
                     return Err(NiriConfigError::InvalidBinding);
@@ -964,6 +966,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].switch_preset_window_height_back()
     }
 
+    pub fn maximize_focused_column(&mut self) -> bool {
+        self.layouts[self.active].toggle_maximize_focused_column()
+    }
+
     pub fn view_offset(&self) -> i32 {
         self.layouts[self.active].view_offset()
     }
@@ -1094,6 +1100,7 @@ mod tests {
                 Mod+Ctrl+Shift+R { switch-preset-window-height; }
                 Mod+Ctrl+Alt+R { switch-preset-window-height-back; }
                 Mod+Ctrl+R { reset-window-height; }
+                Mod+F { maximize-column; }
                 Mod+Q { close-window; }
             }
             window-rule {
@@ -1113,7 +1120,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 25);
+        assert_eq!(config.bindings.len(), 26);
         assert_eq!(
             config
                 .bindings
@@ -1193,6 +1200,12 @@ mod tests {
                 BindingKey::Character(b'R')
             ),
             Some(NiriAction::SwitchPresetWindowHeightBack)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'F')),
+            Some(NiriAction::MaximizeColumn)
         );
         assert_eq!(
             config
