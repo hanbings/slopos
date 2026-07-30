@@ -61,6 +61,7 @@ pub struct BarModuleConfig<'a> {
     pub tooltip: Option<bool>,
     pub min_length: Option<u16>,
     pub max_length: Option<u16>,
+    pub on_click: Option<&'a str>,
 }
 
 impl<'a> BarModuleConfig<'a> {
@@ -74,6 +75,7 @@ impl<'a> BarModuleConfig<'a> {
             tooltip: None,
             min_length: None,
             max_length: None,
+            on_click: None,
         }
     }
 }
@@ -585,6 +587,11 @@ impl<'a> JsonParser<'a> {
                             module.max_length = Some(self.u16_value()?);
                             supported = true;
                         }
+                        "on-click" => {
+                            mark_once(&mut fields, 1 << 7)?;
+                            module.on_click = Some(self.module_action_value()?);
+                            supported = true;
+                        }
                         _ => self.skip_value()?,
                     }
                     match self.next() {
@@ -613,6 +620,14 @@ impl<'a> JsonParser<'a> {
     fn module_format_value(&mut self) -> Result<&'a str, BarConfigError> {
         let value = self.string_value()?;
         if value.len() > MAX_BAR_TEXT {
+            return Err(BarConfigError::InvalidModuleOption);
+        }
+        Ok(value)
+    }
+
+    fn module_action_value(&mut self) -> Result<&'a str, BarConfigError> {
+        let value = self.string_value()?;
+        if value.is_empty() || value.len() > MAX_BAR_TEXT || !value.is_ascii() {
             return Err(BarConfigError::InvalidModuleOption);
         }
         Ok(value)
@@ -759,6 +774,7 @@ mod tests {
                     "tooltip": false,
                     "min-length": 3,
                     "max-length": 12,
+                    "on-click": "status",
                     "calendar": { "mode": "month" }
                 },
             }
@@ -788,6 +804,7 @@ mod tests {
         assert_eq!(clock.tooltip, Some(false));
         assert_eq!(clock.min_length, Some(3));
         assert_eq!(clock.max_length, Some(12));
+        assert_eq!(clock.on_click, Some("status"));
     }
 
     #[test]
@@ -826,6 +843,14 @@ mod tests {
         );
         assert_eq!(
             parse_waybar_config(r#"{ "clock": { "min-length": 8, "max-length": 4 } }"#),
+            Err(BarConfigError::InvalidModuleOption)
+        );
+        assert_eq!(
+            parse_waybar_config(r#"{ "clock": { "on-click": "" } }"#),
+            Err(BarConfigError::InvalidModuleOption)
+        );
+        assert_eq!(
+            parse_waybar_config(r#"{ "clock": { "on-click": "状态" } }"#),
             Err(BarConfigError::InvalidModuleOption)
         );
     }

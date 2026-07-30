@@ -226,10 +226,7 @@ impl Desktop {
                     if let Some(event) = input.consume(byte) {
                         let animate = match event {
                             InputEvent::Key(key) => self.keyboard(key),
-                            InputEvent::Mouse(mouse) => {
-                                self.mouse(mouse);
-                                false
-                            }
+                            InputEvent::Mouse(mouse) => self.mouse(mouse),
                         };
                         if animate {
                             self.animate_wallpaper(framebuffer);
@@ -807,16 +804,17 @@ impl Desktop {
         false
     }
 
-    fn mouse(&mut self, event: MouseEvent) {
+    fn mouse(&mut self, event: MouseEvent) -> bool {
         self.pointer_x = (self.pointer_x + event.dx as i32).clamp(0, self.screen_width - 1);
         self.pointer_y = (self.pointer_y + event.dy as i32).clamp(0, self.screen_height - 1);
         let left = event.buttons & 1 != 0;
         let left_was_down = self.previous_buttons & 1 != 0;
         let right = event.buttons & 2 != 0;
         let right_was_down = self.previous_buttons & 2 != 0;
+        let mut animate = false;
 
         if left && !left_was_down {
-            self.pointer_pressed();
+            animate = self.pointer_pressed();
         } else if !left {
             self.scrolling_view = false;
         }
@@ -860,9 +858,10 @@ impl Desktop {
             }
         }
         self.previous_buttons = event.buttons;
+        animate
     }
 
-    fn pointer_pressed(&mut self) {
+    fn pointer_pressed(&mut self) -> bool {
         if let Some(workspace) = self.bar_workspace_at(self.pointer_x, self.pointer_y) {
             let changed = self
                 .workspaces
@@ -875,7 +874,16 @@ impl Desktop {
                 self.active_workspace_name(),
                 changed
             ));
-            return;
+            return false;
+        }
+        if let Some(module) = self.bar_module_at(self.pointer_x, self.pointer_y)
+            && let Some(action) = self
+                .bar
+                .module_configs
+                .get(module)
+                .and_then(|config| config.on_click)
+        {
+            return self.execute_bar_action(module, action);
         }
         for index in 0..WINDOW_COUNT {
             let Some(window) = self.positioned_window(index) else {
@@ -902,8 +910,9 @@ impl Desktop {
                     self.request_config_reload();
                 }
             }
-            return;
+            return false;
         }
+        false
     }
 
     fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {
@@ -963,6 +972,50 @@ impl Desktop {
                 }
             }
             module_x += module_width + i32::from(self.bar.spacing);
+        }
+        None
+    }
+
+    fn bar_module_at(&self, x: i32, y: i32) -> Option<&'static str> {
+        if y < 0 || y >= i32::from(self.bar.height) {
+            return None;
+        }
+        let center_width = self.bar_modules_width(self.bar.modules_center);
+        let right_width = self.bar_modules_width(self.bar.modules_right);
+        self.bar_module_in_modules(self.bar.modules_left, BAR_LEFT_START_X, x)
+            .or_else(|| {
+                self.bar_module_in_modules(
+                    self.bar.modules_center,
+                    (self.screen_width - center_width) / 2,
+                    x,
+                )
+            })
+            .or_else(|| {
+                self.bar_module_in_modules(
+                    self.bar.modules_right,
+                    self.screen_width - right_width - 12,
+                    x,
+                )
+            })
+    }
+
+    fn bar_module_in_modules(
+        &self,
+        modules: BarModuleList<'static>,
+        mut module_x: i32,
+        x: i32,
+    ) -> Option<&'static str> {
+        for module in modules.iter() {
+            let text = self.bar_module_text(module);
+            let style = self.bar_module_style(module);
+            let box_x = module_x + i32::from(style.margin_left);
+            let box_width = i32::from(style.padding_left)
+                + text_width(text.as_str())
+                + i32::from(style.padding_right);
+            if x >= box_x && x < box_x + box_width {
+                return Some(module);
+            }
+            module_x += self.bar_module_width(module) + i32::from(self.bar.spacing);
         }
         None
     }
@@ -1071,6 +1124,32 @@ impl Desktop {
         serialln(format_args!("SLOPOS-TERMINAL: command={command}"));
         self.command.fill(0);
         self.command_length = 0;
+        animate
+    }
+
+    fn execute_bar_action(&mut self, module: &'static str, action: &'static str) -> bool {
+        let saved_command = self.command;
+        let saved_length = self.command_length;
+        self.command.fill(0);
+        self.command_length = action.len();
+        for (destination, source) in self.command.iter_mut().zip(action.bytes()) {
+            *destination = source.to_ascii_uppercase();
+        }
+        let allowed = matches!(
+            &self.command[..self.command_length],
+            b"HELP" | b"STATUS" | b"ABOUT" | b"CLEAR" | b"RELOAD" | b"SWWW-DAEMON"
+        ) || self.command[..self.command_length].starts_with(b"SWWW ");
+        let animate = if allowed {
+            self.execute_command()
+        } else {
+            self.set_response("WAYBAR ACTION UNSUPPORTED");
+            false
+        };
+        self.command = saved_command;
+        self.command_length = saved_length;
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: module clicked name={module} button=left action={action} accepted={allowed} animate={animate}"
+        ));
         animate
     }
 
