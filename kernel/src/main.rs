@@ -7,8 +7,10 @@ mod desktop;
 mod executor;
 mod font;
 mod framebuffer;
+mod heap;
 mod interrupts;
 mod memory;
+mod paging;
 mod ps2;
 mod serial;
 mod timer;
@@ -90,6 +92,31 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     serialln(format_args!(
         "SLOPOS-MM: frame allocator initialized regions={} free_frames={} probe={:#x}",
         memory_stats.conventional_regions, memory_stats.free_frames, probe_frame
+    ));
+
+    let paging_stats = paging::install(boot_info.framebuffer);
+    serialln(format_args!(
+        "SLOPOS-MM: CR3 switched root={:#x} table_frames={} huge_pages={}",
+        paging_stats.pml4, paging_stats.page_table_frames, paging_stats.huge_pages
+    ));
+
+    let heap_stats = heap::initialize();
+    let heap_probe =
+        heap::allocate(128, 64).unwrap_or_else(|| fatal("kernel heap probe allocation failed"));
+    // SAFETY: the heap returned an exclusive 128-byte allocation.
+    unsafe {
+        core::ptr::write_bytes(heap_probe.as_ptr(), 0xa5, 128);
+        if heap_probe.as_ptr().read_volatile() != 0xa5
+            || heap_probe.as_ptr().add(127).read_volatile() != 0xa5
+        {
+            fatal("kernel heap allocation readback failed");
+        }
+    }
+    serialln(format_args!(
+        "SLOPOS-MM: kernel heap initialized base={:#x} bytes={} probe={:#x}",
+        heap_stats.base,
+        heap_stats.size,
+        heap_probe.as_ptr() as usize
     ));
 
     let mut framebuffer = match Framebuffer::new(boot_info.framebuffer) {

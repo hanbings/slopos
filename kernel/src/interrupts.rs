@@ -5,6 +5,11 @@ use core::cell::UnsafeCell;
 use core::mem::size_of;
 
 const KERNEL_CODE_SELECTOR: u16 = 0x08;
+const DIVIDE_ERROR_VECTOR: usize = 0;
+const INVALID_OPCODE_VECTOR: usize = 6;
+const DOUBLE_FAULT_VECTOR: usize = 8;
+const GENERAL_PROTECTION_VECTOR: usize = 13;
+const PAGE_FAULT_VECTOR: usize = 14;
 const TIMER_VECTOR: usize = 0x20;
 const KEYBOARD_VECTOR: usize = 0x21;
 const MOUSE_VECTOR: usize = 0x2c;
@@ -68,13 +73,25 @@ pub fn initialize() {
         configure_pit();
     }
     crate::serial::serialln(format_args!(
-        "SLOPOS-INTERRUPT: GDT IDT PIC PIT initialized timer_hz=100"
+        "SLOPOS-INTERRUPT: GDT IDT exception gates PIC PIT initialized timer_hz=100"
     ));
 }
 
 pub fn enable() {
     // SAFETY: initialize installed every unmasked IRQ gate before this call.
     unsafe { asm!("sti", options(nomem, nostack, preserves_flags)) };
+}
+
+pub fn trigger_page_fault() -> ! {
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXCEPTION: injecting page fault at 0x40000000"
+    ));
+    // SAFETY: this address is intentionally absent from SlopOS's new page
+    // tables. The read validates the installed vector-14 diagnostic path.
+    unsafe {
+        core::ptr::read_volatile(0x4000_0000 as *const u64);
+    }
+    crate::fatal("page-fault injection unexpectedly returned")
 }
 
 unsafe fn load_gdt() {
@@ -109,6 +126,15 @@ unsafe fn install_idt() {
     let entries = IDT.0.get();
     // SAFETY: exclusive early initialization; these symbols are valid interrupt stubs.
     unsafe {
+        (*entries)[DIVIDE_ERROR_VECTOR] =
+            IdtEntry::interrupt_gate(slopos_divide_error as usize as u64);
+        (*entries)[INVALID_OPCODE_VECTOR] =
+            IdtEntry::interrupt_gate(slopos_invalid_opcode as usize as u64);
+        (*entries)[DOUBLE_FAULT_VECTOR] =
+            IdtEntry::interrupt_gate(slopos_double_fault as usize as u64);
+        (*entries)[GENERAL_PROTECTION_VECTOR] =
+            IdtEntry::interrupt_gate(slopos_general_protection as usize as u64);
+        (*entries)[PAGE_FAULT_VECTOR] = IdtEntry::interrupt_gate(slopos_page_fault as usize as u64);
         (*entries)[TIMER_VECTOR] = IdtEntry::interrupt_gate(slopos_timer_interrupt as usize as u64);
         (*entries)[KEYBOARD_VECTOR] =
             IdtEntry::interrupt_gate(slopos_keyboard_interrupt as usize as u64);
@@ -195,6 +221,22 @@ fn consume_ps2_irq() {
     }
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn slopos_exception_handler(stack: *const u64) -> ! {
+    // Common stub layout: 9 saved caller-clobbered registers, vector, error,
+    // then CPU-pushed RIP, CS, and RFLAGS.
+    let vector = unsafe { stack.add(9).read() };
+    let error = unsafe { stack.add(10).read() };
+    let instruction_pointer = unsafe { stack.add(11).read() };
+    let cr2: u64;
+    // SAFETY: reading CR2 is side-effect free at ring 0.
+    unsafe { asm!("mov {value}, cr2", value = out(reg) cr2, options(nostack, preserves_flags)) };
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXCEPTION: vector={vector} error={error:#x} rip={instruction_pointer:#x} cr2={cr2:#x}"
+    ));
+    crate::fatal("unhandled CPU exception")
+}
+
 unsafe fn outb(port: u16, value: u8) {
     // SAFETY: caller selects a platform I/O port with the required semantics.
     unsafe {
@@ -227,6 +269,11 @@ unsafe fn io_wait() {
 }
 
 unsafe extern "C" {
+    fn slopos_divide_error();
+    fn slopos_invalid_opcode();
+    fn slopos_double_fault();
+    fn slopos_general_protection();
+    fn slopos_page_fault();
     fn slopos_timer_interrupt();
     fn slopos_keyboard_interrupt();
     fn slopos_mouse_interrupt();
@@ -274,5 +321,52 @@ global_asm!(
     SLOPOS_IRQ_STUB slopos_timer_interrupt, slopos_timer_handler
     SLOPOS_IRQ_STUB slopos_keyboard_interrupt, slopos_keyboard_handler
     SLOPOS_IRQ_STUB slopos_mouse_interrupt, slopos_mouse_handler
+"#
+);
+
+// Exceptions with and without hardware error codes are normalized to the same
+// stack shape before entering a non-returning Rust diagnostic handler.
+global_asm!(
+    r#"
+    .macro SLOPOS_EXCEPTION_NOERR name, vector
+    .global \name
+    .type \name, @function
+\name:
+    push 0
+    push \vector
+    jmp slopos_exception_common
+    .size \name, .-\name
+    .endm
+
+    .macro SLOPOS_EXCEPTION_ERR name, vector
+    .global \name
+    .type \name, @function
+\name:
+    push \vector
+    jmp slopos_exception_common
+    .size \name, .-\name
+    .endm
+
+slopos_exception_common:
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    cld
+    mov rdi, rsp
+    and rsp, -16
+    call slopos_exception_handler
+    ud2
+
+    SLOPOS_EXCEPTION_NOERR slopos_divide_error, 0
+    SLOPOS_EXCEPTION_NOERR slopos_invalid_opcode, 6
+    SLOPOS_EXCEPTION_ERR slopos_double_fault, 8
+    SLOPOS_EXCEPTION_ERR slopos_general_protection, 13
+    SLOPOS_EXCEPTION_ERR slopos_page_fault, 14
 "#
 );

@@ -402,11 +402,13 @@ impl Desktop {
     fn execute_command(&mut self) {
         let command = self.command_text();
         let response = if command == "HELP" {
-            "COMMANDS: HELP STATUS ABOUT CLEAR"
+            "COMMANDS: HELP STATUS ABOUT CLEAR FAULT"
         } else if command == "STATUS" {
             "KERNEL OK / 3 WINDOWS / PS2 READY"
         } else if command == "ABOUT" {
             "SLOPOS 0.1 EARLY NATIVE RUST DESKTOP"
+        } else if command == "FAULT" {
+            crate::interrupts::trigger_page_fault()
         } else if command == "CLEAR" || command.is_empty() {
             ""
         } else {

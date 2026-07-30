@@ -35,12 +35,21 @@ impl Allocator {
     }
 
     fn allocate_frame(&mut self) -> Option<u64> {
+        self.allocate_contiguous(1)
+    }
+
+    fn allocate_contiguous(&mut self, page_count: usize) -> Option<u64> {
+        let byte_count = (page_count as u64).checked_mul(PAGE_SIZE)?;
         while self.current < self.count {
             let region = &mut self.regions[self.current];
-            if region.next < region.end {
-                let frame = region.next;
-                region.next += PAGE_SIZE;
-                return Some(frame);
+            if region
+                .next
+                .checked_add(byte_count)
+                .is_some_and(|end| end <= region.end)
+            {
+                let start = region.next;
+                region.next += byte_count;
+                return Some(start);
             }
             self.current += 1;
         }
@@ -107,6 +116,13 @@ pub fn initialize(map: MemoryMapInfo) -> MemoryStats {
 
 pub fn allocate_frame() -> Option<u64> {
     ALLOCATOR.lock().allocate_frame()
+}
+
+pub fn allocate_contiguous(page_count: usize) -> Option<u64> {
+    if page_count == 0 {
+        return None;
+    }
+    ALLOCATOR.lock().allocate_contiguous(page_count)
 }
 
 struct AllocatorGuard<'a> {
