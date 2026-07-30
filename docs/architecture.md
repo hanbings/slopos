@@ -56,7 +56,7 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `virtio.rs` 走 modern PCI transport，只协商 `VIRTIO_F_VERSION_1`，为 queue 0 分配独立 descriptor/available/used/control/data frame，并以三 descriptor chain 发出只读 sector 请求。INTx top half 只读取并清除 ISR、累计计数、wake block task 和 EOI；Future 在下半部检查递增 used index 与 status，再复用同一 chain 发出下一次请求。共享 `crates/virtio` 负责可宿主测试的 split-ring layout 与 descriptor 构造。
 
-构建产生两个 disk：64 MiB FAT32 ESP 只供 UEFI loader，128 MiB `SLOPOS_ROOT` ext4 image 作为独立 root disk。`virtio.rs` 只负责 transport、DMA ring、IRQ completion 与有界 block buffer；`fs.rs` 持有 `ReadOnlyMount`/`ReadOnlyFile`，通过异步 block API 完成 mount、component lookup 与 file read。`crates/ext4` 校验 superblock、group descriptor、inode 与 directory tail checksum，解析 64-bit block address、depth-0 extent 和 variable-length directory entry，并拒绝未知 incompat feature、dirty state、htree 与非法 path component。当前只走 group 0、单块目录/文件，没有 namespace 或 mount table。
+构建产生两个 disk：64 MiB FAT32 ESP 只供 UEFI loader，128 MiB `SLOPOS_ROOT` ext4 image 作为独立 root disk。`virtio.rs` 只负责 transport、DMA ring、IRQ completion 与有界 block buffer；`fs.rs` 持有 `ReadOnlyMount`/`ReadOnlyFile`，通过异步 block API 完成 mount、component lookup 与按逻辑块 file read。`crates/ext4` 校验 metadata checksum，解析 64-bit block address、depth-0 inline extent run 和 variable-length directory entry，并拒绝未知 incompat feature、dirty state、htree 与非法 path component。当前只走 group 0 和单块目录，regular file 可跨 inline extent 的多个块；没有 namespace 或 mount table。
 
 `executor.rs` 当前固定运行 input、timer、block 三个 pinned future，以原子 ready mask 作为 task queue，以 RawWaker 标识 task，并在空闲时执行 race-free `cli` 检查和 `sti; hlt`。它仍缺动态 task arena、timer wheel、cancellation、async lock 和 SMP。
 
