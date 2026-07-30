@@ -13,6 +13,8 @@ pub const ROOT_INODE: u32 = 2;
 pub const JOURNAL_INODE: u32 = 8;
 pub const JOURNAL_SUPERBLOCK_SIZE: usize = 1024;
 pub const JOURNAL_MAGIC: u32 = 0xc03b_3998;
+pub const JOURNAL_DESCRIPTOR_BLOCK: u32 = 1;
+pub const JOURNAL_COMMIT_BLOCK: u32 = 2;
 pub const DIRECTORY_ENTRY_REGULAR_FILE: u8 = 1;
 pub const DIRECTORY_ENTRY_DIRECTORY: u8 = 2;
 pub const DIRECTORY_ENTRY_SYMLINK: u8 = 7;
@@ -357,6 +359,132 @@ impl JournalSuperblock {
             user_count,
         })
     }
+}
+
+const JOURNAL_TAG_ESCAPE: u16 = 0x0001;
+const JOURNAL_TAG_SAME_UUID: u16 = 0x0002;
+const JOURNAL_TAG_DELETED: u16 = 0x0004;
+const JOURNAL_TAG_LAST: u16 = 0x0008;
+const JOURNAL_TAG_SUPPORTED: u16 = JOURNAL_TAG_ESCAPE | JOURNAL_TAG_LAST;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JournalDescriptor {
+    pub sequence: u32,
+    pub target_block: u32,
+    pub escaped: bool,
+    pub uuid: [u8; 16],
+}
+
+impl JournalDescriptor {
+    pub fn parse(bytes: &[u8]) -> Result<Self, ParseError> {
+        if bytes.len() < 36 {
+            return Err(ParseError::Truncated);
+        }
+        if read_be_u32(bytes, 0)? != JOURNAL_MAGIC
+            || read_be_u32(bytes, 4)? != JOURNAL_DESCRIPTOR_BLOCK
+        {
+            return Err(ParseError::InvalidMagic);
+        }
+        let sequence = read_be_u32(bytes, 8)?;
+        let checksum = read_be_u16(bytes, 16)?;
+        let flags = read_be_u16(bytes, 18)?;
+        if sequence == 0
+            || checksum != 0
+            || flags & JOURNAL_TAG_LAST == 0
+            || flags & (JOURNAL_TAG_SAME_UUID | JOURNAL_TAG_DELETED) != 0
+            || flags & !JOURNAL_TAG_SUPPORTED != 0
+        {
+            return Err(ParseError::InvalidJournal);
+        }
+        let mut uuid = [0u8; 16];
+        uuid.copy_from_slice(&bytes[20..36]);
+        Ok(Self {
+            sequence,
+            target_block: read_be_u32(bytes, 12)?,
+            escaped: flags & JOURNAL_TAG_ESCAPE != 0,
+            uuid,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JournalCommit {
+    pub sequence: u32,
+}
+
+impl JournalCommit {
+    pub fn parse(bytes: &[u8]) -> Result<Self, ParseError> {
+        if bytes.len() < 12 {
+            return Err(ParseError::Truncated);
+        }
+        if read_be_u32(bytes, 0)? != JOURNAL_MAGIC || read_be_u32(bytes, 4)? != JOURNAL_COMMIT_BLOCK
+        {
+            return Err(ParseError::InvalidMagic);
+        }
+        let sequence = read_be_u32(bytes, 8)?;
+        if sequence == 0 {
+            return Err(ParseError::InvalidJournal);
+        }
+        Ok(Self { sequence })
+    }
+}
+
+pub fn encode_single_block_journal_transaction(
+    descriptor_block: &mut [u8],
+    journal_data_block: &mut [u8],
+    commit_block: &mut [u8],
+    sequence: u32,
+    target_block: u32,
+    uuid: &[u8; 16],
+    home_block: &[u8],
+) -> Result<(), ParseError> {
+    if descriptor_block.len() != home_block.len()
+        || journal_data_block.len() != home_block.len()
+        || commit_block.len() != home_block.len()
+        || home_block.len() < 1024
+        || !home_block.len().is_power_of_two()
+    {
+        return Err(ParseError::InvalidJournal);
+    }
+    if sequence == 0 {
+        return Err(ParseError::InvalidJournal);
+    }
+    descriptor_block.fill(0);
+    journal_data_block.copy_from_slice(home_block);
+    commit_block.fill(0);
+
+    write_be_u32(descriptor_block, 0, JOURNAL_MAGIC)?;
+    write_be_u32(descriptor_block, 4, JOURNAL_DESCRIPTOR_BLOCK)?;
+    write_be_u32(descriptor_block, 8, sequence)?;
+    write_be_u32(descriptor_block, 12, target_block)?;
+    write_be_u16(descriptor_block, 16, 0)?;
+    let escaped = home_block[..4] == JOURNAL_MAGIC.to_be_bytes();
+    let flags = JOURNAL_TAG_LAST | if escaped { JOURNAL_TAG_ESCAPE } else { 0 };
+    write_be_u16(descriptor_block, 18, flags)?;
+    descriptor_block[20..36].copy_from_slice(uuid);
+    if escaped {
+        journal_data_block[..4].fill(0);
+    }
+
+    write_be_u32(commit_block, 0, JOURNAL_MAGIC)?;
+    write_be_u32(commit_block, 4, JOURNAL_COMMIT_BLOCK)?;
+    write_be_u32(commit_block, 8, sequence)?;
+    Ok(())
+}
+
+pub fn decode_journal_data_block(
+    output: &mut [u8],
+    journal_data_block: &[u8],
+    descriptor: &JournalDescriptor,
+) -> Result<(), ParseError> {
+    if output.len() != journal_data_block.len() || output.len() < 4 {
+        return Err(ParseError::InvalidJournal);
+    }
+    output.copy_from_slice(journal_data_block);
+    if descriptor.escaped {
+        output[..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -964,6 +1092,27 @@ fn read_be_u32(bytes: &[u8], offset: usize) -> Result<u32, ParseError> {
     Ok(u32::from_be_bytes([value[0], value[1], value[2], value[3]]))
 }
 
+fn read_be_u16(bytes: &[u8], offset: usize) -> Result<u16, ParseError> {
+    let value = bytes.get(offset..offset + 2).ok_or(ParseError::Truncated)?;
+    Ok(u16::from_be_bytes([value[0], value[1]]))
+}
+
+fn write_be_u16(bytes: &mut [u8], offset: usize, value: u16) -> Result<(), ParseError> {
+    bytes
+        .get_mut(offset..offset + 2)
+        .ok_or(ParseError::Truncated)?
+        .copy_from_slice(&value.to_be_bytes());
+    Ok(())
+}
+
+fn write_be_u32(bytes: &mut [u8], offset: usize, value: u32) -> Result<(), ParseError> {
+    bytes
+        .get_mut(offset..offset + 4)
+        .ok_or(ParseError::Truncated)?
+        .copy_from_slice(&value.to_be_bytes());
+    Ok(())
+}
+
 fn read_u16_or_zero(bytes: &[u8], offset: usize) -> u16 {
     read_u16(bytes, offset).unwrap_or(0)
 }
@@ -1199,6 +1348,95 @@ mod tests {
         bytes[20..24].copy_from_slice(&4096u32.to_be_bytes());
         assert_eq!(
             JournalSuperblock::parse(&bytes),
+            Err(ParseError::InvalidJournal)
+        );
+    }
+
+    #[test]
+    fn round_trips_single_block_journal_transaction() {
+        let mut descriptor = [0u8; 4096];
+        let mut journal_data = [0u8; 4096];
+        let mut commit = [0u8; 4096];
+        let mut home = [b'M'; 4096];
+        let uuid = [0x53; 16];
+        encode_single_block_journal_transaction(
+            &mut descriptor,
+            &mut journal_data,
+            &mut commit,
+            9,
+            37,
+            &uuid,
+            &home,
+        )
+        .unwrap();
+        let parsed_descriptor = JournalDescriptor::parse(&descriptor).unwrap();
+        assert_eq!(
+            parsed_descriptor,
+            JournalDescriptor {
+                sequence: 9,
+                target_block: 37,
+                escaped: false,
+                uuid,
+            }
+        );
+        assert_eq!(JournalCommit::parse(&commit).unwrap().sequence, 9);
+        let mut decoded = [0u8; 4096];
+        decode_journal_data_block(&mut decoded, &journal_data, &parsed_descriptor).unwrap();
+        assert_eq!(decoded, home);
+
+        home[..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
+        encode_single_block_journal_transaction(
+            &mut descriptor,
+            &mut journal_data,
+            &mut commit,
+            10,
+            38,
+            &uuid,
+            &home,
+        )
+        .unwrap();
+        let parsed_descriptor = JournalDescriptor::parse(&descriptor).unwrap();
+        assert!(parsed_descriptor.escaped);
+        assert_eq!(journal_data[..4], [0; 4]);
+        decode_journal_data_block(&mut decoded, &journal_data, &parsed_descriptor).unwrap();
+        assert_eq!(decoded, home);
+    }
+
+    #[test]
+    fn rejects_corrupted_journal_transaction_headers() {
+        let mut descriptor = [0u8; 4096];
+        let mut journal_data = [0u8; 4096];
+        let mut commit = [0u8; 4096];
+        encode_single_block_journal_transaction(
+            &mut descriptor,
+            &mut journal_data,
+            &mut commit,
+            9,
+            37,
+            &[0x53; 16],
+            &[b'M'; 4096],
+        )
+        .unwrap();
+        descriptor[18..20].copy_from_slice(&JOURNAL_TAG_SAME_UUID.to_be_bytes());
+        assert_eq!(
+            JournalDescriptor::parse(&descriptor),
+            Err(ParseError::InvalidJournal)
+        );
+        commit[8..12].fill(0);
+        assert_eq!(
+            JournalCommit::parse(&commit),
+            Err(ParseError::InvalidJournal)
+        );
+        assert_eq!(
+            encode_single_block_journal_transaction(
+                &mut descriptor,
+                &mut journal_data,
+                &mut commit,
+                1,
+                37,
+                &[0x53; 16],
+                &[0u8; 2048],
+            ),
             Err(ParseError::InvalidJournal)
         );
     }
