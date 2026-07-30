@@ -2,6 +2,14 @@
 
 SlopOS 桌面以 niri、Waybar 和 swww 的用户习惯作为兼容目标，但不会把尚未实现的协议或选项标成已兼容。当前代码首先复现可独立测试的状态机与配置语义，再逐步替换 early kernel surfaces。
 
+## 用户态桌面策略边界
+
+root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`。PID 2 使用独立 CR3、Linux 风格 initial stack 和 100 Hz TSC preemption 路径启动，以异步 `openat/read/close` 分块读取恰好 904-byte 的 `/etc/slopos/waybar.jsonc` 与 172-byte 的 `/etc/slopos/swww.env`，并分别做一次 EOF read；这些 bytes 不再只是 kernel 内的编译期常量。
+
+`crates/desktop-protocol` 定义 40-byte、显式 magic/version/size 的 `DesktopCommit`。消息包含 Waybar provider 与 swww policy capability、两份配置的 FNV-1a hash、CPU/Memory 初始值范围和 wallpaper id；reserved bit/byte 必须为零。私有 syscall `0x534c0001` 只接受 PID 2 的第一代提交，kernel 再以自己嵌入的同源 asset 校验 hash，成功后用 release/acquire snapshot 唤醒 desktop task。当前 PID 2 发布 CPU 0%、Memory 36% 和 Aurora wallpaper，desktop 在 snapshot 到达前明确保持 `awaiting-user-policy`，而不是自行选择初始壁纸。
+
+这是可执行的用户进程→kernel desktop policy 边界，不是完整的用户态桌面。`/sbin/slop-shell` 提交一次后退出，并由 PID 1 的 `wait4` 回收；PS/2 输入、niri 状态机、运行时配置 reload、swww daemon/transition、surface、GOP renderer 与 composition 仍在 kernel。当前还没有常驻服务、双向 IPC、共享 surface buffer、Wayland protocol 或普通用户 client。
+
 ## VFS 配置发现与原子重载
 
 桌面构造时先用编译进 kernel 的同源 asset 作为 bootstrap；ext4 root mount 完成后，block task 从 VFS 读取四份文本并发布 generation 1，desktop task 再把整套状态一次替换。root image 把仓库默认配置安装在 `/etc/slopos/`，但发现顺序优先兼容常见位置：
@@ -74,11 +82,11 @@ JSONC parser 支持 `//` 与 `/* */` comment、trailing comma、最多 16 个 mo
 
 VFS 中选中的 CSS 使用 Waybar 同样的 GTK CSS selector 命名；仓库默认源是 `assets/waybar-style.css`。无分配 parser 支持 `*`、`window#waybar` 和 module `#id` 的 source-order cascade、逗号 selector list，以及 `color`、`background[-color]`、`padding`、`margin`、`border-bottom: Npx solid #rrggbb`；`transparent` background 和 1/2/3/4-value px box shorthand 可用。renderer 将样式纳入左右/居中宽度计算，当前截图中的 CPU/Memory/Clock 色块、padding 和 bar 底边框都来自 CSS。字段与 selector 依据 [Waybar 官方 `config.jsonc`](https://github.com/Alexays/Waybar/blob/master/resources/config.jsonc)、[默认 `style.css`](https://github.com/Alexays/Waybar/blob/master/resources/style.css) 与 [niri/workspaces module manual](https://github.com/Alexays/Waybar/blob/master/man/waybar-niri-workspaces.5.scd)。
 
-4 项 JSONC/format 与 3 项 CSS 测试覆盖 parse、format replacement、cascade、transparent、box shorthand 和拒绝边界。JSONC/CSS 已从 VFS 成对参与原子 generation reload。当前 registry 仍只有 `niri/workspaces`、`niri/window`、`custom/launcher`、`network`、`cpu`、`memory`、`clock` 的固定 kernel provider；interval 被验证并保留为 provider 更新策略，但 early provider 没有真实 network/CPU/RTC polling。尚无 Pango markup/strftime、format-icons/state、完整 GTK CSS/alpha blend、click/scroll action、per-output bar、tray、network/audio/battery backend 或 niri IPC module。parser 接受 bottom/left/right position，但 early framebuffer renderer 当前只允许 top，并在发布 VFS generation 前拒绝其他位置。
+4 项 JSONC/format 与 3 项 CSS 测试覆盖 parse、format replacement、cascade、transparent、box shorthand 和拒绝边界。JSONC/CSS 已从 VFS 成对参与原子 generation reload。当前 registry 包含 `niri/workspaces`、`niri/window`、`custom/launcher`、`network`、`cpu`、`memory`、`clock`：CPU/Memory 的初始值来自 `/sbin/slop-shell` 发布的 snapshot，workspace/window 仍由 kernel niri 状态机提供，network/clock 仍是固定 kernel 值。interval 被验证并保留为 provider 更新策略，但没有常驻用户 provider 或真实 network/CPU/RTC polling。尚无 Pango markup/strftime、format-icons/state、完整 GTK CSS/alpha blend、click/scroll action、per-output bar、tray、network/audio/battery backend 或 niri IPC module。parser 接受 bottom/left/right position，但 early framebuffer renderer 当前只允许 top，并在发布 VFS generation 前拒绝其他位置。
 
 ## swww 式壁纸控制
 
-`crates/shell` 已提供无分配 swww 风格 CLI parser 与 `WallpaperDaemon` 状态机。kernel 启动时等价执行 `swww-daemon` 和 `swww img /usr/share/backgrounds/slopos-aurora.ppm`；图形 monitor 接受带或不带 `swww` 前缀的命令：
+`crates/shell` 已提供无分配 swww 风格 CLI parser 与 `WallpaperDaemon` 状态机。kernel 启动 daemon 状态机但不选择图片；PID 2 的首个有效 desktop policy commit 才等价选择 `swww img /usr/share/backgrounds/slopos-aurora.ppm`。后续控制仍由 kernel 图形 monitor 接受带或不带 `swww` 前缀的命令：
 
 - `img <path>` 设置图片，可选 output；
 - `query` 返回 output geometry 与当前 image；
@@ -88,6 +96,6 @@ VFS 中选中的 CSS 使用 Waybar 同样的 GTK CSS selector 命名；仓库默
 - VFS 中发现的 environment 文件以同名 `SWWW_TRANSITION*` 变量提供 boot/reload 默认值，仓库默认源是 `assets/swww.env`；
 - `none`、`simple`、`fade`、`left/right/top/bottom`、`center/outer`、`any/random` transition。
 
-两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart 与 `none` 重设。7 项 swww/PNM、11 项 niri layout/shell 与 7 项 Waybar JSONC/CSS 测试，共 25 项。
+两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart 与 `none` 重设。7 项 swww/PNM、11 项 niri layout/shell、7 项 Waybar JSONC/CSS 与 3 项 desktop protocol 测试，共 28 项。
 
-命令与 transition 语义依据 [swww 官方 README](https://github.com/LGFae/swww)。environment 默认值已参与四文件 VFS 原子重载，但当前 daemon 不是独立用户进程或 Unix socket，也没有 Wayland layer-shell、多 output、从 VFS 解码任意图片路径、PNG/JPEG/GIF decode、animated image cache、frame callback/timing、transition position/bezier/wave/grow 或 damage tracking。同步 framebuffer renderer 为限制最坏 CPU 时间，会把极小 step 最多采样成 17 帧，因此不声称二进制或动画时序完全兼容 swww。
+命令与 transition 语义依据 [swww 官方 README](https://github.com/LGFae/swww)。初始 environment/hash/image policy 已由用户进程提交，environment 默认值也参与后续四文件 VFS 原子重载；daemon state 和 image decode/render 仍在 kernel，而不是常驻用户进程或 Unix socket。也没有 Wayland layer-shell、多 output、从 VFS 解码任意图片路径、PNG/JPEG/GIF decode、animated image cache、frame callback/timing、transition position/bezier/wave/grow 或 damage tracking。同步 framebuffer renderer 为限制最坏 CPU 时间，会把极小 step 最多采样成 17 帧，因此不声称二进制或动画时序完全兼容 swww。
