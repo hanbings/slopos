@@ -1,0 +1,239 @@
+// SPDX-License-Identifier: 0BSD
+
+use core::future::pending;
+use slopos_ext4::{
+    DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DirectoryBlock, Extent,
+    GroupDescriptor, Inode, ROOT_INODE, SUPERBLOCK_SIZE, Superblock, validate_path_component,
+};
+
+use crate::virtio::BlockDevice;
+
+const SUPERBLOCK_SECTOR: u64 = 2;
+const SECTOR_SIZE: u64 = 512;
+const BLOCK_SIZE: usize = 4096;
+const EXPECTED_RELEASE: &[u8] = include_bytes!("../../rootfs/etc/slopos-release");
+const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/slopos/system.conf");
+const RELEASE_PATH: [&[u8]; 2] = [b"etc", b"slopos-release"];
+const CONFIGURATION_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"system.conf"];
+
+pub async fn mount_task(mut device: BlockDevice) -> ! {
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VIRTIO: modern block queue ready size={} capacity_sectors={}",
+        device.queue_size(),
+        device.capacity_sectors()
+    ));
+    let mount = ReadOnlyMount::mount(&mut device).await;
+    let superblock = &mount.superblock;
+    let volume_name = core::str::from_utf8(superblock.volume_name())
+        .unwrap_or_else(|_| device.fail("ext4 volume label is not UTF-8"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: superblock valid label={volume_name} block_size={} blocks={} inodes={} features={:#x}/{:#x}/{:#x}",
+        superblock.block_size,
+        superblock.block_count,
+        superblock.inode_count,
+        superblock.feature_compat,
+        superblock.feature_incompat,
+        superblock.feature_read_only_compat
+    ));
+
+    let root = mount.probe_root(&mut device).await;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: root directory valid group_inode_table={} inode={} extent_block={} entries={} etc_inode={} lost_found_inode={} metadata_checksums=group/inode/directory",
+        mount.group.inode_table_block,
+        ROOT_INODE,
+        root.extent_block,
+        root.entry_count,
+        root.etc_inode,
+        root.lost_and_found_inode
+    ));
+
+    let release = mount.open_file(&mut device, &RELEASE_PATH).await;
+    let release_size = {
+        let bytes = mount.read_file(&mut device, &release).await;
+        if bytes != EXPECTED_RELEASE {
+            device.fail("ext4 slopos-release content mismatch");
+        }
+        bytes.len()
+    };
+
+    let configuration = mount.open_file(&mut device, &CONFIGURATION_PATH).await;
+    let configuration_size = {
+        let bytes = mount.read_file(&mut device, &configuration).await;
+        if bytes != EXPECTED_SYSTEM_CONFIGURATION {
+            device.fail("ext4 system.conf content mismatch");
+        }
+        bytes.len()
+    };
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: async path read valid release_inode={} release_bytes={release_size} config_inode={} config_bytes={configuration_size} paths=/etc/slopos-release,/etc/slopos/system.conf",
+        release.inode.number, configuration.inode.number
+    ));
+    let (interrupts, queue_interrupts) = crate::virtio::interrupt_counts();
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VIRTIO: async block sequence complete requests={} interrupts={interrupts} queue_interrupts={queue_interrupts}",
+        device.request_count()
+    ));
+    pending::<()>().await;
+    unreachable!()
+}
+
+struct ReadOnlyMount {
+    superblock: Superblock,
+    group: GroupDescriptor,
+}
+
+impl ReadOnlyMount {
+    async fn mount(device: &mut BlockDevice) -> Self {
+        device.read(SUPERBLOCK_SECTOR, SUPERBLOCK_SIZE).await;
+        let superblock = Superblock::parse(device.data(SUPERBLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("ext4 superblock validation failed"));
+        if superblock.block_size as usize != BLOCK_SIZE {
+            device.fail("ext4 mount requires a 4096-byte block size");
+        }
+        let descriptor_sector =
+            block_to_sector(device, &superblock, superblock.group_descriptor_block());
+        device.read(descriptor_sector, BLOCK_SIZE).await;
+        let group = GroupDescriptor::parse(device.data(BLOCK_SIZE), 0, &superblock)
+            .unwrap_or_else(|_| device.fail("ext4 group descriptor validation failed"));
+        Self { superblock, group }
+    }
+
+    async fn probe_root(&self, device: &mut BlockDevice) -> RootProbe {
+        let inode = self.read_inode(device, ROOT_INODE).await;
+        let extent = self.directory_extent(device, &inode);
+        let sector = block_to_sector(device, &self.superblock, extent.physical_block);
+        device.read(sector, BLOCK_SIZE).await;
+        let directory = DirectoryBlock::parse(device.data(BLOCK_SIZE), &inode, &self.superblock)
+            .unwrap_or_else(|_| device.fail("ext4 root directory validation failed"));
+        let etc = directory
+            .find(b"etc")
+            .unwrap_or_else(|| device.fail("ext4 root directory is missing etc"));
+        let lost_and_found = directory
+            .find(b"lost+found")
+            .unwrap_or_else(|| device.fail("ext4 root directory is missing lost+found"));
+        if etc.file_type != DIRECTORY_ENTRY_DIRECTORY
+            || lost_and_found.file_type != DIRECTORY_ENTRY_DIRECTORY
+        {
+            device.fail("ext4 root entry type is invalid");
+        }
+        RootProbe {
+            extent_block: extent.physical_block,
+            entry_count: directory.entry_count(),
+            etc_inode: etc.inode,
+            lost_and_found_inode: lost_and_found.inode,
+        }
+    }
+
+    async fn open_file(&self, device: &mut BlockDevice, components: &[&[u8]]) -> ReadOnlyFile {
+        let inode = self.resolve_path(device, components).await;
+        if !inode.is_regular_file() {
+            device.fail("ext4 open target is not a regular file");
+        }
+        ReadOnlyFile { inode }
+    }
+
+    async fn resolve_path(&self, device: &mut BlockDevice, components: &[&[u8]]) -> Inode {
+        if components.is_empty() {
+            device.fail("ext4 path has no components");
+        }
+        let mut current = self.read_inode(device, ROOT_INODE).await;
+        for component in components {
+            if validate_path_component(component).is_err() {
+                device.fail("ext4 path component is invalid");
+            }
+            let extent = self.directory_extent(device, &current);
+            let sector = block_to_sector(device, &self.superblock, extent.physical_block);
+            device.read(sector, BLOCK_SIZE).await;
+            let directory =
+                DirectoryBlock::parse(device.data(BLOCK_SIZE), &current, &self.superblock)
+                    .unwrap_or_else(|_| device.fail("ext4 path directory is invalid"));
+            let entry = directory
+                .find(component)
+                .unwrap_or_else(|| device.fail("ext4 path component was not found"));
+            let inode_number = entry.inode;
+            let file_type = entry.file_type;
+            current = self.read_inode(device, inode_number).await;
+            if (file_type == DIRECTORY_ENTRY_DIRECTORY && !current.is_directory())
+                || (file_type == DIRECTORY_ENTRY_REGULAR_FILE && !current.is_regular_file())
+                || (file_type != DIRECTORY_ENTRY_DIRECTORY
+                    && file_type != DIRECTORY_ENTRY_REGULAR_FILE)
+            {
+                device.fail("ext4 directory entry type mismatch");
+            }
+        }
+        current
+    }
+
+    async fn read_inode(&self, device: &mut BlockDevice, inode_number: u32) -> Inode {
+        let location = self
+            .superblock
+            .inode_location(inode_number, &self.group)
+            .unwrap_or_else(|_| device.fail("ext4 inode location is invalid"));
+        let sector = block_to_sector(device, &self.superblock, location.block);
+        device.read(sector, BLOCK_SIZE).await;
+        let offset = location.offset as usize;
+        let end = offset + usize::from(self.superblock.inode_size);
+        if end > BLOCK_SIZE {
+            device.fail("ext4 inode crosses the read block");
+        }
+        Inode::parse(
+            &device.data(BLOCK_SIZE)[offset..end],
+            inode_number,
+            &self.superblock,
+        )
+        .unwrap_or_else(|_| device.fail("ext4 inode validation failed"))
+    }
+
+    async fn read_file<'a>(&self, device: &'a mut BlockDevice, file: &ReadOnlyFile) -> &'a [u8] {
+        let extent = file
+            .inode
+            .first_extent()
+            .unwrap_or_else(|_| device.fail("ext4 file extent is unsupported"));
+        if file.inode.size > u64::from(self.superblock.block_size)
+            || extent.logical_block != 0
+            || extent.unwritten
+            || extent.physical_block >= self.superblock.block_count
+        {
+            device.fail("ext4 regular file extent is invalid");
+        }
+        let sector = block_to_sector(device, &self.superblock, extent.physical_block);
+        device.read(sector, BLOCK_SIZE).await;
+        &device.data(BLOCK_SIZE)[..file.inode.size as usize]
+    }
+
+    fn directory_extent(&self, device: &BlockDevice, inode: &Inode) -> Extent {
+        let extent = inode
+            .first_extent()
+            .unwrap_or_else(|_| device.fail("ext4 directory extent is unsupported"));
+        if !inode.is_directory()
+            || inode.size != u64::from(self.superblock.block_size)
+            || extent.logical_block != 0
+            || extent.unwritten
+            || extent.physical_block >= self.superblock.block_count
+        {
+            device.fail("ext4 directory extent is invalid");
+        }
+        extent
+    }
+}
+
+struct ReadOnlyFile {
+    inode: Inode,
+}
+
+struct RootProbe {
+    extent_block: u64,
+    entry_count: usize,
+    etc_inode: u32,
+    lost_and_found_inode: u32,
+}
+
+fn block_to_sector(device: &BlockDevice, superblock: &Superblock, block: u64) -> u64 {
+    let byte_offset = block
+        .checked_mul(u64::from(superblock.block_size))
+        .unwrap_or_else(|| device.fail("ext4 block offset overflow"));
+    if byte_offset % SECTOR_SIZE != 0 {
+        device.fail("ext4 block is not sector aligned");
+    }
+    byte_offset / SECTOR_SIZE
+}

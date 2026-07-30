@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: 0BSD
 
 use core::arch::asm;
-use core::future::{Future, pending};
+use core::future::Future;
 use core::mem::size_of;
 use core::pin::Pin;
 use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering, fence};
 use core::task::{Context, Poll};
-use slopos_ext4::{
-    DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DirectoryBlock, Extent,
-    GroupDescriptor, Inode, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
-};
 use slopos_pci::{Device, VirtioRegion};
 use slopos_virtio::{
     BLOCK_REQUEST_IN, BlockRequestHeader, Descriptor, block_read_descriptors, choose_queue_size,
@@ -37,14 +33,9 @@ const COMMON_QUEUE_DESCRIPTOR: usize = 32;
 const COMMON_QUEUE_DRIVER: usize = 40;
 const COMMON_QUEUE_DEVICE: usize = 48;
 const BLOCK_STATUS_OK: u8 = 0;
-const SUPERBLOCK_SECTOR: u64 = 2;
 const QUEUE_LIMIT: u16 = 8;
 const SECTOR_SIZE: usize = 512;
 const DATA_PAGE_SIZE: usize = 4096;
-const EXPECTED_RELEASE: &[u8] = include_bytes!("../../rootfs/etc/slopos-release");
-const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/slopos/system.conf");
-const RELEASE_PATH: [&[u8]; 2] = [b"etc", b"slopos-release"];
-const CONFIGURATION_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"system.conf"];
 
 static ISR_BASE: AtomicU64 = AtomicU64::new(0);
 static INTERRUPT_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -200,212 +191,8 @@ pub fn interrupt_counts() -> (u64, u64) {
     )
 }
 
-pub async fn completion_task(mut device: BlockDevice) -> ! {
-    crate::serial::serialln(format_args!(
-        "SLOPOS-VIRTIO: modern block queue ready size={} capacity_sectors={}",
-        device.queue_size, device.capacity_sectors
-    ));
-    device.read(SUPERBLOCK_SECTOR, SUPERBLOCK_SIZE).await;
-    let superblock = Superblock::parse(device.data(SUPERBLOCK_SIZE))
-        .unwrap_or_else(|_| fail(device.common_base, "ext4 superblock validation failed"));
-    let volume_name = core::str::from_utf8(superblock.volume_name())
-        .unwrap_or_else(|_| fail(device.common_base, "ext4 volume label is not UTF-8"));
-    if superblock.block_size as usize != DATA_PAGE_SIZE {
-        fail(
-            device.common_base,
-            "ext4 probe requires a 4096-byte block size",
-        );
-    }
-    crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: superblock valid label={volume_name} block_size={} blocks={} inodes={} features={:#x}/{:#x}/{:#x}",
-        superblock.block_size,
-        superblock.block_count,
-        superblock.inode_count,
-        superblock.feature_compat,
-        superblock.feature_incompat,
-        superblock.feature_read_only_compat
-    ));
-
-    let descriptor_block = superblock.group_descriptor_block();
-    let descriptor_sector = block_to_sector(&device, &superblock, descriptor_block);
-    device.read(descriptor_sector, DATA_PAGE_SIZE).await;
-    let group =
-        GroupDescriptor::parse(device.data(DATA_PAGE_SIZE), 0, &superblock).unwrap_or_else(|_| {
-            fail(
-                device.common_base,
-                "ext4 group descriptor validation failed",
-            )
-        });
-
-    let root_inode = read_inode(&mut device, &superblock, &group, ROOT_INODE).await;
-    let root_extent = directory_extent(&device, &superblock, &root_inode);
-
-    let directory_sector = block_to_sector(&device, &superblock, root_extent.physical_block);
-    device.read(directory_sector, DATA_PAGE_SIZE).await;
-    let directory = DirectoryBlock::parse(device.data(DATA_PAGE_SIZE), &root_inode, &superblock)
-        .unwrap_or_else(|_| fail(device.common_base, "ext4 root directory validation failed"));
-    let etc = directory
-        .find(b"etc")
-        .unwrap_or_else(|| fail(device.common_base, "ext4 root directory is missing etc"));
-    let lost_and_found = directory.find(b"lost+found").unwrap_or_else(|| {
-        fail(
-            device.common_base,
-            "ext4 root directory is missing lost+found",
-        )
-    });
-    if etc.file_type != DIRECTORY_ENTRY_DIRECTORY
-        || lost_and_found.file_type != DIRECTORY_ENTRY_DIRECTORY
-    {
-        fail(device.common_base, "ext4 root entry type is invalid");
-    }
-    let root_entry_count = directory.entry_count();
-    let etc_inode_number = etc.inode;
-    let lost_and_found_inode_number = lost_and_found.inode;
-    crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: root directory valid group_inode_table={} inode={} extent_block={} entries={} etc_inode={} lost_found_inode={} metadata_checksums=group/inode/directory",
-        group.inode_table_block,
-        ROOT_INODE,
-        root_extent.physical_block,
-        root_entry_count,
-        etc_inode_number,
-        lost_and_found_inode_number
-    ));
-
-    let release_inode = resolve_path(&mut device, &superblock, &group, &RELEASE_PATH).await;
-    let release_inode_number = release_inode.number;
-    let release_size = {
-        let bytes = read_small_file(&mut device, &superblock, &release_inode).await;
-        if bytes != EXPECTED_RELEASE {
-            fail(device.common_base, "ext4 slopos-release content mismatch");
-        }
-        bytes.len()
-    };
-
-    let configuration_inode =
-        resolve_path(&mut device, &superblock, &group, &CONFIGURATION_PATH).await;
-    let configuration_inode_number = configuration_inode.number;
-    let configuration_size = {
-        let bytes = read_small_file(&mut device, &superblock, &configuration_inode).await;
-        if bytes != EXPECTED_SYSTEM_CONFIGURATION {
-            fail(device.common_base, "ext4 system.conf content mismatch");
-        }
-        bytes.len()
-    };
-    crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: async path read valid release_inode={release_inode_number} release_bytes={release_size} config_inode={configuration_inode_number} config_bytes={configuration_size} paths=/etc/slopos-release,/etc/slopos/system.conf"
-    ));
-    crate::serial::serialln(format_args!(
-        "SLOPOS-VIRTIO: async block sequence complete requests={} interrupts={} queue_interrupts={}",
-        device.available_index,
-        INTERRUPT_COUNT.load(Ordering::Acquire),
-        QUEUE_INTERRUPT_COUNT.load(Ordering::Acquire)
-    ));
-    pending::<()>().await;
-    unreachable!()
-}
-
-async fn read_inode(
-    device: &mut BlockDevice,
-    superblock: &Superblock,
-    group: &GroupDescriptor,
-    inode_number: u32,
-) -> Inode {
-    let location = superblock
-        .inode_location(inode_number, group)
-        .unwrap_or_else(|_| fail(device.common_base, "ext4 inode location is invalid"));
-    let sector = block_to_sector(device, superblock, location.block);
-    device.read(sector, DATA_PAGE_SIZE).await;
-    let offset = location.offset as usize;
-    let end = offset + usize::from(superblock.inode_size);
-    if end > DATA_PAGE_SIZE {
-        fail(device.common_base, "ext4 inode crosses the read block");
-    }
-    Inode::parse(
-        &device.data(DATA_PAGE_SIZE)[offset..end],
-        inode_number,
-        superblock,
-    )
-    .unwrap_or_else(|_| fail(device.common_base, "ext4 inode validation failed"))
-}
-
-async fn resolve_path(
-    device: &mut BlockDevice,
-    superblock: &Superblock,
-    group: &GroupDescriptor,
-    components: &[&[u8]],
-) -> Inode {
-    if components.is_empty() {
-        fail(device.common_base, "ext4 path has no components");
-    }
-    let mut current = read_inode(device, superblock, group, ROOT_INODE).await;
-    for component in components {
-        if component.is_empty()
-            || component.len() > 255
-            || *component == b"."
-            || *component == b".."
-            || component.iter().any(|byte| *byte == 0 || *byte == b'/')
-        {
-            fail(device.common_base, "ext4 path component is invalid");
-        }
-        let extent = directory_extent(device, superblock, &current);
-        let sector = block_to_sector(device, superblock, extent.physical_block);
-        device.read(sector, DATA_PAGE_SIZE).await;
-        let directory = DirectoryBlock::parse(device.data(DATA_PAGE_SIZE), &current, superblock)
-            .unwrap_or_else(|_| fail(device.common_base, "ext4 path directory is invalid"));
-        let entry = directory
-            .find(component)
-            .unwrap_or_else(|| fail(device.common_base, "ext4 path component was not found"));
-        let inode_number = entry.inode;
-        let file_type = entry.file_type;
-        current = read_inode(device, superblock, group, inode_number).await;
-        if (file_type == DIRECTORY_ENTRY_DIRECTORY && !current.is_directory())
-            || (file_type == DIRECTORY_ENTRY_REGULAR_FILE && !current.is_regular_file())
-            || (file_type != DIRECTORY_ENTRY_DIRECTORY && file_type != DIRECTORY_ENTRY_REGULAR_FILE)
-        {
-            fail(device.common_base, "ext4 directory entry type mismatch");
-        }
-    }
-    current
-}
-
-fn directory_extent(device: &BlockDevice, superblock: &Superblock, inode: &Inode) -> Extent {
-    let extent = inode
-        .first_extent()
-        .unwrap_or_else(|_| fail(device.common_base, "ext4 directory extent is unsupported"));
-    if !inode.is_directory()
-        || inode.size != u64::from(superblock.block_size)
-        || extent.logical_block != 0
-        || extent.unwritten
-        || extent.physical_block >= superblock.block_count
-    {
-        fail(device.common_base, "ext4 directory extent is invalid");
-    }
-    extent
-}
-
-async fn read_small_file<'a>(
-    device: &'a mut BlockDevice,
-    superblock: &Superblock,
-    inode: &Inode,
-) -> &'a [u8] {
-    let extent = inode
-        .first_extent()
-        .unwrap_or_else(|_| fail(device.common_base, "ext4 file extent is unsupported"));
-    if !inode.is_regular_file()
-        || inode.size > u64::from(superblock.block_size)
-        || extent.logical_block != 0
-        || extent.unwritten
-        || extent.physical_block >= superblock.block_count
-    {
-        fail(device.common_base, "ext4 regular file extent is invalid");
-    }
-    let sector = block_to_sector(device, superblock, extent.physical_block);
-    device.read(sector, DATA_PAGE_SIZE).await;
-    &device.data(DATA_PAGE_SIZE)[..inode.size as usize]
-}
-
 impl BlockDevice {
-    async fn read(&mut self, sector: u64, byte_count: usize) {
+    pub(crate) async fn read(&mut self, sector: u64, byte_count: usize) {
         if byte_count == 0
             || byte_count > DATA_PAGE_SIZE
             || byte_count % SECTOR_SIZE != 0
@@ -471,10 +258,29 @@ impl BlockDevice {
         }
     }
 
-    fn data(&self, byte_count: usize) -> &[u8] {
+    pub(crate) fn data(&self, byte_count: usize) -> &[u8] {
+        if byte_count > DATA_PAGE_SIZE {
+            self.fail("virtio block buffer view is out of bounds");
+        }
         // SAFETY: data_page is a permanently live DMA frame and callers only
         // request the completed prefix, bounded by DATA_PAGE_SIZE.
         unsafe { core::slice::from_raw_parts(self.data_page as *const u8, byte_count) }
+    }
+
+    pub(crate) const fn queue_size(&self) -> u16 {
+        self.queue_size
+    }
+
+    pub(crate) const fn capacity_sectors(&self) -> u64 {
+        self.capacity_sectors
+    }
+
+    pub(crate) const fn request_count(&self) -> u16 {
+        self.available_index
+    }
+
+    pub(crate) fn fail(&self, message: &'static str) -> ! {
+        fail(self.common_base, message)
     }
 }
 
@@ -495,16 +301,6 @@ impl Future for Completion {
             Poll::Pending
         }
     }
-}
-
-fn block_to_sector(device: &BlockDevice, superblock: &Superblock, block: u64) -> u64 {
-    let byte_offset = block
-        .checked_mul(u64::from(superblock.block_size))
-        .unwrap_or_else(|| fail(device.common_base, "ext4 block offset overflow"));
-    if byte_offset % SECTOR_SIZE as u64 != 0 {
-        fail(device.common_base, "ext4 block is not sector aligned");
-    }
-    byte_offset / SECTOR_SIZE as u64
 }
 
 fn allocate_zeroed_frame() -> usize {

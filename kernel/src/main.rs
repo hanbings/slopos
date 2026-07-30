@@ -9,6 +9,7 @@ mod desktop;
 mod executor;
 mod font;
 mod framebuffer;
+mod fs;
 mod heap;
 mod interrupts;
 mod memory;
@@ -254,7 +255,7 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     executor::run(
         desktop.run(&mut framebuffer, input),
         timer::diagnostics_task(),
-        virtio::completion_task(block_device),
+        fs::mount_task(block_device),
     )
 }
 

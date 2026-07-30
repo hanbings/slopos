@@ -45,6 +45,20 @@ pub enum ParseError {
     UnsupportedDirectoryIndex,
     NotDirectory,
     InvalidDirectory,
+    InvalidPathComponent,
+}
+
+pub fn validate_path_component(component: &[u8]) -> Result<(), ParseError> {
+    if component.is_empty()
+        || component.len() > 255
+        || component == b"."
+        || component == b".."
+        || component.iter().any(|byte| *byte == 0 || *byte == b'/')
+    {
+        Err(ParseError::InvalidPathComponent)
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -719,6 +733,31 @@ mod tests {
         bytes[58..60].copy_from_slice(&0u16.to_le_bytes());
         refresh_superblock_checksum(&mut bytes);
         assert_eq!(Superblock::parse(&bytes), Err(ParseError::DirtyFilesystem));
+    }
+
+    #[test]
+    fn validates_path_components_without_normalizing_them() {
+        assert_eq!(validate_path_component(b"system.conf"), Ok(()));
+        assert_eq!(
+            validate_path_component(b""),
+            Err(ParseError::InvalidPathComponent)
+        );
+        assert_eq!(
+            validate_path_component(b".."),
+            Err(ParseError::InvalidPathComponent)
+        );
+        assert_eq!(
+            validate_path_component(b"etc/slopos"),
+            Err(ParseError::InvalidPathComponent)
+        );
+        assert_eq!(
+            validate_path_component(b"nul\0byte"),
+            Err(ParseError::InvalidPathComponent)
+        );
+        assert_eq!(
+            validate_path_component(&[b'a'; 256]),
+            Err(ParseError::InvalidPathComponent)
+        );
     }
 
     #[test]
