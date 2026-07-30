@@ -60,6 +60,7 @@ pub struct MouseEvent {
     pub dx: i16,
     pub dy: i16,
     pub buttons: u8,
+    pub modifiers: KeyModifiers,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -151,6 +152,12 @@ impl Controller {
             dx,
             dy,
             buttons: flags & 0x07,
+            modifiers: KeyModifiers {
+                shift: self.shift,
+                control: self.control,
+                alt: self.alt,
+                logo: self.logo,
+            },
         }))
     }
 

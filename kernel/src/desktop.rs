@@ -58,6 +58,7 @@ pub struct Desktop {
     pointer_y: i32,
     previous_buttons: u8,
     scrolling_view: bool,
+    resizing_column: bool,
     command: [u8; 128],
     command_length: usize,
     response: [u8; 128],
@@ -163,6 +164,7 @@ impl Desktop {
             pointer_y: height / 2,
             previous_buttons: 0,
             scrolling_view: false,
+            resizing_column: false,
             command: [0; 128],
             command_length: 0,
             response: [0; 128],
@@ -784,6 +786,7 @@ impl Desktop {
             Key::Tab => self.focus_next(),
             Key::Escape => {
                 self.scrolling_view = false;
+                self.resizing_column = false;
             }
             Key::Backspace if self.terminal_focused() && self.command_length > 0 => {
                 self.command_length -= 1;
@@ -805,11 +808,18 @@ impl Desktop {
         self.pointer_y = (self.pointer_y + event.dy as i32).clamp(0, self.screen_height - 1);
         let left = event.buttons & 1 != 0;
         let left_was_down = self.previous_buttons & 1 != 0;
+        let right = event.buttons & 2 != 0;
+        let right_was_down = self.previous_buttons & 2 != 0;
 
         if left && !left_was_down {
             self.pointer_pressed();
         } else if !left {
             self.scrolling_view = false;
+        }
+        if right && !right_was_down && event.modifiers.logo {
+            self.pointer_resize_pressed();
+        } else if !right {
+            self.resizing_column = false;
         }
 
         if left && self.scrolling_view && event.dx != 0 {
@@ -825,6 +835,23 @@ impl Desktop {
                     title(window.kind),
                     window.x,
                     window.y
+                ));
+            }
+        }
+        if right && self.resizing_column && event.dx != 0 {
+            let changed = self
+                .workspaces
+                .change_focused_column_width(slopos_shell::ColumnWidthChange::AdjustFixed(
+                    i32::from(event.dx),
+                ))
+                .unwrap_or_else(|_| crate::fatal("pointer column resize failed"));
+            self.sync_focused_window();
+            if changed && let Some(window) = self.positioned_window(self.active) {
+                serialln(format_args!(
+                    "SLOPOS-DESKTOP: pointer resized kind={} width={} delta={} gesture=mod-right-drag",
+                    title(window.kind),
+                    window.width,
+                    event.dx
                 ));
             }
         }
@@ -858,6 +885,19 @@ impl Desktop {
                 }
             }
             return;
+        }
+    }
+
+    fn pointer_resize_pressed(&mut self) {
+        for index in 0..WINDOW_COUNT {
+            let Some(window) = self.positioned_window(index) else {
+                continue;
+            };
+            if window.open && inside(self.pointer_x, self.pointer_y, window) {
+                self.focus(index);
+                self.resizing_column = true;
+                return;
+            }
         }
     }
 

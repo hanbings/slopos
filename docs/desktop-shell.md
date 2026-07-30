@@ -37,6 +37,7 @@ Config surface 的按钮或图形 monitor 的 `RELOAD` 命令会唤醒 block tas
 - close 最后一个 window 会删除 column 并修正 focus/view；
 - 支持 fixed、proportional 与 client-selected width；
 - `set-column-width` 支持固定像素、绝对百分比与 `+/-` 相对像素/百分比，变更后重新执行 focused-column 可见性约束；
+- pointer event 保留实时 keyboard modifier；Super+右键横拖按 mouse delta 逐像素调整 focused column；
 - 支持 `never`、`always`、`on-overflow` 三种 focused-column centering，以及 single-column centering。
 
 KDL parser 当前从 `assets/niri-config.kdl` 读取以下 niri 同名子集：
@@ -81,7 +82,7 @@ parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrgg
 
 10 项 layout 测试和 3 项 workspace/bind/rule 测试覆盖配置拒绝边界、open/focus/scroll/stack/close、绝对/相对列宽、列重排、workspace switch/move 与规则顺序。设计语义依据 [niri 默认配置](https://github.com/YaLTeR/niri/blob/main/resources/default-config.kdl)、[Layout 配置文档](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Layout)、[Key Bindings](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Key-Bindings) 与 [Window Rules](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Window-Rules)。
 
-当前 kernel desktop 用三个固定 surface 演示这些行为：Terminal/System 位于 `main`，Config 的 `app-id` 规则把它放到 `config`；顶部 workspace module 显示 active index。PS/2 parser 跟踪 Super/Ctrl/Shift/Alt 与扩展方向键，使 KDL bind 实际驱动桌面。交互回归用 `Mod+Equal` 把 Terminal 从 512 px 放大至 614 px并截图，再以 `Mod+Minus` 恢复 512 px；随后用 `Mod+Shift+Right` 把整列从 x=16 重排至 x=496并截图，再以 `Mod+Shift+Left` 恢复。niri 配置已按上述 user/system/fallback 顺序从 VFS 加载，并能整套原子重读；尚未实现动态 workspace 创建/销毁、完整 niri action/XKB 命名、multi-output、floating/tabbed column、复杂 match、animation、overview、IPC、自动文件监听、Wayland surface 或普通用户 client。
+当前 kernel desktop 用三个固定 surface 演示这些行为：Terminal/System 位于 `main`，Config 的 `app-id` 规则把它放到 `config`；顶部 workspace module 显示 active index。PS/2 parser 跟踪 Super/Ctrl/Shift/Alt 与扩展方向键，使 KDL bind 实际驱动桌面。交互回归用 `Mod+Equal` 把 Terminal 从 512 px 放大至 614 px并截图，再以 `Mod+Minus` 恢复 512 px；随后用 `Mod+Shift+Right` 把整列从 x=16 重排至 x=496并截图，再以 `Mod+Shift+Left` 恢复；最后用 Super+右键横拖把列从 512 px 放大至 608 px并恢复。niri 配置已按上述 user/system/fallback 顺序从 VFS 加载，并能整套原子重读；尚未实现动态 workspace 创建/销毁、完整 niri action/XKB 命名、multi-output、floating/tabbed column、复杂 match、animation、overview、IPC、自动文件监听、Wayland surface 或普通用户 client。
 
 ## Waybar 式顶部栏
 

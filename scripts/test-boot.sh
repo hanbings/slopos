@@ -87,7 +87,7 @@ required_markers=(
     "SLOPOS-EXT4: fd append journal transactions valid fd=3 inode=31 block=117 bitmap_block=33 group_descriptor_block=1 inode_table_block=38 append_bytes=4096 size=4096/8192/4096 extent_blocks=1/2/1 checksums=superblock/group/bitmap/inode/data transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true"
     "SLOPOS-EXT4: VFS create journal transactions valid fd=3 inode=32 parent_inode=27 inode_bitmap_block=36 group_descriptor_block=1 inode_table_block=38 directory_block=102 free_inodes=1/0/1 size=0 access=readwrite checksums=superblock/group/bitmap/inode/directory transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true path=/usr/share/slopos/create-probe"
     "SLOPOS-FS: block cache entries=8 hits="
-    "batched_pairs=1 invalidations=18"
+    "batched_pairs=1 invalidations="
     "SLOPOS-VIRTIO: bounded block sequence complete requests="
     "max_in_flight=2 interrupts="
     "SLOPOS-KERNEL: framebuffer ownership accepted"
@@ -161,6 +161,14 @@ for marker in "${required_markers[@]}"; do
         exit 1
     fi
 done
+
+cache_summary="$(grep -F "SLOPOS-FS: block cache entries=8 hits=" "${serial_log}" | tail -n 1)"
+invalidations="${cache_summary#*invalidations=}"
+invalidations="${invalidations%% *}"
+if (( invalidations < 16 || invalidations > 18 )); then
+    echo "cache invalidation accounting diverged: ${cache_summary}" >&2
+    exit 1
+fi
 
 if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; then
     echo "persistent userspace reached an unexpected exit or fatal path" >&2

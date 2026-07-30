@@ -4,7 +4,7 @@
 
 | 规格范围 | 状态 | 当前证据与边界 |
 |---|---|---|
-| 原生图形桌面 | 部分实现 | QEMU 中三个 surface 已进入独立 workspace 的 niri 式 horizontal column strip；列宽稳定、edge scroll、bind focus/resize/reorder/close、workspace switch、window rule、titlebar drag viewport 与顶部 bar 已自动验证。PID 2 `/sbin/slop-shell` 已作为常驻服务从 VFS 读取 Waybar/swww 配置、连续发布 provider/wallpaper snapshot，并通过 `policy-applied`/`config-applied` 双向事件跨 reload 休眠与恢复；compositor、surface 与 renderer 仍是 kernel early mechanism，不是用户态 compositor。 |
+| 原生图形桌面 | 部分实现 | QEMU 中三个 surface 已进入独立 workspace 的 niri 式 horizontal column strip；列宽稳定、edge scroll、bind focus/resize/reorder/close、Super+右键 pointer resize、workspace switch、window rule、titlebar drag viewport 与顶部 bar 已自动验证。PID 2 `/sbin/slop-shell` 已作为常驻服务从 VFS 读取 Waybar/swww 配置、连续发布 provider/wallpaper snapshot，并通过 `policy-applied`/`config-applied` 双向事件跨 reload 休眠与恢复；compositor、surface 与 renderer 仍是 kernel early mechanism，不是用户态 compositor。 |
 | Rust 实现语言 | 已实现并验证（当前代码范围） | loader、kernel、UI、输入和脚本所对应的 SlopOS 源码均为 Rust；x86 汇编限于 port/interrupt/CR3/CPL transition 边界。 |
 | UEFI 引导 | 已实现并验证 | 独立 loader 加载 ELF kernel、Rust userspace ELF 校验副本、ACPI、GOP、bootstrap image、memory map，调用 `ExitBootServices` 并跳入内核；实际 PID 1 bytes 后续来自 ext4 root。 |
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；PID 1/2 的同步 `openat/read/write/close` 会保存各自 user frame、转为 Blocked 并返回 block task 异步等待 I/O，completion 再转为 Runnable、恢复对应 CR3/frame，而不是 busy-wait。100 Hz tick 还会在 CPL3 保存完整 interrupt frame并返回 block-task scheduler，kernel future 自身仍为 cooperative。动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
