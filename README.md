@@ -6,7 +6,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
-QEMU 另挂载一个可重复生成的 128 MiB ext4 root disk。内核经第二个 virtio-blk 连续完成 18 次 DMA/INTx/Future 读取，校验 superblock、group descriptor、inode、extent 和 directory metadata CRC32C；异步 component walker 实际读取并核对 `/etc/slopos-release` 与 `/etc/slopos/system.conf`。当前仍是受限只读 mount probe，不是通用 VFS。
+QEMU 另挂载一个可重复生成的 128 MiB ext4 root disk。内核经第二个 virtio-blk 连续完成 18 次 DMA/INTx/Future 读取，校验 superblock、group descriptor、inode、extent 和 directory metadata CRC32C；独立 `ReadOnlyMount`/file API 的异步 component walker 实际读取并核对 `/etc/slopos-release` 与 `/etc/slopos/system.conf`。当前还没有全局 VFS namespace、mount table 或 fd。
 
 ![SlopOS early interactive desktop](evidence/desktop.png)
 

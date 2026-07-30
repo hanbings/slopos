@@ -14,7 +14,7 @@
 8. 安装 vector `0x2b` 的 IOAPIC route 后，由 block task 向 available ring 发布 header/data/status 三 descriptor chain；
 9. 按 capability 的 notify multiplier 写 queue notify；
 10. INTx top half 读取 ISR、累计 queue interrupt、wake block task 并发 local APIC EOI；
-11. block Future 检查递增 used index 与 block status，再复用 chain 完成 ext4 metadata、path walk 和 file data 读取。
+11. transport Future 检查递增 used index 与 block status；独立 fs mount task 在每次 completion 后复用 chain，完成 metadata、path walk 和 file data 读取。
 
 共享 `slopos-virtio` crate 对 split-ring byte layout、power-of-two queue size 和三 descriptor block-read chain 做宿主单元测试。裸机 `make test-boot` 则验证实际 MMIO、feature negotiation、bus-master DMA，以及 18 次 INTx/ISR/Future completion；该序列超过 queue size 8 两轮，实际覆盖 available/used index 的 ring wrap。当前 root disk 为 128 MiB，即 262144 个 512-byte sector。
 

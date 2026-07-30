@@ -24,4 +24,4 @@ SlopOS 构建同时产生两个磁盘：
 
 裸机路径选择第二个 virtio-blk 设备（第一个仍是 ESP）。初始 mount probe 读取 superblock、block 1、block 49 和 block 18；随后 component walker 分别解析 `etc/slopos-release` 与 `etc/slopos/system.conf`，每级都异步读取并验证 directory/inode，最终读取数据 extent，并将 40/76 bytes 与构建源逐字节核对。总计 18 次 request，每次都在上一 used-ring completion 和 device status OK 后复用 descriptor chain。
 
-当前边界仍不是通用 VFS：只处理 group 0、单个 inode-table block、inode 内 depth-0 的第一个 extent，以及单块线性目录/regular file。尚无多 group、extent index block、htree、symlink、xattr、journal 或 orphan file；没有 mount table、file handle、page cache、权限、写入或内核 fsck。btrfs 完全未实现。
+kernel `fs.rs` 已把文件系统从 virtio transport 分离，以 `ReadOnlyMount` 持有已校验 superblock/group，并以 `ReadOnlyFile` 承载 open 结果；path component validation、open 和 read 都在 block task 中异步推进。当前仍不是通用 VFS：只处理 group 0、单个 inode-table block、inode 内 depth-0 的第一个 extent，以及单块线性目录/regular file。尚无多 group、extent index block、htree、symlink、xattr、journal 或 orphan file；没有 namespace、mount table、page cache、权限、写入或内核 fsck。btrfs 完全未实现。
