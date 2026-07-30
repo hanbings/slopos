@@ -2,11 +2,11 @@
 
 - 当前已使用 xAPIC/IOAPIC，但 timer 仍来自 PIT；没有 LAPIC timer、TSC-deadline、MSI/MSI-X、interrupt affinity 或 application processor 启动。
 - IDT 已有关键 exception diagnostic gate，但 double fault 仍没有独立 IST，page fault 只能诊断并停止，不能 demand-page。
-- executor 固定为两个 task，没有 spawn、task ownership、cancellation 或 timer wheel。
+- executor 固定为三个 task，没有 spawn、task ownership、cancellation 或 timer wheel。
 - framebuffer 渲染是全屏重绘，没有 damage tracking、double buffering 或 virtio-gpu。
 - 所有窗口和工具都在 ring 0，共享同一地址空间。
 - 配置窗口只修改内存主题，不解析或持久化声明式配置。
-- `initrd.slp` 仍不是文件系统；独立 ext4 disk 已有 kernel-internal read-only mount/file API，能跨 group 定位 inode、走 checksummed extent tree、零填充 hole、扫描跨块线性目录、跟随单段最终 fast symlink 并读取多块 regular file。extent 仅真实验证 depth 1；仍无 htree、通用 symlink/global VFS namespace/write/journal，btrfs 未实现。
+- `initrd.slp` 仍不是文件系统；独立 ext4 disk 已有 kernel-internal read-only mount/file API，能跨 group 定位 inode、走 checksummed extent tree、零填充 hole、扫描跨块线性目录、跟随单段最终 fast symlink 并读取多块 regular file。VFS 只有 block task 局部 root mount 和 fd table，没有全局/每进程 namespace、目录 fd、权限或写入；仍无 htree、通用 symlink/journal，btrfs 未实现。
 - 已有 frame allocator、自有 early page table 与 bump heap，但没有回收、用户地址空间、进程、用户态或 syscall。
 - 当前页表为 early identity map，使用 2 MiB RWX huge page；尚未施加 W^X、NX、user/supervisor 或细粒度 kernel section 权限。
 - 当前内核固定加载到物理 64 MiB；切换自有页表前的最早期初始化仍依赖 OVMF 留下的 identity mapping。

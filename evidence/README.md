@@ -37,6 +37,8 @@ ACPI parser 的宿主测试由 `make test-acpi` 执行。裸机日志记录 QEMU
 
 PCI 枚举器的宿主测试由 `make test-pci` 执行。裸机日志包含 QEMU q35 的设备总数和实际 virtio-blk BDF；当前证据为 `00:03.0`、device ID `1001`，完整 region 校验后的 capability mask `0x1e`（configuration type 1–4）。OVMF 分配的 modern BAR base 为 `0xc000000000`，因此 CR3 证据同时包含跨 PML4 slot 的 7 个 table frame。
 
-virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA 与 INTx→waker→Future：queue size 8，root device 报告 524288 sectors，cache 以 39 hit/39 miss 减少重复 block lookup，并实际执行 1 个双请求批次；另加 superblock 后共完成 40 次 DMA 请求，top half/queue interrupt 计数均为 39。
+virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA 与 INTx→waker→Future：queue size 8，root device 报告 524288 sectors，cache 以 50 hit/41 miss 减少重复 block lookup，并实际执行 1 个双请求批次；另加 superblock 后共完成 42 次 DMA 请求，top half/queue interrupt 计数均为 41。
 
 ext4 parser 测试由 `make test-ext4` 执行。裸机日志证明 4096-byte block、65536 blocks、32 inodes、2 groups、group 0 inode table 37、root extent 39 和 5 个 root entries；superblock/group/inode/directory checksum 均由内核校验。`multiblock.bin` 是 inode 24，`deep-extent.bin` 是 inode 21；后者从 root index 进入 leaf block 85，验证 extent-block checksum 后读取 logical block 8，并将 logical block 7 的 hole 零填充。inode 22 的两个目录块均经 checksum parser，目标条目在第二块解析为 inode 23。path walker 还从 inode 14 取得 inline target，并在同一父目录解析到 inode 17。固定全部 primary/backup superblock hash seed 并归一化 inode metadata 后，e2fsprogs 1.47.2 镜像 SHA-256 为 `13d3b7efbab0b09843e66a6982e28e8731e7c8058cd244fbaaceb067db6a48f5`。这仍不证明通用 VFS。
+
+VFS 宿主测试由 `make test-vfs` 执行。裸机 `SLOPOS-VFS` marker 证明 normalized absolute path 经 root mount 解析到 filesystem 1，为 inode 16 分配 fd 3，以 5 个 chunk 读取 76 bytes，并在 offset 7 再读取 11 bytes。mount/fd table 当前只是 block task 局部的固定容量只读状态。

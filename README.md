@@ -6,7 +6,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
-QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对配置文件，读取多块文件，沿 checksummed depth-1 extent leaf 读取数据及零填充 hole，跨两个 checksummed 目录块解析路径，并跟随 inode 内 fast symlink；8-entry read cache 记录 39 hit/39 miss，40 个设备 DMA 请求中有一个双请求批次。当前还没有全局 VFS namespace、mount table 或 fd。
+QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对配置文件，读取多块文件，沿 checksummed depth-1 extent leaf 读取数据及零填充 hole，跨两个 checksummed 目录块解析路径，并跟随 inode 内 fast symlink。固定容量只读 VFS 把 ext4 挂到 `/`，通过 fd 3 的 offset/read/seek 读取配置；8-entry read cache 记录 50 hit/41 miss，42 个设备 DMA 请求中有一个双请求批次。当前还没有用户态、每进程 fd 或可写 namespace。
 
 ![SlopOS early interactive desktop](evidence/desktop.png)
 
@@ -41,13 +41,14 @@ make test-ebpf
 make test-pci
 make test-virtio
 make test-ext4
+make test-vfs
 make test-boot
 make test-interaction
 make test-page-fault
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 和可偏移 block descriptor chain，`make test-ext4` 检查 superblock/group/inode/extent tree/directory/symlink parser、checksum 与安全拒绝。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、自有 CR3/heap、eBPF、ACPI、PCI、block cache、40 次 virtio DMA 请求及 39 次 INTx completion、跨 group inode、多块文件、depth-1 extent、sparse zero-fill、跨块目录、fast symlink、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 和可偏移 block descriptor chain，`make test-ext4` 检查 superblock/group/inode/extent tree/directory/symlink parser，`make test-vfs` 检查绝对路径、mount-prefix 和 fd offset 状态。`make test-boot` 在 OVMF 中验证上述硬件路径、42 次 virtio DMA 请求及 41 次 INTx completion、root mount、fd read/seek、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 
@@ -68,6 +69,7 @@ make run
 - [PCI 枚举边界](docs/pci.md)
 - [virtio modern block 路径](docs/virtio.md)
 - [ext4 root disk 与 parser 边界](docs/ext4.md)
+- [VFS namespace 与文件描述符](docs/vfs.md)
 - [eBPF 子集与验证边界](docs/ebpf.md)
 - [依赖与许可证](docs/dependencies.md)
 - [已知问题](docs/known-issues.md)
