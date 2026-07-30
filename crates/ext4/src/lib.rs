@@ -12,6 +12,7 @@ pub const INODE_FLAG_DIRECTORY_INDEX: u32 = 0x0000_1000;
 pub const ROOT_INODE: u32 = 2;
 pub const DIRECTORY_ENTRY_REGULAR_FILE: u8 = 1;
 pub const DIRECTORY_ENTRY_DIRECTORY: u8 = 2;
+pub const DIRECTORY_ENTRY_SYMLINK: u8 = 7;
 const FEATURE_INCOMPAT_FILETYPE: u32 = 0x0002;
 const FEATURE_INCOMPAT_EXTENTS: u32 = 0x0040;
 const FEATURE_INCOMPAT_FLEX_BG: u32 = 0x0200;
@@ -23,6 +24,7 @@ const SUPPORTED_INCOMPAT_FEATURES: u32 = FEATURE_INCOMPAT_FILETYPE
 const FILESYSTEM_STATE_CLEAN: u16 = 0x0001;
 const DIRECTORY_MODE: u16 = 0x4000;
 const REGULAR_FILE_MODE: u16 = 0x8000;
+const SYMLINK_MODE: u16 = 0xa000;
 const MODE_TYPE_MASK: u16 = 0xf000;
 const EXTENT_HEADER_MAGIC: u16 = 0xf30a;
 const EXTENT_HEADER_SIZE: usize = 12;
@@ -50,6 +52,9 @@ pub enum ParseError {
     NotDirectory,
     InvalidDirectory,
     InvalidPathComponent,
+    NotSymlink,
+    UnsupportedSymlink,
+    InvalidSymlink,
 }
 
 pub fn validate_path_component(component: &[u8]) -> Result<(), ParseError> {
@@ -414,6 +419,25 @@ impl Inode {
 
     pub const fn is_regular_file(&self) -> bool {
         self.mode & MODE_TYPE_MASK == REGULAR_FILE_MODE
+    }
+
+    pub const fn is_symlink(&self) -> bool {
+        self.mode & MODE_TYPE_MASK == SYMLINK_MODE
+    }
+
+    pub fn inline_symlink(&self) -> Result<&[u8], ParseError> {
+        if !self.is_symlink() {
+            return Err(ParseError::NotSymlink);
+        }
+        let length = usize::try_from(self.size).map_err(|_| ParseError::UnsupportedSymlink)?;
+        if length == 0 || length > self.extent_root.len() || self.block_count_512 != 0 {
+            return Err(ParseError::UnsupportedSymlink);
+        }
+        let target = &self.extent_root[..length];
+        if target.contains(&0) {
+            return Err(ParseError::InvalidSymlink);
+        }
+        Ok(target)
     }
 
     pub fn first_extent(&self) -> Result<Extent, ParseError> {
@@ -1134,6 +1158,27 @@ mod tests {
             Inode::parse(&inode, ROOT_INODE, &superblock),
             Err(ParseError::InvalidChecksum)
         );
+    }
+
+    #[test]
+    fn reads_inline_symbolic_link_target() {
+        let superblock = Superblock::parse(&valid_superblock()).unwrap();
+        let mut inode = valid_root_inode(&superblock);
+        let target = b"slopos-release";
+        inode[0..2].copy_from_slice(&0xa1ffu16.to_le_bytes());
+        inode[4..8].copy_from_slice(&(target.len() as u32).to_le_bytes());
+        inode[28..32].copy_from_slice(&0u32.to_le_bytes());
+        inode[32..36].copy_from_slice(&0u32.to_le_bytes());
+        inode[40..100].fill(0);
+        inode[40..40 + target.len()].copy_from_slice(target);
+        let checksum = inode_checksum(&inode, ROOT_INODE, 7, &superblock).unwrap();
+        inode[124..126].copy_from_slice(&(checksum as u16).to_le_bytes());
+        inode[130..132].copy_from_slice(&((checksum >> 16) as u16).to_le_bytes());
+
+        let inode = Inode::parse(&inode, ROOT_INODE, &superblock).unwrap();
+        assert!(inode.is_symlink());
+        assert_eq!(inode.inline_symlink(), Ok(target.as_slice()));
+        assert_eq!(inode.extent_depth(), Err(ParseError::InvalidExtent),);
     }
 
     #[test]

@@ -3,9 +3,9 @@
 use core::future::pending;
 use core::ptr;
 use slopos_ext4::{
-    DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DirectoryBlock, Extent, ExtentNode,
-    GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
-    validate_path_component,
+    DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DIRECTORY_ENTRY_SYMLINK,
+    DirectoryBlock, Extent, ExtentNode, GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode,
+    ROOT_INODE, SUPERBLOCK_SIZE, Superblock, validate_path_component,
 };
 
 use crate::virtio::BlockDevice;
@@ -22,6 +22,7 @@ const CONFIGURATION_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"system.conf"];
 const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"multiblock.bin"];
 const DEEP_EXTENT_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"deep-extent.bin"];
 const CROSS_BLOCK_PATH: [&[u8]; 5] = [b"usr", b"share", b"slopos", b"large-directory", b"tail-29"];
+const SYMLINK_PATH: [&[u8]; 2] = [b"etc", b"current-release"];
 
 pub async fn mount_task(mut device: BlockDevice) -> ! {
     crate::serial::serialln(format_args!(
@@ -148,6 +149,21 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         cross_block_bytes.len()
     ));
 
+    let symlink = mount.open_file(&mut device, &SYMLINK_PATH).await;
+    if symlink.followed_symlink == 0 {
+        device.fail("ext4 fast symlink was not followed");
+    }
+    let symlink_bytes = mount.read_file_block(&mut device, &symlink, 0).await;
+    if symlink_bytes != EXPECTED_RELEASE {
+        device.fail("ext4 fast symlink target content mismatch");
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: fast symlink valid link_inode={} target_inode={} target_bytes={} target=slopos-release path=/etc/current-release",
+        symlink.followed_symlink,
+        symlink.inode.number,
+        symlink_bytes.len()
+    ));
+
     crate::serial::serialln(format_args!(
         "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={}",
         mount.cache.hits, mount.cache.misses, mount.cache.batched_pairs
@@ -214,7 +230,8 @@ impl ReadOnlyMount {
     }
 
     async fn open_file(&mut self, device: &mut BlockDevice, components: &[&[u8]]) -> ReadOnlyFile {
-        let (inode, parent_inode, directory_block) = self.resolve_path(device, components).await;
+        let (inode, parent_inode, directory_block, followed_symlink) =
+            self.resolve_path(device, components).await;
         if !inode.is_regular_file() {
             device.fail("ext4 open target is not a regular file");
         }
@@ -222,6 +239,7 @@ impl ReadOnlyMount {
             inode,
             parent_inode,
             directory_block,
+            followed_symlink,
         }
     }
 
@@ -229,17 +247,19 @@ impl ReadOnlyMount {
         &mut self,
         device: &mut BlockDevice,
         components: &[&[u8]],
-    ) -> (Inode, u32, u32) {
+    ) -> (Inode, u32, u32, u32) {
         if components.is_empty() {
             device.fail("ext4 path has no components");
         }
         let mut current = self.read_inode(device, ROOT_INODE).await;
         let mut parent_inode = ROOT_INODE;
         let mut directory_block = 0;
-        for component in components {
+        let mut followed_symlink = 0;
+        for (component_index, component) in components.iter().enumerate() {
             if validate_path_component(component).is_err() {
                 device.fail("ext4 path component is invalid");
             }
+            let parent = current;
             parent_inode = current.number;
             let (inode_number, file_type, entry_block) = self
                 .find_directory_entry(device, &current, component)
@@ -247,6 +267,34 @@ impl ReadOnlyMount {
                 .unwrap_or_else(|| device.fail("ext4 path component was not found"));
             directory_block = entry_block;
             current = self.read_inode(device, inode_number).await;
+            if file_type == DIRECTORY_ENTRY_SYMLINK {
+                if component_index + 1 != components.len() || !current.is_symlink() {
+                    device.fail("ext4 symbolic link position or type is unsupported");
+                }
+                let target = current
+                    .inline_symlink()
+                    .unwrap_or_else(|_| device.fail("ext4 symbolic link target is unsupported"));
+                if validate_path_component(target).is_err() {
+                    device.fail("ext4 symbolic link target is not one relative component");
+                }
+                let mut target_buffer = [0u8; 60];
+                target_buffer[..target.len()].copy_from_slice(target);
+                let target_length = target.len();
+                followed_symlink = current.number;
+                let (target_inode, target_type, target_block) = self
+                    .find_directory_entry(device, &parent, &target_buffer[..target_length])
+                    .await
+                    .unwrap_or_else(|| device.fail("ext4 symbolic link target was not found"));
+                if target_type != DIRECTORY_ENTRY_REGULAR_FILE {
+                    device.fail("ext4 symbolic link target is not a regular file");
+                }
+                directory_block = target_block;
+                current = self.read_inode(device, target_inode).await;
+                if !current.is_regular_file() {
+                    device.fail("ext4 symbolic link target inode type mismatch");
+                }
+                continue;
+            }
             if (file_type == DIRECTORY_ENTRY_DIRECTORY && !current.is_directory())
                 || (file_type == DIRECTORY_ENTRY_REGULAR_FILE && !current.is_regular_file())
                 || (file_type != DIRECTORY_ENTRY_DIRECTORY
@@ -255,7 +303,7 @@ impl ReadOnlyMount {
                 device.fail("ext4 directory entry type mismatch");
             }
         }
-        (current, parent_inode, directory_block)
+        (current, parent_inode, directory_block, followed_symlink)
     }
 
     async fn find_directory_entry(
@@ -453,6 +501,7 @@ struct ReadOnlyFile {
     inode: Inode,
     parent_inode: u32,
     directory_block: u32,
+    followed_symlink: u32,
 }
 
 struct RootProbe {

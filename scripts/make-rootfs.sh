@@ -24,6 +24,7 @@ fi
 
 mkdir -p "${repo_dir}/target"
 cp -a "${source_dir}/." "${staging_dir}/"
+ln -s slopos-release "${staging_dir}/etc/current-release"
 mkdir -p "${staging_dir}/usr/share/slopos"
 dd if=/dev/zero bs=1024 count=6 status=none \
     | tr '\000' 'Z' >"${staging_dir}/usr/share/slopos/multiblock.bin"
@@ -70,7 +71,9 @@ done
 while IFS= read -r relative_path; do
     image_path="/${relative_path#./}"
     source_path="${staging_dir}/${relative_path#./}"
-    if [[ -d "${source_path}" ]]; then
+    if [[ -L "${source_path}" ]]; then
+        inode_mode=0120777
+    elif [[ -d "${source_path}" ]]; then
         inode_mode=040755
     elif [[ -x "${source_path}" ]]; then
         inode_mode=0100755
