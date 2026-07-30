@@ -4,8 +4,8 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=193376
-SLOPOS-UEFI: kernel mapped 0x4000000..0x401d000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=204360
+SLOPOS-UEFI: kernel mapped 0x4000000..0x401f000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: Boot Services exited descriptors=117
 SLOPOS-UEFI: transferring control to kernel
@@ -15,7 +15,7 @@ SLOPOS-ACPI: XSDT MADT validated cpus=1 lapic=0xfee00000 ioapics=1 overrides=5 i
 SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
 SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
 SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
-SLOPOS-MM: frame allocator initialized regions=8 free_frames=53004 probe=0x100000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=53002 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
@@ -59,9 +59,13 @@ SLOPOS-EXT4: journal superblock valid inode=8 physical_block=32801 blocks=4096 f
 SLOPOS-EXT4: journal records staged sequence=1 target_block=98 descriptor_block=32802 data_block=32803 commit_block=32804 writes=6 flushes=3 verified=true restored=true active=false
 SLOPOS-EXT4: journal state transition recovery=true sequence=1 start=1 readback=valid checkpoint_start=0 restored=true transactions=0 writes=4 flushes=4
 SLOPOS-EXT4: active journal transaction valid sequence=1 target_block=98 recovery=true start=1 records=descriptor/data/commit replayable_readback=true home_checkpointed=true next_sequence=2 test_sequence_rewound=true restored=true writes=13 flushes=10
-SLOPOS-FS: block cache entries=8 hits=62 misses=51 batched_pairs=1 invalidations=4
-SLOPOS-VIRTIO: bounded block sequence complete requests=120 max_in_flight=2 interrupts=119 queue_interrupts=119
-SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=119/119
-SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=119/119
-SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=119/119
-SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=119/119
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: metadata journal transactions valid inode=25 inode_table_block=38 size=4095/4096 checksums=valid transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true writes=23 flushes=17
+SLOPOS-FS: block cache entries=8 hits=64 misses=54 batched_pairs=1 invalidations=5
+SLOPOS-VIRTIO: bounded block sequence complete requests=193 max_in_flight=2 interrupts=192 queue_interrupts=192
+SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=192/192
+SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=192/192
+SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=192/192
+SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=192/192
