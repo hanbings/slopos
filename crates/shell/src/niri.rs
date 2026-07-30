@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 
-use crate::{LayoutConfig, LayoutError, Rect, ScrollLayout};
+use crate::{ColumnWidth, ColumnWidthChange, LayoutConfig, LayoutError, Rect, ScrollLayout};
 
 pub const MAX_NIRI_WORKSPACES: usize = 8;
 pub const MAX_NIRI_BINDINGS: usize = 24;
@@ -40,6 +40,8 @@ pub enum BindingKey {
     Return,
     Tab,
     Escape,
+    Minus,
+    Equal,
     Character(u8),
 }
 
@@ -51,6 +53,7 @@ pub enum NiriAction {
     FocusWorkspaceDown,
     MoveColumnToWorkspaceUp,
     MoveColumnToWorkspaceDown,
+    SetColumnWidth(ColumnWidthChange),
     CloseWindow,
 }
 
@@ -341,15 +344,16 @@ impl<'a> ShellConfigParser<'a> {
                             _ => {}
                         }
                     }
-                    let action = loop {
+                    let action_name = loop {
                         match self.next_non_end() {
-                            KdlToken::Word(action) => break parse_action(action)?,
+                            KdlToken::Word(action) => break action,
                             KdlToken::RightBrace | KdlToken::End => {
                                 return Err(NiriConfigError::InvalidBinding);
                             }
                             _ => {}
                         }
                     };
+                    let action = self.parse_action(action_name)?;
                     self.skip_to_block_end()?;
                     bindings.push(NiriBinding {
                         modifiers,
@@ -406,6 +410,25 @@ impl<'a> ShellConfigParser<'a> {
                 KdlToken::EndNode => {}
             }
         }
+    }
+
+    fn parse_action(&mut self, value: &str) -> Result<NiriAction, NiriConfigError> {
+        Ok(match value {
+            "focus-column-left" => NiriAction::FocusColumnLeft,
+            "focus-column-right" => NiriAction::FocusColumnRight,
+            "focus-workspace-up" => NiriAction::FocusWorkspaceUp,
+            "focus-workspace-down" => NiriAction::FocusWorkspaceDown,
+            "move-column-to-workspace-up" => NiriAction::MoveColumnToWorkspaceUp,
+            "move-column-to-workspace-down" => NiriAction::MoveColumnToWorkspaceDown,
+            "set-column-width" => {
+                let KdlToken::String(width) = self.next() else {
+                    return Err(NiriConfigError::InvalidBinding);
+                };
+                NiriAction::SetColumnWidth(parse_column_width_change(width)?)
+            }
+            "close-window" => NiriAction::CloseWindow,
+            _ => return Err(NiriConfigError::InvalidBinding),
+        })
     }
 
     fn expect_left_brace(&mut self) -> Result<(), NiriConfigError> {
@@ -517,6 +540,8 @@ fn parse_binding_key(value: &str) -> Result<BindingKey, NiriConfigError> {
         "Return" => Ok(BindingKey::Return),
         "Tab" => Ok(BindingKey::Tab),
         "Escape" => Ok(BindingKey::Escape),
+        "Minus" => Ok(BindingKey::Minus),
+        "Equal" => Ok(BindingKey::Equal),
         _ if value.len() == 1 => Ok(BindingKey::Character(
             value.as_bytes()[0].to_ascii_uppercase(),
         )),
@@ -524,17 +549,64 @@ fn parse_binding_key(value: &str) -> Result<BindingKey, NiriConfigError> {
     }
 }
 
-fn parse_action(value: &str) -> Result<NiriAction, NiriConfigError> {
-    match value {
-        "focus-column-left" => Ok(NiriAction::FocusColumnLeft),
-        "focus-column-right" => Ok(NiriAction::FocusColumnRight),
-        "focus-workspace-up" => Ok(NiriAction::FocusWorkspaceUp),
-        "focus-workspace-down" => Ok(NiriAction::FocusWorkspaceDown),
-        "move-column-to-workspace-up" => Ok(NiriAction::MoveColumnToWorkspaceUp),
-        "move-column-to-workspace-down" => Ok(NiriAction::MoveColumnToWorkspaceDown),
-        "close-window" => Ok(NiriAction::CloseWindow),
-        _ => Err(NiriConfigError::InvalidBinding),
+fn parse_column_width_change(value: &str) -> Result<ColumnWidthChange, NiriConfigError> {
+    let (relative, negative, magnitude) = if let Some(value) = value.strip_prefix('+') {
+        (true, false, value)
+    } else if let Some(value) = value.strip_prefix('-') {
+        (true, true, value)
+    } else {
+        (false, false, value)
+    };
+    if magnitude.is_empty() {
+        return Err(NiriConfigError::InvalidBinding);
     }
+    if let Some(percent) = magnitude.strip_suffix('%') {
+        let percent = parse_decimal_u16(percent)?;
+        if percent == 0 || percent > 100 {
+            return Err(NiriConfigError::InvalidBinding);
+        }
+        let thousandths =
+            i16::try_from(percent * 10).map_err(|_| NiriConfigError::InvalidBinding)?;
+        if relative {
+            Ok(ColumnWidthChange::AdjustProportion(if negative {
+                -thousandths
+            } else {
+                thousandths
+            }))
+        } else {
+            Ok(ColumnWidthChange::Set(ColumnWidth::Proportion(
+                thousandths as u16,
+            )))
+        }
+    } else {
+        let pixels = parse_decimal_u16(magnitude)?;
+        if pixels == 0 {
+            return Err(NiriConfigError::InvalidBinding);
+        }
+        if relative {
+            Ok(ColumnWidthChange::AdjustFixed(if negative {
+                -i32::from(pixels)
+            } else {
+                i32::from(pixels)
+            }))
+        } else {
+            Ok(ColumnWidthChange::Set(ColumnWidth::Fixed(pixels)))
+        }
+    }
+}
+
+fn parse_decimal_u16(value: &str) -> Result<u16, NiriConfigError> {
+    let mut parsed = 0u16;
+    for byte in value.bytes() {
+        if !byte.is_ascii_digit() {
+            return Err(NiriConfigError::InvalidBinding);
+        }
+        parsed = parsed
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(u16::from(byte - b'0')))
+            .ok_or(NiriConfigError::InvalidBinding)?;
+    }
+    Ok(parsed)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -718,6 +790,15 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].scroll_by(delta);
     }
 
+    pub fn change_focused_column_width(
+        &mut self,
+        change: ColumnWidthChange,
+    ) -> Result<bool, WorkspaceError> {
+        self.layouts[self.active]
+            .change_focused_column_width(change)
+            .map_err(WorkspaceError::Layout)
+    }
+
     pub fn view_offset(&self) -> i32 {
         self.layouts[self.active].view_offset()
     }
@@ -781,6 +862,8 @@ mod tests {
             binds {
                 Mod+Left { focus-column-left; }
                 Mod+Shift+Down repeat=false { move-column-to-workspace-down; }
+                Mod+Minus { set-column-width "-10%"; }
+                Mod+Equal { set-column-width "640"; }
                 Mod+Q { close-window; }
             }
             window-rule {
@@ -800,7 +883,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 3);
+        assert_eq!(config.bindings.len(), 5);
         assert_eq!(
             config
                 .bindings
@@ -813,6 +896,34 @@ mod tests {
                 BindingKey::Down
             ),
             Some(NiriAction::MoveColumnToWorkspaceDown)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Minus),
+            Some(NiriAction::SetColumnWidth(
+                ColumnWidthChange::AdjustProportion(-100)
+            ))
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Equal),
+            Some(NiriAction::SetColumnWidth(ColumnWidthChange::Set(
+                ColumnWidth::Fixed(640)
+            )))
+        );
+        assert_eq!(
+            parse_column_width_change("50%"),
+            Ok(ColumnWidthChange::Set(ColumnWidth::Proportion(500)))
+        );
+        assert_eq!(
+            parse_column_width_change("+32"),
+            Ok(ColumnWidthChange::AdjustFixed(32))
+        );
+        assert_eq!(
+            parse_column_width_change("-32"),
+            Ok(ColumnWidthChange::AdjustFixed(-32))
         );
         assert_eq!(
             config.window_rules.workspace_for("slopos-config"),
@@ -834,6 +945,19 @@ mod tests {
             parse_niri_shell_config("binds { Mod+Q { explode-window; } }"),
             Err(NiriConfigError::InvalidBinding)
         );
+        for input in [
+            r#"binds { Mod+Equal { set-column-width "0%"; } }"#,
+            r#"binds { Mod+Equal { set-column-width "101%"; } }"#,
+            r#"binds { Mod+Equal { set-column-width "+"; } }"#,
+            r#"binds { Mod+Equal { set-column-width "-0"; } }"#,
+            r#"binds { Mod+Equal { set-column-width "12.5%"; } }"#,
+            r#"binds { Mod+Equal { set-column-width "70000"; } }"#,
+        ] {
+            assert_eq!(
+                parse_niri_shell_config(input),
+                Err(NiriConfigError::InvalidBinding)
+            );
+        }
     }
 
     #[test]
@@ -843,6 +967,12 @@ mod tests {
         workspaces.open_window(0, 10).unwrap();
         workspaces.open_window(0, 20).unwrap();
         workspaces.focus_window(10).unwrap();
+        assert!(
+            workspaces
+                .change_focused_column_width(ColumnWidthChange::AdjustProportion(100))
+                .unwrap()
+        );
+        assert_eq!(workspaces.tile_rect(10).unwrap().width, 600);
         assert_eq!(workspaces.focused_window(), Some(10));
         assert!(workspaces.move_focused_to_workspace(1).unwrap());
         assert_eq!(workspaces.active(), 1);

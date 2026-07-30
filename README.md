@@ -19,14 +19,14 @@ QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk�
 - niri 式横向 column strip，打开新列不改变既有列宽；
 - 纵向 workspace 切换、named workspace、KDL `binds` 与顺序叠加的 `window-rule`；
 - 50% 默认列宽、16 px gap、focus ring 与 edge scroll；
-- Tab/`Mod+方向键` 切换焦点与 workspace、`Mod+Shift+上下` 移列、`Mod+Q` 关闭窗口；
+- Tab/`Mod+方向键` 切换焦点与 workspace、`Mod+Shift+上下` 移列、`Mod+Minus/Equal` 缩放列、`Mod+Q` 关闭窗口；
 - 鼠标标题栏横拖滚动 viewport、关闭 tiled window；
 - Waybar JSONC 驱动的 left/center/right 顶部 module 栏、module format/interval/length option；
 - Waybar GTK CSS selector 的颜色、背景、padding/margin 与底边框子集；
 - swww 式 daemon 状态、`img/query/kill` 命令、环境默认值与 CPU transition；
 - root VFS `/sbin/slop-shell` 常驻用户态服务读取 Waybar/swww 配置，经版本化协议发布 bar provider 与 wallpaper policy，并在配置 generation 更新后重读；
 - 两张可在运行时切换的嵌入式 P3/PNM 壁纸；
-- niri KDL、Waybar JSONC/CSS 与 swww 配置/状态机子集，加桌面提交/事件协议，共 30 项宿主测试；
+- niri KDL、Waybar JSONC/CSS 与 swww 配置/状态机子集，加桌面提交/事件协议，共 31 项宿主测试；
 - root ext4 上按 XDG/系统/fallback 顺序发现四份桌面配置，parse-before-swap 后以双 bank generation 原子发布；
 - `RELOAD` 与 Config surface 可触发运行时重读，非法配置保留上一代完整桌面状态；
 - 键盘输入；
@@ -67,9 +67,9 @@ make test-journal-replay
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-elf` 的 10 项测试覆盖 ELF64 header、`PT_LOAD`、BSS、范围/对齐/重叠/W^X 与 entry validation，`make test-process` 的 6 项测试覆盖 Linux 初始栈、PID/capacity、`Blocked/Runnable` 生命周期、round-robin selection、child lookup/reap（含 immediate zombie）、每进程 fd isolation/seek 与退出清理，`make test-shell` 的 30 项测试覆盖 niri KDL workspace/bind/rule、Waybar JSONC option/format 与 CSS、swww CLI/daemon/PNM/transition、滚动平铺状态机及桌面提交/事件协议，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode、`close_all` 与 EOF growth。`make test-boot` 在 OVMF 中验证两个 root VFS ELF→独立 Linux initial stack/CR3→CPL3 cooperative yield 与双向 timer preemption、异步 `openat/read/write/close/wait4` suspend/completion、PID 1 supervisor 与 PID 2 service 常驻、同号 fd isolation、跨两页 user copy、policy/config 两类应用事件及连续 generation，以及 virtio 请求/INTx completion 的 `requests = interrupts + 1` 关系、桌面配置和全部存储探针。`make test-interaction` 注入真实 PS/2 命令，验证 config generation 2 唤醒 PID 2 并产生 policy generation 3、非法 CSS 回滚且不唤醒服务、swww Sunset 换图、center transition、query、kill/restart、niri viewport 横拖、`Mod+Q` 与 `Mod+Down`，并确认 window rule 把 Config 放入 named workspace；`make test-page-fault` 在两个用户进程保持 Blocked、kernel CR3 已恢复时核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、当前证据中的 545 次请求/544 次 completion、常驻桌面服务、桌面继续运行和宿主 fsck。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-elf` 的 10 项测试覆盖 ELF64 header、`PT_LOAD`、BSS、范围/对齐/重叠/W^X 与 entry validation，`make test-process` 的 6 项测试覆盖 Linux 初始栈、PID/capacity、`Blocked/Runnable` 生命周期、round-robin selection、child lookup/reap（含 immediate zombie）、每进程 fd isolation/seek 与退出清理，`make test-shell` 的 31 项测试覆盖 niri KDL workspace/bind/rule/column width、Waybar JSONC option/format 与 CSS、swww CLI/daemon/PNM/transition、滚动平铺状态机及桌面提交/事件协议，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode、`close_all` 与 EOF growth。`make test-boot` 在 OVMF 中验证两个 root VFS ELF→独立 Linux initial stack/CR3→CPL3 cooperative yield 与双向 timer preemption、异步 `openat/read/write/close/wait4` suspend/completion、PID 1 supervisor 与 PID 2 service 常驻、同号 fd isolation、跨两页 user copy、policy/config 两类应用事件及连续 generation，以及 virtio 请求/INTx completion 的 `requests = interrupts + 1` 关系、桌面配置和全部存储探针。`make test-interaction` 注入真实 PS/2 命令，验证 config generation 2 唤醒 PID 2 并产生 policy generation 3、非法 CSS 回滚且不唤醒服务、swww Sunset 换图、center transition、query、kill/restart、niri viewport 横拖、`Mod+Equal/Minus` 相对缩放、`Mod+Q` 与 `Mod+Down`，并确认 window rule 把 Config 放入 named workspace；`make test-page-fault` 在两个用户进程保持 Blocked、kernel CR3 已恢复时核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、当前证据中的 545 次请求/544 次 completion、常驻桌面服务、桌面继续运行和宿主 fsck。
 
-`make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；`RELOAD` 重读四份 VFS 配置，Tab 或 `Mod+左右` 沿 column strip 切换焦点，`Mod+上下` 切换 workspace，`Mod+Shift+上下` 移动 focused column，`Mod+Q` 或红色 `X` 关闭 tiled window，横拖标题栏滚动 viewport。
+`make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；`RELOAD` 重读四份 VFS 配置，Tab 或 `Mod+左右` 沿 column strip 切换焦点，`Mod+上下` 切换 workspace，`Mod+Shift+上下` 移动 focused column，`Mod+Minus/Equal` 以 output 宽度的 10% 缩小/放大 focused column，`Mod+Q` 或红色 `X` 关闭 tiled window，横拖标题栏滚动 viewport。
 
 ## 设计边界
 

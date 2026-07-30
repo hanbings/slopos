@@ -68,6 +68,11 @@ monitor_type() {
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${repo_dir}/evidence/window-moved.ppm"
+    echo "sendkey meta_l-equal 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/window-resized.ppm"
+    echo "sendkey meta_l-minus 50"
+    sleep 1
     echo "sendkey meta_l-q 50"
     sleep 1
     echo "sendkey meta_l-q 50"
@@ -164,6 +169,9 @@ grep -Fq "SLOPOS-SWWW: daemon started" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30" "${serial_log}"
 grep -Fq "SLOPOS-SHELL: view scrolled workspace=1 offset=" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window moved kind=TERMINAL" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=614 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=512 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=set-column-width changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=TERMINAL" "${serial_log}"
@@ -172,6 +180,7 @@ grep -Fq "SLOPOS-DESKTOP: window closed kind=CONFIG" "${serial_log}"
 test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/window-moved.ppm"
+test -s "${repo_dir}/evidence/window-resized.ppm"
 test -s "${repo_dir}/evidence/workspace-config.ppm"
 test -s "${repo_dir}/evidence/wallpaper-only.ppm"
 if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; then
@@ -185,9 +194,11 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-switched.png"
     pnmtopng "${repo_dir}/evidence/window-moved.ppm" \
         >"${repo_dir}/evidence/window-moved.png"
+    pnmtopng "${repo_dir}/evidence/window-resized.ppm" \
+        >"${repo_dir}/evidence/window-resized.png"
     pnmtopng "${repo_dir}/evidence/workspace-config.ppm" \
         >"${repo_dir}/evidence/workspace-config.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-only.ppm" \
         >"${repo_dir}/evidence/wallpaper-only.png"
 fi
-echo "SlopOS VFS config reload/rollback, swww, niri workspace/bind/rule, viewport, and close verified"
+echo "SlopOS VFS config reload/rollback, swww, niri workspace/bind/rule, viewport, resize, and close verified"

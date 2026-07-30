@@ -11,6 +11,8 @@ binds {
     Mod+Down { focus-workspace-down; }
     Mod+Shift+Up { move-column-to-workspace-up; }
     Mod+Shift+Down { move-column-to-workspace-down; }
+    Mod+Minus { set-column-width "-10%"; }
+    Mod+Equal { set-column-width "+10%"; }
     Mod+Q { close-window; }
 }
 

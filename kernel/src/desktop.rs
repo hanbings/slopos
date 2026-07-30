@@ -1033,6 +1033,10 @@ impl Desktop {
                         .move_focused_to_workspace(active + 1)
                         .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-down failed"))
             }
+            NiriAction::SetColumnWidth(change) => self
+                .workspaces
+                .change_focused_column_width(change)
+                .unwrap_or_else(|_| crate::fatal("niri set-column-width failed")),
             NiriAction::CloseWindow => {
                 if let Some(window) = self.workspaces.focused_window() {
                     self.close_window(window as usize);
@@ -1043,6 +1047,16 @@ impl Desktop {
             }
         };
         self.sync_focused_window();
+        if changed
+            && matches!(action, NiriAction::SetColumnWidth(_))
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: window resized kind={} width={} layout=scrolling",
+                title(window.kind),
+                window.width
+            ));
+        }
         serialln(format_args!(
             "SLOPOS-NIRI: binding action={} changed={} workspace={} name={} focused={}",
             action_name(action),
@@ -1175,6 +1189,8 @@ const fn binding_key(key: Key) -> Option<BindingKey> {
         Key::Enter => BindingKey::Return,
         Key::Tab => BindingKey::Tab,
         Key::Escape => BindingKey::Escape,
+        Key::Character(b'-' | b'_') => BindingKey::Minus,
+        Key::Character(b'=' | b'+') => BindingKey::Equal,
         Key::Character(character) => BindingKey::Character(character.to_ascii_uppercase()),
         Key::Backspace => return None,
     })
@@ -1188,6 +1204,7 @@ const fn action_name(action: NiriAction) -> &'static str {
         NiriAction::FocusWorkspaceDown => "focus-workspace-down",
         NiriAction::MoveColumnToWorkspaceUp => "move-column-to-workspace-up",
         NiriAction::MoveColumnToWorkspaceDown => "move-column-to-workspace-down",
+        NiriAction::SetColumnWidth(_) => "set-column-width",
         NiriAction::CloseWindow => "close-window",
     }
 }

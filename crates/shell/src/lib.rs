@@ -47,6 +47,13 @@ pub enum ColumnWidth {
     Client,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ColumnWidthChange {
+    Set(ColumnWidth),
+    AdjustProportion(i16),
+    AdjustFixed(i32),
+}
+
 impl ColumnWidth {
     fn resolve(self, output_width: u16) -> u16 {
         match self {
@@ -317,14 +324,32 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     }
 
     pub fn set_focused_column_width(&mut self, width: ColumnWidth) -> Result<(), LayoutError> {
+        self.change_focused_column_width(ColumnWidthChange::Set(width))
+            .map(|_| ())
+    }
+
+    pub fn change_focused_column_width(
+        &mut self,
+        change: ColumnWidthChange,
+    ) -> Result<bool, LayoutError> {
         let column = self
             .columns
             .get_mut(self.focused_column)
             .filter(|_| self.column_count != 0)
             .ok_or(LayoutError::NoFocusedWindow)?;
-        column.width = width.resolve(self.output_width);
+        let previous = column.width;
+        let adjusted = match change {
+            ColumnWidthChange::Set(width) => i32::from(width.resolve(self.output_width)),
+            ColumnWidthChange::AdjustProportion(thousandths) => {
+                let delta = i32::from(self.output_width) * i32::from(thousandths) / 1000;
+                i32::from(previous).saturating_add(delta)
+            }
+            ColumnWidthChange::AdjustFixed(pixels) => i32::from(previous).saturating_add(pixels),
+        };
+        column.width = adjusted.clamp(1, i32::from(u16::MAX)) as u16;
+        let changed = column.width != previous;
         self.ensure_focused_visible();
-        Ok(())
+        Ok(changed)
     }
 
     pub fn scroll_by(&mut self, delta: i32) {
@@ -972,5 +997,38 @@ mod tests {
         assert_eq!(layout.view_offset(), maximum);
         layout.scroll_by(i32::MIN);
         assert_eq!(layout.view_offset(), 0);
+    }
+
+    #[test]
+    fn changes_the_focused_column_width_with_niri_units() {
+        let mut layout = ScrollLayout::<3, 1>::new(1000, 700, 30, LayoutConfig::default());
+        layout.open_window(1).unwrap();
+        assert!(
+            layout
+                .change_focused_column_width(ColumnWidthChange::AdjustProportion(100))
+                .unwrap()
+        );
+        assert_eq!(layout.tile_rect(1).unwrap().width, 600);
+        assert!(
+            layout
+                .change_focused_column_width(ColumnWidthChange::AdjustFixed(-50))
+                .unwrap()
+        );
+        assert_eq!(layout.tile_rect(1).unwrap().width, 550);
+        assert!(
+            layout
+                .change_focused_column_width(ColumnWidthChange::Set(ColumnWidth::Fixed(720)))
+                .unwrap()
+        );
+        assert_eq!(layout.tile_rect(1).unwrap().width, 720);
+        assert!(
+            !layout
+                .change_focused_column_width(ColumnWidthChange::Set(ColumnWidth::Fixed(720)))
+                .unwrap()
+        );
+        layout
+            .change_focused_column_width(ColumnWidthChange::AdjustFixed(i32::MIN))
+            .unwrap();
+        assert_eq!(layout.tile_rect(1).unwrap().width, 1);
     }
 }
