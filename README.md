@@ -6,7 +6,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
-QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对配置文件，读取多块文件，沿 checksummed depth-1 extent leaf 读取数据及零填充 hole，跨两个 checksummed 目录块解析路径，并跟随 inode 内 fast symlink。固定容量 VFS 把 ext4 挂到 `/`，通过 fd 3 的 offset/read/seek 读取配置；读写 fd 还会在已分配数据块中间覆写 73 bytes、flush、失效 cache、读回并恢复原内容。8-entry cache 记录 62 hit/47 miss/2 invalidation，52 个设备请求中有一个双请求批次、两次写和两次 flush。当前还没有用户态、每进程 fd、文件增长或通用可写 namespace。
+QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk。异步 mount/file API 核对配置文件，读取多块文件，沿 checksummed depth-1 extent leaf 读取数据及零填充 hole，跨两个 checksummed 目录块解析路径，并跟随 inode 内 fast symlink。固定容量 VFS 把 ext4 挂到 `/`，通过 fd 3 的 offset/read/seek 读取配置；读写 fd 还会在已分配数据块中间覆写 73 bytes、flush、失效 cache、读回并恢复原内容。内核同时校验 inode 8 的 big-endian JBD2 superblock/UUID/几何。8-entry cache 记录 62 hit/49 miss/2 invalidation，54 个设备请求中有一个双请求批次、两次写和两次 flush。当前还没有 journal replay/transaction、文件增长或通用可写 namespace。
 
 ![SlopOS early interactive desktop](evidence/desktop.png)
 
@@ -48,7 +48,7 @@ make test-page-fault
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 检查 superblock/group/inode/extent tree/directory/symlink parser，`make test-vfs` 检查绝对路径、mount-prefix 和 fd offset 状态。`make test-boot` 在 OVMF 中验证上述硬件路径、52 次 virtio 请求及 51 次 INTx completion、flush 后读回、root mount、fd read/seek、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 15 项测试覆盖 superblock/group/inode/extent/directory/symlink/JBD2 parser，`make test-vfs` 检查绝对路径、mount-prefix、fd offset 和 access mode。`make test-boot` 在 OVMF 中验证上述硬件路径、54 次 virtio 请求及 53 次 INTx completion、flush 后读回、journal 几何、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 
