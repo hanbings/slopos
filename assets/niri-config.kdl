@@ -1,4 +1,24 @@
 // SlopOS niri-compatible layout seed.
+workspace "main"
+workspace "config" {
+    open-on-output "SLOPOS-1"
+}
+
+binds {
+    Mod+Left { focus-column-left; }
+    Mod+Right { focus-column-right; }
+    Mod+Up { focus-workspace-up; }
+    Mod+Down { focus-workspace-down; }
+    Mod+Shift+Up { move-column-to-workspace-up; }
+    Mod+Shift+Down { move-column-to-workspace-down; }
+    Mod+Q { close-window; }
+}
+
+window-rule {
+    match app-id="slopos-config"
+    open-on-workspace "config"
+}
+
 layout {
     gaps 16
     center-focused-column "never"

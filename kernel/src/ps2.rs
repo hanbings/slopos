@@ -26,10 +26,30 @@ pub struct RawInputByte {
 #[derive(Clone, Copy, Debug)]
 pub enum Key {
     Character(u8),
+    Left,
+    Right,
+    Up,
+    Down,
+    PageUp,
+    PageDown,
     Enter,
     Backspace,
     Tab,
     Escape,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct KeyModifiers {
+    pub shift: bool,
+    pub control: bool,
+    pub alt: bool,
+    pub logo: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct KeyEvent {
+    pub key: Key,
+    pub modifiers: KeyModifiers,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -41,12 +61,15 @@ pub struct MouseEvent {
 
 #[derive(Clone, Copy, Debug)]
 pub enum InputEvent {
-    Key(Key),
+    Key(KeyEvent),
     Mouse(MouseEvent),
 }
 
 pub struct Controller {
     shift: bool,
+    control: bool,
+    alt: bool,
+    logo: bool,
     extended: bool,
     mouse_packet: [u8; 3],
     mouse_index: usize,
@@ -76,6 +99,9 @@ impl Controller {
 
         Self {
             shift: false,
+            control: false,
+            alt: false,
+            logo: false,
             extended: false,
             mouse_packet: [0; 3],
             mouse_index: 0,
@@ -124,28 +150,53 @@ impl Controller {
             self.extended = true;
             return None;
         }
+        let extended = self.extended;
+        self.extended = false;
         let released = byte & 0x80 != 0;
         let code = byte & 0x7f;
-        if code == 0x2a || code == 0x36 {
+        if !extended && (code == 0x2a || code == 0x36) {
             self.shift = !released;
             return None;
         }
+        if code == 0x1d {
+            self.control = !released;
+            return None;
+        }
+        if code == 0x38 {
+            self.alt = !released;
+            return None;
+        }
+        if extended && matches!(code, 0x5b | 0x5c) {
+            self.logo = !released;
+            return None;
+        }
         if released {
-            self.extended = false;
             return None;
         }
-        if self.extended {
-            self.extended = false;
-            return None;
-        }
-        let key = match code {
-            0x01 => Key::Escape,
-            0x0e => Key::Backspace,
-            0x0f => Key::Tab,
-            0x1c => Key::Enter,
-            _ => Key::Character(scancode_character(code, self.shift)?),
+        let key = match (extended, code) {
+            (true, 0x48) => Key::Up,
+            (true, 0x50) => Key::Down,
+            (true, 0x4b) => Key::Left,
+            (true, 0x4d) => Key::Right,
+            (true, 0x49) => Key::PageUp,
+            (true, 0x51) => Key::PageDown,
+            (true, 0x1c) => Key::Enter,
+            (true, _) => return None,
+            (false, 0x01) => Key::Escape,
+            (false, 0x0e) => Key::Backspace,
+            (false, 0x0f) => Key::Tab,
+            (false, 0x1c) => Key::Enter,
+            (false, code) => Key::Character(scancode_character(code, self.shift)?),
         };
-        Some(InputEvent::Key(key))
+        Some(InputEvent::Key(KeyEvent {
+            key,
+            modifiers: KeyModifiers {
+                shift: self.shift,
+                control: self.control,
+                alt: self.alt,
+                logo: self.logo,
+            },
+        }))
     }
 }
 

@@ -3,15 +3,17 @@
 use crate::framebuffer::{
     BLACK, CYAN, Framebuffer, GREEN, INDIGO, MUTED, PANEL, RED, WHITE, WINDOW, WINDOW_ALT,
 };
-use crate::ps2::{Controller, InputEvent, Key, MouseEvent};
+use crate::ps2::{Controller, InputEvent, Key, KeyEvent, KeyModifiers, MouseEvent};
 use crate::serial::serialln;
 use slopos_shell::{
-    BarPosition, PpmImage, ResizeMode, ScrollLayout, SwwwCommand, SwwwDaemonError, SwwwDefaults,
-    WallpaperDaemon, WaybarConfig, parse_niri_layout, parse_ppm, parse_swww_command,
+    BarPosition, BindingKey, BindingModifiers, NiriAction, NiriShellConfig, PpmImage, ResizeMode,
+    SwwwCommand, SwwwDaemonError, SwwwDefaults, WallpaperDaemon, WaybarConfig, WorkspaceSet,
+    parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
     parse_swww_environment, parse_waybar_config, transition_pixel,
 };
 
 const WINDOW_COUNT: usize = 3;
+const WORKSPACE_CAPACITY: usize = 4;
 const TITLE_HEIGHT: i32 = 30;
 const NIRI_CONFIG: &str = include_str!("../../assets/niri-config.kdl");
 const WAYBAR_CONFIG: &str = include_str!("../../assets/waybar-config.jsonc");
@@ -42,7 +44,8 @@ pub struct Desktop {
     screen_width: i32,
     screen_height: i32,
     windows: [Window; WINDOW_COUNT],
-    layout: ScrollLayout<WINDOW_COUNT, 1>,
+    workspaces: WorkspaceSet<WORKSPACE_CAPACITY, WINDOW_COUNT, 1>,
+    niri: NiriShellConfig<'static>,
     bar: WaybarConfig<'static>,
     swww_defaults: SwwwDefaults,
     wallpaper: WallpaperDaemon,
@@ -64,6 +67,8 @@ impl Desktop {
         let height = height as i32;
         let config = parse_niri_layout(NIRI_CONFIG)
             .unwrap_or_else(|_| crate::fatal("niri layout config failed validation"));
+        let niri = parse_niri_shell_config(NIRI_CONFIG)
+            .unwrap_or_else(|_| crate::fatal("niri shell config failed validation"));
         let bar = parse_waybar_config(WAYBAR_CONFIG)
             .unwrap_or_else(|_| crate::fatal("Waybar JSONC config failed validation"));
         let swww_defaults = parse_swww_environment(SWWW_ENVIRONMENT)
@@ -73,18 +78,26 @@ impl Desktop {
         if bar.position != BarPosition::Top {
             crate::fatal("early Waybar renderer currently requires position=top");
         }
-        let mut layout = ScrollLayout::new(
+        let workspace_count = niri.workspaces.len() + 1;
+        let mut workspaces = WorkspaceSet::new(
+            workspace_count,
             u16::try_from(width).unwrap_or(u16::MAX),
             u16::try_from(height).unwrap_or(u16::MAX),
             bar.height,
             config,
-        );
+        )
+        .unwrap_or_else(|_| crate::fatal("niri workspace capacity mismatch"));
         for window in 0..WINDOW_COUNT {
-            layout
-                .open_window(window as u32)
+            let workspace = niri
+                .window_rules
+                .workspace_for(app_id(window_kind(window)))
+                .and_then(|name| niri.workspaces.index_of(name))
+                .unwrap_or(0);
+            workspaces
+                .open_window(workspace, window as u32)
                 .unwrap_or_else(|_| crate::fatal("niri layout seed capacity mismatch"));
         }
-        layout
+        workspaces
             .focus_window(0)
             .unwrap_or_else(|_| crate::fatal("niri layout terminal seed is missing"));
         let mut wallpaper = WallpaperDaemon::new(
@@ -139,7 +152,8 @@ impl Desktop {
                     kind: WindowKind::Config,
                 },
             ],
-            layout,
+            workspaces,
+            niri,
             bar,
             swww_defaults,
             wallpaper,
@@ -155,8 +169,12 @@ impl Desktop {
             alternate_theme: false,
         };
         serialln(format_args!(
-            "SLOPOS-SHELL: config loaded niri_columns=3 gaps={} default_width=50% center=never waybar_position=top height={} spacing={} modules={}/{}/{}",
-            desktop.layout.config().gaps,
+            "SLOPOS-SHELL: config loaded niri_workspaces={} named={} binds={} rules={} active_columns=2 gaps={} default_width=50% center=never waybar_position=top height={} spacing={} modules={}/{}/{}",
+            desktop.workspaces.len(),
+            desktop.niri.workspaces.len(),
+            desktop.niri.bindings.len(),
+            desktop.niri.window_rules.len(),
+            desktop.workspaces.config().gaps,
             desktop.bar.height,
             desktop.bar.spacing,
             desktop.bar.modules_left.len(),
@@ -218,7 +236,7 @@ impl Desktop {
             0,
             self.screen_width,
             self.screen_height,
-            self.layout.config().background_color,
+            self.workspaces.config().background_color,
         );
         let Some(current_path) = self.wallpaper.current_image() else {
             return;
@@ -340,10 +358,12 @@ impl Desktop {
 
     fn bar_module_text<'a>(&self, module: &'a str) -> &'a str {
         match module {
-            "niri/workspaces" => "1  2  3",
-            "niri/window" if self.windows[self.active].open => {
-                title(self.windows[self.active].kind)
-            }
+            "niri/workspaces" => workspace_label(self.workspaces.active(), self.workspaces.len()),
+            "niri/window" if self.workspaces.focused_window().is_some() => self
+                .workspaces
+                .focused_window()
+                .map(|window| title(self.windows[window as usize].kind))
+                .unwrap_or(""),
             "niri/window" => "",
             "custom/launcher" => "SLOPOS",
             "network" => "NET --",
@@ -358,7 +378,7 @@ impl Desktop {
         let Some(window) = self.positioned_window(index) else {
             return;
         };
-        let active = index == self.active;
+        let active = self.workspaces.focused_window() == Some(index as u32);
         framebuffer.rect(
             window.x + 7,
             window.y + 8,
@@ -374,21 +394,21 @@ impl Desktop {
             TITLE_HEIGHT,
             if active { self.accent() } else { WINDOW },
         );
-        if self.layout.config().focus_ring.enabled {
+        if self.workspaces.config().focus_ring.enabled {
             framebuffer.outline(
                 window.x,
                 window.y,
                 window.width,
                 window.height,
                 if active {
-                    i32::from(self.layout.config().focus_ring.width)
+                    i32::from(self.workspaces.config().focus_ring.width)
                 } else {
                     1
                 },
                 if active {
-                    self.layout.config().focus_ring.active_color
+                    self.workspaces.config().focus_ring.active_color
                 } else {
-                    self.layout.config().focus_ring.inactive_color
+                    self.workspaces.config().focus_ring.inactive_color
                 },
             );
         }
@@ -452,20 +472,30 @@ impl Desktop {
         framebuffer.text(x, y + 182, "KDL SUBSET VALIDATED AT STARTUP.", MUTED, 1);
     }
 
-    fn keyboard(&mut self, key: Key) -> bool {
-        match key {
+    fn keyboard(&mut self, event: KeyEvent) -> bool {
+        if let Some(key) = binding_key(event.key)
+            && let Some(action) = self
+                .niri
+                .bindings
+                .action(binding_modifiers(event.modifiers), key)
+        {
+            self.execute_niri_action(action);
+            return false;
+        }
+        if event.modifiers.logo || event.modifiers.control || event.modifiers.alt {
+            return false;
+        }
+        match event.key {
             Key::Tab => self.focus_next(),
             Key::Escape => {
                 self.scrolling_view = false;
             }
-            Key::Backspace if self.active == 0 && self.command_length > 0 => {
+            Key::Backspace if self.terminal_focused() && self.command_length > 0 => {
                 self.command_length -= 1;
             }
-            Key::Enter if self.active == 0 => return self.execute_command(),
+            Key::Enter if self.terminal_focused() => return self.execute_command(),
             Key::Character(character)
-                if self.active == 0
-                    && self.windows[0].open
-                    && self.command_length < self.command.len() =>
+                if self.terminal_focused() && self.command_length < self.command.len() =>
             {
                 self.command[self.command_length] = character.to_ascii_uppercase();
                 self.command_length += 1;
@@ -488,10 +518,11 @@ impl Desktop {
         }
 
         if left && self.scrolling_view && event.dx != 0 {
-            self.layout.scroll_by(-i32::from(event.dx));
+            self.workspaces.scroll_by(-i32::from(event.dx));
             serialln(format_args!(
-                "SLOPOS-SHELL: view scrolled offset={} gesture=titlebar-drag",
-                self.layout.view_offset()
+                "SLOPOS-SHELL: view scrolled workspace={} offset={} gesture=titlebar-drag",
+                self.workspaces.active() + 1,
+                self.workspaces.view_offset()
             ));
             if let Some(window) = self.positioned_window(self.active) {
                 serialln(format_args!(
@@ -516,15 +547,7 @@ impl Desktop {
             self.focus(index);
             if self.pointer_y < window.y + TITLE_HEIGHT {
                 if self.pointer_x >= window.x + window.width - 30 {
-                    self.windows[index].open = false;
-                    self.layout
-                        .close_window(index as u32)
-                        .unwrap_or_else(|_| crate::fatal("layout close lost a tiled window"));
-                    serialln(format_args!(
-                        "SLOPOS-DESKTOP: window closed kind={}",
-                        title(window.kind)
-                    ));
-                    self.focus_top_open();
+                    self.close_window(index);
                 } else {
                     self.scrolling_view = true;
                 }
@@ -684,27 +707,100 @@ impl Desktop {
         if !self.windows[index].open {
             return;
         }
-        self.layout
+        self.workspaces
             .focus_window(index as u32)
             .unwrap_or_else(|_| crate::fatal("layout focus lost a tiled window"));
         self.active = index;
     }
 
-    fn focus_top_open(&mut self) {
-        if let Some(window) = self.layout.focused_window() {
+    fn execute_niri_action(&mut self, action: NiriAction) {
+        let changed = match action {
+            NiriAction::FocusColumnLeft => self.workspaces.focus_column_left(),
+            NiriAction::FocusColumnRight => self.workspaces.focus_column_right(),
+            NiriAction::FocusWorkspaceUp => self.workspaces.focus_workspace_up(),
+            NiriAction::FocusWorkspaceDown => self.workspaces.focus_workspace_down(),
+            NiriAction::MoveColumnToWorkspaceUp => {
+                let active = self.workspaces.active();
+                active > 0
+                    && self
+                        .workspaces
+                        .move_focused_to_workspace(active - 1)
+                        .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-up failed"))
+            }
+            NiriAction::MoveColumnToWorkspaceDown => {
+                let active = self.workspaces.active();
+                active + 1 < self.workspaces.len()
+                    && self
+                        .workspaces
+                        .move_focused_to_workspace(active + 1)
+                        .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-down failed"))
+            }
+            NiriAction::CloseWindow => {
+                if let Some(window) = self.workspaces.focused_window() {
+                    self.close_window(window as usize);
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+        self.sync_focused_window();
+        serialln(format_args!(
+            "SLOPOS-NIRI: binding action={} changed={} workspace={} name={} focused={}",
+            action_name(action),
+            changed,
+            self.workspaces.active() + 1,
+            self.active_workspace_name(),
+            self.workspaces
+                .focused_window()
+                .map(|window| window as i32)
+                .unwrap_or(-1)
+        ));
+    }
+
+    fn close_window(&mut self, index: usize) {
+        if !self.windows[index].open {
+            return;
+        }
+        self.workspaces
+            .close_window(index as u32)
+            .unwrap_or_else(|_| crate::fatal("niri close lost a tiled window"));
+        self.windows[index].open = false;
+        serialln(format_args!(
+            "SLOPOS-DESKTOP: window closed kind={} workspace={}",
+            title(self.windows[index].kind),
+            self.workspaces.active() + 1
+        ));
+        self.sync_focused_window();
+    }
+
+    fn terminal_focused(&self) -> bool {
+        self.windows[0].open && self.workspaces.focused_window() == Some(0)
+    }
+
+    fn sync_focused_window(&mut self) {
+        if let Some(window) = self.workspaces.focused_window() {
             self.active = window as usize;
         }
     }
 
+    fn active_workspace_name(&self) -> &'static str {
+        self.niri
+            .workspaces
+            .get(self.workspaces.active())
+            .map(|workspace| workspace.name)
+            .unwrap_or("<empty>")
+    }
+
     fn focus_next(&mut self) {
-        if self.layout.focus_column_right() {
-            if let Some(window) = self.layout.focused_window() {
+        if self.workspaces.focus_column_right() {
+            if let Some(window) = self.workspaces.focused_window() {
                 self.active = window as usize;
             }
             return;
         }
-        while self.layout.focus_column_left() {}
-        if let Some(window) = self.layout.focused_window() {
+        while self.workspaces.focus_column_left() {}
+        if let Some(window) = self.workspaces.focused_window() {
             self.active = window as usize;
         }
     }
@@ -713,7 +809,7 @@ impl Desktop {
         if !self.windows[index].open {
             return None;
         }
-        let rect = self.layout.tile_rect(index as u32).ok()?;
+        let rect = self.workspaces.tile_rect(index as u32).ok()?;
         let mut window = self.windows[index];
         window.x = rect.x;
         window.y = rect.y;
@@ -742,6 +838,74 @@ fn title(kind: WindowKind) -> &'static str {
         WindowKind::Terminal => "TERMINAL",
         WindowKind::System => "SYSTEM",
         WindowKind::Config => "CONFIG",
+    }
+}
+
+const fn window_kind(index: usize) -> WindowKind {
+    match index {
+        0 => WindowKind::Terminal,
+        1 => WindowKind::System,
+        _ => WindowKind::Config,
+    }
+}
+
+const fn app_id(kind: WindowKind) -> &'static str {
+    match kind {
+        WindowKind::Terminal => "slopos-terminal",
+        WindowKind::System => "slopos-system",
+        WindowKind::Config => "slopos-config",
+    }
+}
+
+const fn binding_modifiers(modifiers: KeyModifiers) -> BindingModifiers {
+    BindingModifiers::from_bits(
+        (modifiers.logo as u8)
+            | ((modifiers.control as u8) << 1)
+            | ((modifiers.shift as u8) << 2)
+            | ((modifiers.alt as u8) << 3),
+    )
+}
+
+const fn binding_key(key: Key) -> Option<BindingKey> {
+    Some(match key {
+        Key::Left => BindingKey::Left,
+        Key::Right => BindingKey::Right,
+        Key::Up => BindingKey::Up,
+        Key::Down => BindingKey::Down,
+        Key::PageUp => BindingKey::PageUp,
+        Key::PageDown => BindingKey::PageDown,
+        Key::Enter => BindingKey::Return,
+        Key::Tab => BindingKey::Tab,
+        Key::Escape => BindingKey::Escape,
+        Key::Character(character) => BindingKey::Character(character.to_ascii_uppercase()),
+        Key::Backspace => return None,
+    })
+}
+
+const fn action_name(action: NiriAction) -> &'static str {
+    match action {
+        NiriAction::FocusColumnLeft => "focus-column-left",
+        NiriAction::FocusColumnRight => "focus-column-right",
+        NiriAction::FocusWorkspaceUp => "focus-workspace-up",
+        NiriAction::FocusWorkspaceDown => "focus-workspace-down",
+        NiriAction::MoveColumnToWorkspaceUp => "move-column-to-workspace-up",
+        NiriAction::MoveColumnToWorkspaceDown => "move-column-to-workspace-down",
+        NiriAction::CloseWindow => "close-window",
+    }
+}
+
+const fn workspace_label(active: usize, count: usize) -> &'static str {
+    match (active, count) {
+        (0, 1) => "[1]",
+        (0, 2) => "[1] 2",
+        (1, 2) => "1 [2]",
+        (0, 3) => "[1] 2 3",
+        (1, 3) => "1 [2] 3",
+        (2, 3) => "1 2 [3]",
+        (0, _) => "[1] 2 3 4",
+        (1, _) => "1 [2] 3 4",
+        (2, _) => "1 2 [3] 4",
+        _ => "1 2 3 [4]",
     }
 }
 

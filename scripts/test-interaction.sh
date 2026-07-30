@@ -64,16 +64,14 @@ monitor_type() {
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${repo_dir}/evidence/window-moved.ppm"
-    echo "mouse_move 300 -13"
-    echo "mouse_button 1"
-    echo "mouse_button 0"
+    echo "sendkey meta_l-q 50"
     sleep 1
-    echo "mouse_move 110 0"
-    echo "mouse_button 1"
-    echo "mouse_button 0"
+    echo "sendkey meta_l-q 50"
     sleep 1
-    echo "mouse_button 1"
-    echo "mouse_button 0"
+    echo "sendkey meta_l-down 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/workspace-config.ppm"
+    echo "sendkey meta_l-q 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/wallpaper-only.ppm"
     echo "quit"
@@ -99,14 +97,17 @@ grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM"
 grep -Fq "SLOPOS-SWWW: daemon stopped" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: daemon started" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30" "${serial_log}"
-grep -Fq "SLOPOS-SHELL: view scrolled offset=" "${serial_log}"
+grep -Fq "SLOPOS-SHELL: view scrolled workspace=1 offset=" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window moved kind=TERMINAL" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=TERMINAL" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=SYSTEM" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=CONFIG" "${serial_log}"
 test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/window-moved.ppm"
+test -s "${repo_dir}/evidence/workspace-config.ppm"
 test -s "${repo_dir}/evidence/wallpaper-only.ppm"
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${repo_dir}/evidence/terminal-status.ppm" \
@@ -115,7 +116,9 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-switched.png"
     pnmtopng "${repo_dir}/evidence/window-moved.ppm" \
         >"${repo_dir}/evidence/window-moved.png"
+    pnmtopng "${repo_dir}/evidence/workspace-config.ppm" \
+        >"${repo_dir}/evidence/workspace-config.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-only.ppm" \
         >"${repo_dir}/evidence/wallpaper-only.png"
 fi
-echo "SlopOS PS/2 command, swww transition/query, viewport drag, and tiled close verified"
+echo "SlopOS PS/2 command, swww, niri workspace/bind/rule, viewport, and tiled close verified"
