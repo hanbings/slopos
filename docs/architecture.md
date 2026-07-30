@@ -14,7 +14,7 @@ OVMF
       -> final UEFI memory map
       -> ExitBootServices
   -> ELF entry at physical 0x04000000 (SlopOS Rust kernel)
-      -> validate BootInfo and ACPI RSDP
+      -> validate RSDP/XSDT/MADT and discover interrupt controllers
       -> initialize COM1
       -> establish frame allocator, page tables, heap, and eBPF self-test
       -> accept GOP framebuffer ownership
@@ -46,9 +46,11 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `memory.rs` 按 firmware 报告的 descriptor stride 解析 UEFI map，只收集 conventional memory，并提供并发保护的物理 frame/contiguous bump allocator。启动时实际分配一个 frame、volatile 写入、读回并清零。
 
-`paging.rs` 从 frame allocator 建立新的 x86-64 PML4/PDPT/PD，以 2 MiB page identity-map 当前 RAM 和 GOP framebuffer，然后写入并读回 CR3。`heap.rs` 从 contiguous frames 保留 1 MiB，提供 alignment-aware、并发保护的 bump allocation；启动路径实际分配 128 bytes 并验证首尾。
+`paging.rs` 从 frame allocator 建立新的 x86-64 PML4/PDPT/PD，以 2 MiB page identity-map 当前 RAM，并以 cache-disabled 映射覆盖 GOP framebuffer、LAPIC 和每个 IOAPIC MMIO page，然后写入并读回 CR3。`heap.rs` 从 contiguous frames 保留 1 MiB，提供 alignment-aware、并发保护的 bump allocation；启动路径实际分配 128 bytes 并验证首尾。
 
-`interrupts.rs` 安装自有 GDT/IDT，把 8259 PIC remap 到 `0x20`/`0x28`，配置 100 Hz PIT，并为 timer、keyboard、mouse 及关键 CPU exception 安装 gate。汇编 stub 只保存上下文、对齐栈并调用有界 Rust top half。PS/2 top half 读取一个字节、确认 PIC 并写入固定 SPSC ring；`desktop` future 负责扫描码和 mouse packet 的复杂解析。独立测试会访问未映射的 1 GiB 地址，实际验证 page-fault vector、error、RIP 和 CR2。
+`crates/acpi` 校验 ACPI 1.0/2.0 RSDP、RSDT/XSDT 和 SDT checksum，并解析 MADT 的 local APIC、I/O APIC、processor、local APIC override 与 interrupt-source override。`apic.rs` 通过 MADT 路由把 PIT、keyboard、mouse 送入 IOAPIC，屏蔽 8259，启用 xAPIC 并从 local APIC 发 EOI；QEMU 的 IRQ0 实际按 override 路由到 GSI 2。
+
+`interrupts.rs` 安装自有 GDT/IDT，配置 100 Hz PIT，并为 timer、keyboard、mouse、APIC spurious 及关键 CPU exception 安装 gate。汇编 stub 只保存上下文、对齐栈并调用有界 Rust top half。PS/2 top half 读取一个字节、确认 local APIC 并写入固定 SPSC ring；`desktop` future 负责扫描码和 mouse packet 的复杂解析。独立测试会访问未映射的 1 GiB 地址，实际验证 page-fault vector、error、RIP 和 CR2。
 
 `executor.rs` 当前固定运行两个 pinned future，以原子 ready mask 作为 task queue，以 RawWaker 标识 task，并在空闲时执行 race-free `cli` 检查和 `sti; hlt`。`timer.rs` 的 future 由 PIT tick 唤醒。它仍缺动态 task arena、timer wheel、cancellation、async lock 和 SMP。
 

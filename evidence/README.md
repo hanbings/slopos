@@ -4,7 +4,7 @@
 
 | 文件 | 生成方式 | 证明范围 |
 |---|---|---|
-| `serial.log` | `make test-boot` | OVMF 启动、UEFI loader、ELF 加载、`ExitBootServices`、kernel entry、ACPI/GOP/initrd、memory、eBPF 返回 42、IRQ/async 与桌面循环 |
+| `serial.log` | `make test-boot` | OVMF 启动、UEFI loader、ELF 加载、`ExitBootServices`、XSDT/MADT、memory、eBPF 返回 42、LAPIC/IOAPIC IRQ/async 与桌面循环 |
 | `uefi-debugcon.log` | `make test-boot` | loader 独立 debugcon 日志 |
 | `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`，鼠标拖动终端 |
 | `page-fault-serial.log` | `make test-page-fault` | 自有页表的未映射访问、vector 14、error、RIP、CR2 与 fatal boundary |
@@ -32,3 +32,5 @@ qemu-system-x86_64
 ```
 
 eBPF 的宿主边界测试由 `make test-ebpf` 执行；裸机证据是 `serial.log` 中的 `SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42`。它只证明文档所列子集，不证明 map、attach point 或 Linux eBPF 兼容性。
+
+ACPI parser 的宿主测试由 `make test-acpi` 执行。裸机日志记录 QEMU MADT 的 1 个 processor、1 个 IOAPIC、5 个 interrupt override，并记录硬件读取到的 LAPIC/IOAPIC ID、24 条 redirection 和 ISA route `2/1/12`；随后出现 timer Future 与 PS/2 交互事件，证明新路由实际收到了 IRQ。

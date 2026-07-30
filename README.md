@@ -34,6 +34,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 ```bash
 make image
+make test-acpi
 make test-ebpf
 make test-boot
 make test-interaction
@@ -41,7 +42,7 @@ make test-page-fault
 make run
 ```
 
-`make test-ebpf` 在宿主运行 verifier/interpreter 的边界测试。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、内核接管、自有 CR3/heap、eBPF 实际执行、ACPI、GOP、IRQ、async timer 和桌面循环的串口标记。`make test-interaction` 通过 QEMU 注入真实 PS/2 键盘和鼠标事件，执行 `STATUS` 并拖动终端窗口。`make test-page-fault` 注入未映射地址访问并核验 vector 14、RIP、error code 和 CR2。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试。`make test-boot` 在 OVMF 中启动镜像并验证 UEFI、`ExitBootServices`、内核接管、自有 CR3/heap、eBPF 实际执行、ACPI、LAPIC/IOAPIC IRQ、async timer 和桌面循环的串口标记。`make test-interaction` 通过 QEMU 注入真实 PS/2 键盘和鼠标事件，执行 `STATUS` 并拖动终端窗口。`make test-page-fault` 注入未映射地址访问并核验 vector 14、RIP、error code 和 CR2。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 
@@ -58,6 +59,7 @@ make run
 - [架构和启动协议](docs/architecture.md)
 - [逐子系统完成度](docs/status.md)
 - [异步内核设计状态](docs/async-kernel.md)
+- [ACPI 与 APIC 中断路径](docs/acpi-apic.md)
 - [eBPF 子集与验证边界](docs/ebpf.md)
 - [依赖与许可证](docs/dependencies.md)
 - [已知问题](docs/known-issues.md)
