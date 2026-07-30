@@ -100,14 +100,21 @@ impl Desktop {
         )
         .unwrap_or_else(|_| crate::fatal("niri workspace capacity mismatch"));
         for window in 0..WINDOW_COUNT {
+            let app_id = app_id(window_kind(window));
             let workspace = niri
                 .window_rules
-                .workspace_for(app_id(window_kind(window)))
+                .workspace_for(app_id)
                 .and_then(|name| niri.workspaces.index_of(name))
                 .unwrap_or(0);
-            workspaces
-                .open_window(workspace, window as u32)
-                .unwrap_or_else(|_| crate::fatal("niri layout seed capacity mismatch"));
+            if niri.window_rules.floating_for(app_id).unwrap_or(false) {
+                workspaces
+                    .open_floating_window(workspace, window as u32)
+                    .unwrap_or_else(|_| crate::fatal("niri floating seed capacity mismatch"));
+            } else {
+                workspaces
+                    .open_window(workspace, window as u32)
+                    .unwrap_or_else(|_| crate::fatal("niri layout seed capacity mismatch"));
+            }
         }
         workspaces
             .focus_window(0)
@@ -244,8 +251,13 @@ impl Desktop {
         self.render_bar(framebuffer);
 
         for index in 0..WINDOW_COUNT {
-            if self.windows[index].open {
+            if self.windows[index].open && !self.workspaces.window_is_floating(index as u32) {
                 self.render_window(framebuffer, index);
+            }
+        }
+        for z in 0..WINDOW_COUNT {
+            if let Some(window) = self.workspaces.floating_window_at_z(z) {
+                self.render_window(framebuffer, window as usize);
             }
         }
         framebuffer.cursor(self.pointer_x, self.pointer_y);
@@ -527,14 +539,25 @@ impl Desktop {
             if !self.windows[window].open {
                 continue;
             }
+            let app_id = app_id(window_kind(window));
             let workspace = niri
                 .window_rules
-                .workspace_for(app_id(window_kind(window)))
+                .workspace_for(app_id)
                 .and_then(|name| niri.workspaces.index_of(name))
                 .unwrap_or(0);
-            workspaces
-                .open_window(workspace, window as u32)
-                .unwrap_or_else(|_| crate::fatal("published niri layout seed failed"));
+            let floating = niri
+                .window_rules
+                .floating_for(app_id)
+                .unwrap_or_else(|| self.workspaces.window_is_floating_anywhere(window as u32));
+            if floating {
+                workspaces
+                    .open_floating_window(workspace, window as u32)
+                    .unwrap_or_else(|_| crate::fatal("published niri floating seed failed"));
+            } else {
+                workspaces
+                    .open_window(workspace, window as u32)
+                    .unwrap_or_else(|_| crate::fatal("published niri layout seed failed"));
+            }
         }
         workspaces
             .focus_workspace(old_workspace.min(workspace_count - 1))
@@ -863,37 +886,67 @@ impl Desktop {
             animate |= self.pointer_scrolled(event.wheel);
         }
 
-        if left && self.scrolling_view && event.dx != 0 {
-            self.workspaces.scroll_by(-i32::from(event.dx));
-            serialln(format_args!(
-                "SLOPOS-SHELL: view scrolled workspace={} offset={} gesture=titlebar-drag",
-                self.workspaces.active() + 1,
-                self.workspaces.view_offset()
-            ));
-            if let Some(window) = self.positioned_window(self.active) {
+        if left && self.scrolling_view && (event.dx != 0 || event.dy != 0) {
+            if self.workspaces.focused_window_is_floating() {
+                let changed = self
+                    .workspaces
+                    .move_focused_floating(i32::from(event.dx), i32::from(event.dy));
+                if changed && let Some(window) = self.positioned_window(self.active) {
+                    serialln(format_args!(
+                        "SLOPOS-DESKTOP: window moved kind={} x={} y={} layout=floating gesture=titlebar-drag",
+                        title(window.kind),
+                        window.x,
+                        window.y
+                    ));
+                }
+            } else if event.dx != 0 {
+                self.workspaces.scroll_by(-i32::from(event.dx));
                 serialln(format_args!(
-                    "SLOPOS-DESKTOP: window moved kind={} x={} y={} layout=scrolling",
-                    title(window.kind),
-                    window.x,
-                    window.y
+                    "SLOPOS-SHELL: view scrolled workspace={} offset={} gesture=titlebar-drag",
+                    self.workspaces.active() + 1,
+                    self.workspaces.view_offset()
                 ));
+                if let Some(window) = self.positioned_window(self.active) {
+                    serialln(format_args!(
+                        "SLOPOS-DESKTOP: window moved kind={} x={} y={} layout=scrolling",
+                        title(window.kind),
+                        window.x,
+                        window.y
+                    ));
+                }
             }
         }
-        if right && self.resizing_column && event.dx != 0 {
-            let changed = self
-                .workspaces
-                .change_focused_column_width(slopos_shell::ColumnWidthChange::AdjustFixed(
-                    i32::from(event.dx),
-                ))
-                .unwrap_or_else(|_| crate::fatal("pointer column resize failed"));
+        if right && self.resizing_column && (event.dx != 0 || event.dy != 0) {
+            let floating = self.workspaces.focused_window_is_floating();
+            let changed = if floating {
+                self.workspaces
+                    .resize_focused_floating(i32::from(event.dx), i32::from(event.dy))
+            } else {
+                self.workspaces
+                    .change_focused_column_width(slopos_shell::ColumnWidthChange::AdjustFixed(
+                        i32::from(event.dx),
+                    ))
+                    .unwrap_or_else(|_| crate::fatal("pointer column resize failed"))
+            };
             self.sync_focused_window();
             if changed && let Some(window) = self.positioned_window(self.active) {
-                serialln(format_args!(
-                    "SLOPOS-DESKTOP: pointer resized kind={} width={} delta={} gesture=mod-right-drag",
-                    title(window.kind),
-                    window.width,
-                    event.dx
-                ));
+                if floating {
+                    serialln(format_args!(
+                        "SLOPOS-DESKTOP: pointer resized kind={} width={} height={} delta={}/{} layout=floating gesture=mod-right-drag",
+                        title(window.kind),
+                        window.width,
+                        window.height,
+                        event.dx,
+                        event.dy
+                    ));
+                } else {
+                    serialln(format_args!(
+                        "SLOPOS-DESKTOP: pointer resized kind={} width={} delta={} gesture=mod-right-drag",
+                        title(window.kind),
+                        window.width,
+                        event.dx
+                    ));
+                }
             }
         }
         self.previous_buttons = event.buttons;
@@ -924,13 +977,10 @@ impl Desktop {
         {
             return self.execute_bar_action(module, action, "left");
         }
-        for index in 0..WINDOW_COUNT {
-            let Some(window) = self.positioned_window(index) else {
-                continue;
-            };
-            if !window.open || !inside(self.pointer_x, self.pointer_y, window) {
-                continue;
-            }
+        if let Some(index) = self.window_at_pointer() {
+            let window = self
+                .positioned_window(index)
+                .expect("pointer-selected window remains positioned");
             self.focus(index);
             if self.pointer_y < window.y + TITLE_HEIGHT {
                 if self.pointer_x >= window.x + window.width - 30 {
@@ -1105,16 +1155,31 @@ impl Desktop {
     }
 
     fn pointer_resize_pressed(&mut self) {
-        for index in 0..WINDOW_COUNT {
-            let Some(window) = self.positioned_window(index) else {
+        if let Some(index) = self.window_at_pointer() {
+            self.focus(index);
+            self.resizing_column = true;
+        }
+    }
+
+    fn window_at_pointer(&self) -> Option<usize> {
+        for z in (0..WINDOW_COUNT).rev() {
+            let Some(window) = self.workspaces.floating_window_at_z(z) else {
                 continue;
             };
-            if window.open && inside(self.pointer_x, self.pointer_y, window) {
-                self.focus(index);
-                self.resizing_column = true;
-                return;
+            let index = window as usize;
+            if self
+                .positioned_window(index)
+                .is_some_and(|window| inside(self.pointer_x, self.pointer_y, window))
+            {
+                return Some(index);
             }
         }
+        (0..WINDOW_COUNT).rev().find(|index| {
+            !self.workspaces.window_is_floating(*index as u32)
+                && self
+                    .positioned_window(*index)
+                    .is_some_and(|window| inside(self.pointer_x, self.pointer_y, window))
+        })
     }
 
     fn execute_command(&mut self) -> bool {
@@ -1361,6 +1426,10 @@ impl Desktop {
             NiriAction::ToggleColumnTabbedDisplay => {
                 self.workspaces.toggle_focused_column_tabbed_display()
             }
+            NiriAction::ToggleWindowFloating => self.workspaces.toggle_focused_window_floating(),
+            NiriAction::SwitchFocusBetweenFloatingAndTiling => {
+                self.workspaces.switch_focus_between_floating_and_tiling()
+            }
             NiriAction::SwitchPresetColumnWidth => self.workspaces.switch_preset_column_width(),
             NiriAction::SwitchPresetColumnWidthBack => {
                 self.workspaces.switch_preset_column_width_back()
@@ -1417,9 +1486,14 @@ impl Desktop {
             && let Some(window) = self.positioned_window(self.active)
         {
             serialln(format_args!(
-                "SLOPOS-DESKTOP: window resized kind={} width={} layout=scrolling",
+                "SLOPOS-DESKTOP: window resized kind={} width={} layout={}",
                 title(window.kind),
-                window.width
+                window.width,
+                if self.workspaces.focused_window_is_floating() {
+                    "floating"
+                } else {
+                    "scrolling"
+                }
             ));
         }
         if changed
@@ -1440,10 +1514,15 @@ impl Desktop {
             && let Some(window) = self.positioned_window(self.active)
         {
             serialln(format_args!(
-                "SLOPOS-DESKTOP: column centered kind={} x={} offset={} layout=scrolling",
+                "SLOPOS-DESKTOP: column centered kind={} x={} offset={} layout={}",
                 title(window.kind),
                 window.x,
-                self.workspaces.view_offset()
+                self.workspaces.view_offset(),
+                if self.workspaces.focused_window_is_floating() {
+                    "floating"
+                } else {
+                    "scrolling"
+                }
             ));
         }
         if changed
@@ -1468,9 +1547,14 @@ impl Desktop {
             && let Some(window) = self.positioned_window(self.active)
         {
             serialln(format_args!(
-                "SLOPOS-DESKTOP: window height changed kind={} height={} layout=scrolling",
+                "SLOPOS-DESKTOP: window height changed kind={} height={} layout={}",
                 title(window.kind),
-                window.height
+                window.height,
+                if self.workspaces.focused_window_is_floating() {
+                    "floating"
+                } else {
+                    "scrolling"
+                }
             ));
         }
         if changed
@@ -1478,12 +1562,32 @@ impl Desktop {
                 action,
                 NiriAction::MoveColumnLeft | NiriAction::MoveColumnRight
             )
+            && !self.workspaces.focused_window_is_floating()
             && let Some(window) = self.positioned_window(self.active)
         {
             serialln(format_args!(
                 "SLOPOS-DESKTOP: column reordered kind={} x={} direction={} layout=scrolling",
                 title(window.kind),
                 window.x,
+                action_name(action)
+            ));
+        }
+        if changed
+            && matches!(
+                action,
+                NiriAction::MoveColumnLeft
+                    | NiriAction::MoveColumnRight
+                    | NiriAction::MoveWindowUp
+                    | NiriAction::MoveWindowDown
+            )
+            && self.workspaces.focused_window_is_floating()
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: floating window moved kind={} x={} y={} direction={} layout=floating",
+                title(window.kind),
+                window.x,
+                window.y,
                 action_name(action)
             ));
         }
@@ -1550,6 +1654,38 @@ impl Desktop {
                 info.active_tab + 1,
                 info.tab_count,
                 action_name(action)
+            ));
+        }
+        if changed
+            && matches!(action, NiriAction::ToggleWindowFloating)
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: window layer toggled kind={} layer={} x={} y={} width={} height={} layout=niri",
+                title(window.kind),
+                if self.workspaces.focused_window_is_floating() {
+                    "floating"
+                } else {
+                    "tiling"
+                },
+                window.x,
+                window.y,
+                window.width,
+                window.height
+            ));
+        }
+        if changed
+            && matches!(action, NiriAction::SwitchFocusBetweenFloatingAndTiling)
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: layer focus switched layer={} kind={} layout=niri",
+                if self.workspaces.focused_window_is_floating() {
+                    "floating"
+                } else {
+                    "tiling"
+                },
+                title(window.kind)
             ));
         }
         serialln(format_args!(
@@ -1767,6 +1903,10 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::ConsumeOrExpelWindowLeft => "consume-or-expel-window-left",
         NiriAction::ConsumeOrExpelWindowRight => "consume-or-expel-window-right",
         NiriAction::ToggleColumnTabbedDisplay => "toggle-column-tabbed-display",
+        NiriAction::ToggleWindowFloating => "toggle-window-floating",
+        NiriAction::SwitchFocusBetweenFloatingAndTiling => {
+            "switch-focus-between-floating-and-tiling"
+        }
         NiriAction::SwitchPresetColumnWidth => "switch-preset-column-width",
         NiriAction::SwitchPresetColumnWidthBack => "switch-preset-column-width-back",
         NiriAction::SwitchPresetWindowHeight => "switch-preset-window-height",

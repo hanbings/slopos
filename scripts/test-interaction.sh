@@ -69,6 +69,21 @@ monitor_type() {
     sleep 2
     monitor_type "swww img sunset.ppm --transition-type none"
     sleep 2
+    echo "sendkey meta_l-v 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-window-floating.ppm"
+    echo "sendkey meta_l-shift-v 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-floating-focus-tiling.ppm"
+    echo "sendkey meta_l-shift-v 50"
+    sleep 1
+    echo "sendkey meta_l-ctrl-j 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-floating-window-moved.ppm"
+    echo "sendkey meta_l-v 50"
+    sleep 1
+    echo "sendkey meta_l-shift-left 50"
+    sleep 1
     echo "sendkey meta_l-comma 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-column-stacked.ppm"
@@ -349,6 +364,19 @@ grep -Fq "SLOPOS-SWWW: daemon started" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: clear color=1A2B3C output=*" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C" "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=toggle-window-floating changed=true workspace=1 name=main focused=0" "${serial_log}")" -ne 2 ]]; then
+    echo "niri floating window did not toggle and restore" >&2
+    exit 1
+fi
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=switch-focus-between-floating-and-tiling changed=true workspace=1 name=main" "${serial_log}")" -ne 2 ]]; then
+    echo "niri floating/tiling focus did not switch in both directions" >&2
+    exit 1
+fi
+grep -Fq "SLOPOS-DESKTOP: window layer toggled kind=TERMINAL layer=floating x=16 y=161 width=488 height=485 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: layer focus switched layer=tiling kind=SYSTEM layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: layer focus switched layer=floating kind=TERMINAL layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: floating window moved kind=TERMINAL x=16 y=211 direction=move-window-down layout=floating" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window layer toggled kind=TERMINAL layer=tiling x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1" "${serial_log}"
 if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=toggle-column-tabbed-display changed=true workspace=1 name=main focused=1" "${serial_log}")" -ne 2 ]]; then
     echo "niri tabbed column display did not toggle and restore" >&2
@@ -450,6 +478,9 @@ grep -Fq "SLOPOS-DESKTOP: window closed kind=CONFIG" "${serial_log}"
 test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
+test -s "${repo_dir}/evidence/niri-window-floating.ppm"
+test -s "${repo_dir}/evidence/niri-floating-focus-tiling.ppm"
+test -s "${repo_dir}/evidence/niri-floating-window-moved.ppm"
 test -s "${repo_dir}/evidence/niri-column-stacked.ppm"
 test -s "${repo_dir}/evidence/niri-column-tabbed-system.ppm"
 test -s "${repo_dir}/evidence/niri-column-tabbed-terminal.ppm"
@@ -491,6 +522,12 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-switched.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-cleared.ppm" \
         >"${repo_dir}/evidence/wallpaper-cleared.png"
+    pnmtopng "${repo_dir}/evidence/niri-window-floating.ppm" \
+        >"${repo_dir}/evidence/niri-window-floating.png"
+    pnmtopng "${repo_dir}/evidence/niri-floating-focus-tiling.ppm" \
+        >"${repo_dir}/evidence/niri-floating-focus-tiling.png"
+    pnmtopng "${repo_dir}/evidence/niri-floating-window-moved.ppm" \
+        >"${repo_dir}/evidence/niri-floating-window-moved.png"
     pnmtopng "${repo_dir}/evidence/niri-column-stacked.ppm" \
         >"${repo_dir}/evidence/niri-column-stacked.png"
     pnmtopng "${repo_dir}/evidence/niri-column-tabbed-system.ppm" \

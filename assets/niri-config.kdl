@@ -33,6 +33,8 @@ binds {
     Mod+BracketLeft { consume-or-expel-window-left; }
     Mod+BracketRight { consume-or-expel-window-right; }
     Mod+W { toggle-column-tabbed-display; }
+    Mod+V { toggle-window-floating; }
+    Mod+Shift+V { switch-focus-between-floating-and-tiling; }
     Mod+Minus { set-column-width "-10%"; }
     Mod+Equal { set-column-width "+10%"; }
     Mod+Shift+Minus { set-window-height "-10%"; }
@@ -52,6 +54,7 @@ binds {
 window-rule {
     match app-id="slopos-config"
     open-on-workspace "config"
+    open-floating false
 }
 
 layout {

@@ -75,6 +75,8 @@ pub enum NiriAction<'a> {
     ConsumeOrExpelWindowLeft,
     ConsumeOrExpelWindowRight,
     ToggleColumnTabbedDisplay,
+    ToggleWindowFloating,
+    SwitchFocusBetweenFloatingAndTiling,
     SwitchPresetColumnWidth,
     SwitchPresetColumnWidthBack,
     SwitchPresetWindowHeight,
@@ -203,6 +205,7 @@ impl<'a> NamedWorkspaceList<'a> {
 pub struct NiriWindowRule<'a> {
     pub app_id: Option<&'a str>,
     pub open_on_workspace: Option<&'a str>,
+    pub open_floating: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -237,6 +240,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         workspace
+    }
+
+    pub fn floating_for(self, app_id: &str) -> Option<bool> {
+        let mut floating = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.open_floating {
+                    floating = Some(value);
+                }
+            }
+        }
+        floating
     }
 
     fn push(&mut self, rule: NiriWindowRule<'a>) -> Result<(), NiriConfigError> {
@@ -431,6 +446,7 @@ impl<'a> ShellConfigParser<'a> {
         let mut rule = NiriWindowRule {
             app_id: None,
             open_on_workspace: None,
+            open_floating: None,
         };
         loop {
             match self.next_non_end() {
@@ -459,6 +475,14 @@ impl<'a> ShellConfigParser<'a> {
                         return Err(NiriConfigError::InvalidWindowRule);
                     };
                     rule.open_on_workspace = Some(workspace);
+                    self.finish_node()?;
+                }
+                KdlToken::Word("open-floating") => {
+                    rule.open_floating = Some(match self.next() {
+                        KdlToken::Word("true") => true,
+                        KdlToken::Word("false") => false,
+                        _ => return Err(NiriConfigError::InvalidWindowRule),
+                    });
                     self.finish_node()?;
                 }
                 KdlToken::Word(_) | KdlToken::String(_) | KdlToken::Equal => {
@@ -496,6 +520,10 @@ impl<'a> ShellConfigParser<'a> {
             "consume-or-expel-window-left" => NiriAction::ConsumeOrExpelWindowLeft,
             "consume-or-expel-window-right" => NiriAction::ConsumeOrExpelWindowRight,
             "toggle-column-tabbed-display" => NiriAction::ToggleColumnTabbedDisplay,
+            "toggle-window-floating" => NiriAction::ToggleWindowFloating,
+            "switch-focus-between-floating-and-tiling" => {
+                NiriAction::SwitchFocusBetweenFloatingAndTiling
+            }
             "switch-preset-column-width" => NiriAction::SwitchPresetColumnWidth,
             "switch-preset-column-width-back" => NiriAction::SwitchPresetColumnWidthBack,
             "switch-preset-window-height" => NiriAction::SwitchPresetWindowHeight,
@@ -813,8 +841,332 @@ pub enum WorkspaceError {
     Layout(LayoutError),
 }
 
+const FLOATING_MOVE_STEP: i32 = 50;
+const MIN_FLOATING_WIDTH: i32 = 160;
+const MIN_FLOATING_HEIGHT: i32 = 120;
+
+#[derive(Clone, Copy)]
+struct FloatingEntry {
+    window: u32,
+    rect: Rect,
+    default_rect: Rect,
+}
+
+impl FloatingEntry {
+    const fn empty() -> Self {
+        Self {
+            window: 0,
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+            default_rect: Rect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FloatingDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Clone, Copy)]
+struct FloatingLayout<const WINDOWS: usize> {
+    entries: [FloatingEntry; WINDOWS],
+    count: usize,
+    output_width: u16,
+    output_height: u16,
+    reserved_top: u16,
+    gap: u16,
+}
+
+impl<const WINDOWS: usize> FloatingLayout<WINDOWS> {
+    const fn new(output_width: u16, output_height: u16, reserved_top: u16, gap: u16) -> Self {
+        Self {
+            entries: [FloatingEntry::empty(); WINDOWS],
+            count: 0,
+            output_width,
+            output_height,
+            reserved_top,
+            gap,
+        }
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    fn contains(&self, window: u32) -> bool {
+        self.index_of(window).is_some()
+    }
+
+    fn focused_window(&self) -> Option<u32> {
+        self.count
+            .checked_sub(1)
+            .map(|index| self.entries[index].window)
+    }
+
+    fn rect(&self, window: u32) -> Option<Rect> {
+        self.index_of(window).map(|index| self.entries[index].rect)
+    }
+
+    fn window_at_z(&self, index: usize) -> Option<u32> {
+        (index < self.count).then_some(self.entries[index].window)
+    }
+
+    fn add(&mut self, window: u32, source: Option<Rect>) -> Result<(), LayoutError> {
+        if self.contains(window) {
+            return Err(LayoutError::DuplicateWindow);
+        }
+        if self.count == WINDOWS {
+            return Err(LayoutError::WindowCapacity);
+        }
+        let rect = source
+            .map(|rect| self.rect_near_tiled(rect))
+            .unwrap_or_else(|| self.default_rect());
+        self.entries[self.count] = FloatingEntry {
+            window,
+            rect,
+            default_rect: rect,
+        };
+        self.count += 1;
+        Ok(())
+    }
+
+    fn add_entry(&mut self, entry: FloatingEntry) -> Result<(), LayoutError> {
+        if self.contains(entry.window) {
+            return Err(LayoutError::DuplicateWindow);
+        }
+        if self.count == WINDOWS {
+            return Err(LayoutError::WindowCapacity);
+        }
+        self.entries[self.count] = entry;
+        self.count += 1;
+        Ok(())
+    }
+
+    fn remove(&mut self, window: u32) -> Result<FloatingEntry, LayoutError> {
+        let index = self.index_of(window).ok_or(LayoutError::UnknownWindow)?;
+        let entry = self.entries[index];
+        for current in index..self.count - 1 {
+            self.entries[current] = self.entries[current + 1];
+        }
+        self.count -= 1;
+        self.entries[self.count] = FloatingEntry::empty();
+        Ok(entry)
+    }
+
+    fn focus(&mut self, window: u32) -> Result<bool, LayoutError> {
+        let index = self.index_of(window).ok_or(LayoutError::UnknownWindow)?;
+        if index + 1 == self.count {
+            return Ok(false);
+        }
+        let entry = self.entries[index];
+        for current in index..self.count - 1 {
+            self.entries[current] = self.entries[current + 1];
+        }
+        self.entries[self.count - 1] = entry;
+        Ok(true)
+    }
+
+    fn focus_direction(&mut self, direction: FloatingDirection) -> bool {
+        if self.count < 2 {
+            return false;
+        }
+        let focused = self.entries[self.count - 1].rect;
+        let focused_x = focused.x + i32::from(focused.width) / 2;
+        let focused_y = focused.y + i32::from(focused.height) / 2;
+        let mut best = None;
+        for index in 0..self.count - 1 {
+            let rect = self.entries[index].rect;
+            let x = rect.x + i32::from(rect.width) / 2;
+            let y = rect.y + i32::from(rect.height) / 2;
+            let (primary, secondary) = match direction {
+                FloatingDirection::Left if x < focused_x => (focused_x - x, (focused_y - y).abs()),
+                FloatingDirection::Right if x > focused_x => (x - focused_x, (focused_y - y).abs()),
+                FloatingDirection::Up if y < focused_y => (focused_y - y, (focused_x - x).abs()),
+                FloatingDirection::Down if y > focused_y => (y - focused_y, (focused_x - x).abs()),
+                _ => continue,
+            };
+            let score = i64::from(primary) * 4 + i64::from(secondary);
+            if best.is_none_or(|(_, current)| score < current) {
+                best = Some((index, score));
+            }
+        }
+        let Some((index, _)) = best else {
+            return false;
+        };
+        let window = self.entries[index].window;
+        self.focus(window).unwrap_or(false);
+        true
+    }
+
+    fn move_focused(&mut self, dx: i32, dy: i32) -> bool {
+        let Some(index) = self.count.checked_sub(1) else {
+            return false;
+        };
+        let mut rect = self.entries[index].rect;
+        let previous = rect;
+        rect.x = rect.x.saturating_add(dx);
+        rect.y = rect.y.saturating_add(dy);
+        self.clamp_rect_position(&mut rect);
+        self.entries[index].rect = rect;
+        rect != previous
+    }
+
+    fn resize_focused(&mut self, dx: i32, dy: i32) -> bool {
+        let Some(index) = self.count.checked_sub(1) else {
+            return false;
+        };
+        let previous = self.entries[index].rect;
+        let maximum_width = i32::from(self.output_width).max(1);
+        let maximum_height = i32::from(self.output_height.saturating_sub(self.reserved_top)).max(1);
+        let width = (i32::from(previous.width) + dx)
+            .clamp(MIN_FLOATING_WIDTH.min(maximum_width), maximum_width);
+        let height = (i32::from(previous.height) + dy)
+            .clamp(MIN_FLOATING_HEIGHT.min(maximum_height), maximum_height);
+        let mut rect = Rect {
+            width: width as u16,
+            height: height as u16,
+            ..previous
+        };
+        self.clamp_rect_position(&mut rect);
+        self.entries[index].rect = rect;
+        rect != previous
+    }
+
+    fn change_focused_width(&mut self, change: ColumnWidthChange) -> bool {
+        let Some(index) = self.count.checked_sub(1) else {
+            return false;
+        };
+        let current = self.entries[index].rect.width;
+        let requested = resolve_size_change(change, current, self.output_width, self.gap);
+        self.resize_focused(requested - i32::from(current), 0)
+    }
+
+    fn change_focused_height(&mut self, change: ColumnWidthChange) -> bool {
+        let Some(index) = self.count.checked_sub(1) else {
+            return false;
+        };
+        let current = self.entries[index].rect.height;
+        let working_height = self.output_height.saturating_sub(self.reserved_top);
+        let requested = resolve_size_change(change, current, working_height, self.gap);
+        self.resize_focused(0, requested - i32::from(current))
+    }
+
+    fn reset_focused_height(&mut self) -> bool {
+        let Some(index) = self.count.checked_sub(1) else {
+            return false;
+        };
+        let current = self.entries[index].rect.height;
+        let target = self.entries[index].default_rect.height;
+        self.resize_focused(0, i32::from(target) - i32::from(current))
+    }
+
+    fn center_focused(&mut self) -> bool {
+        let Some(index) = self.count.checked_sub(1) else {
+            return false;
+        };
+        let previous = self.entries[index].rect;
+        let mut rect = previous;
+        rect.x = (i32::from(self.output_width) - i32::from(rect.width)) / 2;
+        rect.y = i32::from(self.reserved_top)
+            + (i32::from(self.output_height.saturating_sub(self.reserved_top))
+                - i32::from(rect.height))
+                / 2;
+        self.clamp_rect_position(&mut rect);
+        self.entries[index].rect = rect;
+        rect != previous
+    }
+
+    fn expand_focused(&mut self) -> bool {
+        let Some(index) = self.count.checked_sub(1) else {
+            return false;
+        };
+        let previous = self.entries[index].rect;
+        let gap = self.gap.min(self.output_width / 2);
+        let width = self
+            .output_width
+            .saturating_sub(gap.saturating_mul(2))
+            .max(1);
+        let mut rect = previous;
+        rect.x = i32::from(gap);
+        rect.width = width;
+        self.clamp_rect_position(&mut rect);
+        self.entries[index].rect = rect;
+        rect != previous
+    }
+
+    fn default_rect(&self) -> Rect {
+        let gap = self.gap.min(self.output_width / 2);
+        let width = ColumnWidth::Proportion(500)
+            .resolve(self.output_width, gap)
+            .max(1);
+        let working_height = self.output_height.saturating_sub(self.reserved_top);
+        let height = ((u32::from(working_height) * 2) / 3).clamp(1, u32::from(u16::MAX)) as u16;
+        Rect {
+            x: (i32::from(self.output_width) - i32::from(width)) / 2,
+            y: i32::from(self.reserved_top) + (i32::from(working_height) - i32::from(height)) / 2,
+            width,
+            height,
+        }
+    }
+
+    fn rect_near_tiled(&self, source: Rect) -> Rect {
+        let working_height = self.output_height.saturating_sub(self.reserved_top);
+        let preferred_height =
+            ((u32::from(working_height) * 2) / 3).clamp(1, u32::from(u16::MAX)) as u16;
+        let width = source.width.min(self.output_width).max(1);
+        let height = source.height.min(preferred_height).max(1);
+        let mut rect = Rect {
+            x: source.x + (i32::from(source.width) - i32::from(width)) / 2,
+            y: source.y + (i32::from(source.height) - i32::from(height)) / 2,
+            width,
+            height,
+        };
+        self.clamp_rect_position(&mut rect);
+        rect
+    }
+
+    fn clamp_rect_position(&self, rect: &mut Rect) {
+        let maximum_x = i32::from(self.output_width.saturating_sub(rect.width));
+        let maximum_y = i32::from(self.output_height.saturating_sub(rect.height))
+            .max(i32::from(self.reserved_top));
+        rect.x = rect.x.clamp(0, maximum_x.max(0));
+        rect.y = rect.y.clamp(i32::from(self.reserved_top), maximum_y);
+    }
+
+    fn index_of(&self, window: u32) -> Option<usize> {
+        self.entries[..self.count]
+            .iter()
+            .position(|entry| entry.window == window)
+    }
+}
+
+fn resolve_size_change(change: ColumnWidthChange, current: u16, available: u16, gap: u16) -> i32 {
+    match change {
+        ColumnWidthChange::Set(size) => i32::from(size.resolve(available, gap)),
+        ColumnWidthChange::AdjustProportion(thousandths) => i32::from(current).saturating_add(
+            i32::from(available.saturating_sub(gap)).saturating_mul(i32::from(thousandths)) / 1000,
+        ),
+        ColumnWidthChange::AdjustFixed(pixels) => i32::from(current).saturating_add(pixels),
+    }
+}
+
 pub struct WorkspaceSet<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize> {
     layouts: [ScrollLayout<COLUMNS, WINDOWS>; WORKSPACES],
+    floating: [FloatingLayout<WINDOWS>; WORKSPACES],
+    floating_active: [bool; WORKSPACES],
     count: usize,
     active: usize,
     previous: usize,
@@ -837,6 +1189,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             layouts: core::array::from_fn(|_| {
                 ScrollLayout::new(output_width, output_height, reserved_top, config)
             }),
+            floating: core::array::from_fn(|_| {
+                FloatingLayout::new(output_width, output_height, reserved_top, config.gaps)
+            }),
+            floating_active: [false; WORKSPACES],
             count,
             active: 0,
             previous: 0,
@@ -860,11 +1216,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn workspace_is_empty(&self, workspace: usize) -> Result<bool, WorkspaceError> {
-        self.layouts
-            .get(workspace)
-            .filter(|_| workspace < self.count)
-            .map(ScrollLayout::is_empty)
-            .ok_or(WorkspaceError::InvalidWorkspace)
+        if workspace >= self.count {
+            return Err(WorkspaceError::InvalidWorkspace);
+        }
+        Ok(self.layouts[workspace].is_empty() && self.floating[workspace].is_empty())
     }
 
     pub fn config(&self) -> LayoutConfig {
@@ -880,86 +1235,246 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             .map_err(WorkspaceError::Layout)
     }
 
-    pub fn focus_window(&mut self, window: u32) -> Result<(), WorkspaceError> {
-        self.layouts[self.active]
-            .focus_window(window)
+    pub fn open_floating_window(
+        &mut self,
+        workspace: usize,
+        window: u32,
+    ) -> Result<(), WorkspaceError> {
+        self.floating
+            .get_mut(workspace)
+            .filter(|_| workspace < self.count)
+            .ok_or(WorkspaceError::InvalidWorkspace)?
+            .add(window, None)
             .map_err(WorkspaceError::Layout)
     }
 
+    pub fn focus_window(&mut self, window: u32) -> Result<(), WorkspaceError> {
+        if self.floating[self.active].contains(window) {
+            self.floating[self.active]
+                .focus(window)
+                .map_err(WorkspaceError::Layout)?;
+            self.floating_active[self.active] = true;
+            return Ok(());
+        }
+        self.layouts[self.active]
+            .focus_window(window)
+            .map_err(WorkspaceError::Layout)?;
+        self.floating_active[self.active] = false;
+        Ok(())
+    }
+
     pub fn close_window(&mut self, window: u32) -> Result<(), WorkspaceError> {
+        if self.floating[self.active].contains(window) {
+            self.floating[self.active]
+                .remove(window)
+                .map_err(WorkspaceError::Layout)?;
+            if self.floating[self.active].is_empty() {
+                self.floating_active[self.active] = false;
+            }
+            return Ok(());
+        }
         self.layouts[self.active]
             .close_window(window)
             .map_err(WorkspaceError::Layout)
     }
 
     pub fn tile_rect(&self, window: u32) -> Result<Rect, WorkspaceError> {
+        if let Some(rect) = self.floating[self.active].rect(window) {
+            return Ok(rect);
+        }
         self.layouts[self.active]
             .tile_rect(window)
             .map_err(WorkspaceError::Layout)
     }
 
     pub fn window_is_visible(&self, window: u32) -> bool {
-        self.layouts[self.active].window_is_visible(window)
+        self.floating[self.active].contains(window)
+            || self.layouts[self.active].window_is_visible(window)
     }
 
     pub fn tabbed_column_info(&self, window: u32) -> Option<TabbedColumnInfo> {
+        if self.floating[self.active].contains(window) {
+            return None;
+        }
         self.layouts[self.active].tabbed_column_info(window)
     }
 
     pub fn focused_window(&self) -> Option<u32> {
-        self.layouts[self.active].focused_window()
+        if self.floating_layer_is_active() {
+            self.floating[self.active]
+                .focused_window()
+                .or_else(|| self.layouts[self.active].focused_window())
+        } else {
+            self.layouts[self.active]
+                .focused_window()
+                .or_else(|| self.floating[self.active].focused_window())
+        }
+    }
+
+    pub fn focused_window_is_floating(&self) -> bool {
+        self.floating_layer_is_active()
+    }
+
+    pub fn window_is_floating(&self, window: u32) -> bool {
+        self.floating[self.active].contains(window)
+    }
+
+    pub fn window_is_floating_anywhere(&self, window: u32) -> bool {
+        self.floating[..self.count]
+            .iter()
+            .any(|layout| layout.contains(window))
+    }
+
+    pub fn floating_window_at_z(&self, index: usize) -> Option<u32> {
+        self.floating[self.active].window_at_z(index)
+    }
+
+    fn floating_layer_is_active(&self) -> bool {
+        !self.floating[self.active].is_empty()
+            && (self.floating_active[self.active] || self.layouts[self.active].is_empty())
     }
 
     pub fn focus_column_left(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].focus_direction(FloatingDirection::Left);
+        }
         self.layouts[self.active].focus_column_left()
     }
 
     pub fn focus_column_right(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].focus_direction(FloatingDirection::Right);
+        }
         self.layouts[self.active].focus_column_right()
     }
 
     pub fn focus_window_up(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].focus_direction(FloatingDirection::Up);
+        }
         self.layouts[self.active].focus_window_up()
     }
 
     pub fn focus_window_down(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].focus_direction(FloatingDirection::Down);
+        }
         self.layouts[self.active].focus_window_down()
     }
 
     pub fn move_column_left(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].move_focused(-FLOATING_MOVE_STEP, 0);
+        }
         self.layouts[self.active].move_column_left()
     }
 
     pub fn move_column_right(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].move_focused(FLOATING_MOVE_STEP, 0);
+        }
         self.layouts[self.active].move_column_right()
     }
 
     pub fn move_window_up(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].move_focused(0, -FLOATING_MOVE_STEP);
+        }
         self.layouts[self.active].move_window_up()
     }
 
     pub fn move_window_down(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].move_focused(0, FLOATING_MOVE_STEP);
+        }
         self.layouts[self.active].move_window_down()
     }
 
     pub fn consume_window_into_column(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
         self.layouts[self.active].consume_window_into_column()
     }
 
     pub fn expel_window_from_column(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
         self.layouts[self.active].expel_window_from_column()
     }
 
     pub fn consume_or_expel_focused_window_left(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
         self.layouts[self.active].consume_or_expel_focused_window_left()
     }
 
     pub fn consume_or_expel_focused_window_right(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
         self.layouts[self.active].consume_or_expel_focused_window_right()
     }
 
     pub fn toggle_focused_column_tabbed_display(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
         self.layouts[self.active].toggle_focused_column_tabbed_display()
+    }
+
+    pub fn toggle_focused_window_floating(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            let Some(window) = self.floating[self.active].focused_window() else {
+                return false;
+            };
+            let entry = self.floating[self.active]
+                .remove(window)
+                .expect("focused floating window is present");
+            if self.layouts[self.active].open_window(window).is_err() {
+                self.floating[self.active]
+                    .add_entry(entry)
+                    .expect("removed floating window has capacity to roll back");
+                return false;
+            }
+            self.floating_active[self.active] = false;
+            return true;
+        }
+        let Some(window) = self.layouts[self.active].focused_window() else {
+            return false;
+        };
+        let Ok(rect) = self.layouts[self.active].tile_rect(window) else {
+            return false;
+        };
+        if self.layouts[self.active].close_window(window).is_err() {
+            return false;
+        }
+        if self.floating[self.active].add(window, Some(rect)).is_err() {
+            self.layouts[self.active]
+                .open_window(window)
+                .expect("detached tiled window has capacity to roll back");
+            return false;
+        }
+        self.floating_active[self.active] = true;
+        true
+    }
+
+    pub fn switch_focus_between_floating_and_tiling(&mut self) -> bool {
+        if self.layouts[self.active].is_empty() || self.floating[self.active].is_empty() {
+            return false;
+        }
+        self.floating_active[self.active] = !self.floating_active[self.active];
+        true
+    }
+
+    pub fn move_focused_floating(&mut self, dx: i32, dy: i32) -> bool {
+        self.focused_window_is_floating() && self.floating[self.active].move_focused(dx, dy)
+    }
+
+    pub fn resize_focused_floating(&mut self, dx: i32, dy: i32) -> bool {
+        self.focused_window_is_floating() && self.floating[self.active].resize_focused(dx, dy)
     }
 
     pub fn scroll_by(&mut self, delta: i32) {
@@ -970,6 +1485,9 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         &mut self,
         change: ColumnWidthChange,
     ) -> Result<bool, WorkspaceError> {
+        if self.focused_window_is_floating() {
+            return Ok(self.floating[self.active].change_focused_width(change));
+        }
         self.layouts[self.active]
             .change_focused_column_width(change)
             .map_err(WorkspaceError::Layout)
@@ -979,53 +1497,159 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         &mut self,
         change: ColumnWidthChange,
     ) -> Result<bool, WorkspaceError> {
+        if self.focused_window_is_floating() {
+            return Ok(self.floating[self.active].change_focused_height(change));
+        }
         self.layouts[self.active]
             .change_focused_window_height(change)
             .map_err(WorkspaceError::Layout)
     }
 
     pub fn reset_focused_window_height(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].reset_focused_height();
+        }
         self.layouts[self.active].reset_focused_window_height()
     }
 
     pub fn switch_preset_column_width(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            let config = self.config();
+            let Some(window) = self.focused_window() else {
+                return false;
+            };
+            let Ok(rect) = self.tile_rect(window) else {
+                return false;
+            };
+            if config.preset_column_widths.is_empty() {
+                return false;
+            }
+            let index = super::next_preset_index(
+                config.preset_column_widths,
+                rect.width,
+                self.floating[self.active].output_width,
+                config.gaps,
+                false,
+            );
+            return self.floating[self.active].change_focused_width(ColumnWidthChange::Set(
+                config
+                    .preset_column_widths
+                    .get(index)
+                    .expect("floating preset index is bounded"),
+            ));
+        }
         self.layouts[self.active].switch_preset_column_width()
     }
 
     pub fn switch_preset_column_width_back(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            let config = self.config();
+            let Some(window) = self.focused_window() else {
+                return false;
+            };
+            let Ok(rect) = self.tile_rect(window) else {
+                return false;
+            };
+            if config.preset_column_widths.is_empty() {
+                return false;
+            }
+            let index = super::next_preset_index(
+                config.preset_column_widths,
+                rect.width,
+                self.floating[self.active].output_width,
+                config.gaps,
+                true,
+            );
+            return self.floating[self.active].change_focused_width(ColumnWidthChange::Set(
+                config
+                    .preset_column_widths
+                    .get(index)
+                    .expect("floating preset index is bounded"),
+            ));
+        }
         self.layouts[self.active].switch_preset_column_width_back()
     }
 
     pub fn switch_preset_window_height(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.switch_floating_preset_height(false);
+        }
         self.layouts[self.active].switch_preset_window_height()
     }
 
     pub fn switch_preset_window_height_back(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.switch_floating_preset_height(true);
+        }
         self.layouts[self.active].switch_preset_window_height_back()
     }
 
     pub fn maximize_focused_column(&mut self) -> bool {
+        if self.focused_window_is_floating() && !self.toggle_focused_window_floating() {
+            return false;
+        }
         self.layouts[self.active].toggle_maximize_focused_column()
     }
 
     pub fn maximize_focused_window_to_edges(&mut self) -> bool {
+        if self.focused_window_is_floating() && !self.toggle_focused_window_floating() {
+            return false;
+        }
         self.layouts[self.active].toggle_maximize_focused_window_to_edges()
     }
 
     pub fn center_focused_column(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].center_focused();
+        }
         self.layouts[self.active].center_focused_column()
     }
 
     pub fn center_visible_columns(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
         self.layouts[self.active].center_visible_columns()
     }
 
     pub fn expand_focused_column_to_available_width(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return self.floating[self.active].expand_focused();
+        }
         self.layouts[self.active].expand_focused_column_to_available_width()
     }
 
     pub fn view_offset(&self) -> i32 {
         self.layouts[self.active].view_offset()
+    }
+
+    fn switch_floating_preset_height(&mut self, backwards: bool) -> bool {
+        let config = self.config();
+        if config.preset_window_heights.is_empty() {
+            return false;
+        }
+        let Some(window) = self.focused_window() else {
+            return false;
+        };
+        let Ok(rect) = self.tile_rect(window) else {
+            return false;
+        };
+        let working_height = self.floating[self.active]
+            .output_height
+            .saturating_sub(self.floating[self.active].reserved_top);
+        let index = super::next_preset_index(
+            config.preset_window_heights,
+            rect.height,
+            working_height,
+            config.gaps,
+            backwards,
+        );
+        self.floating[self.active].change_focused_height(ColumnWidthChange::Set(
+            config
+                .preset_window_heights
+                .get(index)
+                .expect("floating height preset index is bounded"),
+        ))
     }
 
     pub fn focus_workspace_up(&mut self) -> bool {
@@ -1069,15 +1693,35 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         if workspace == self.active {
             return Ok(false);
         }
-        let Some(window) = self.layouts[self.active].focused_window() else {
-            return Ok(false);
-        };
-        self.layouts[workspace]
-            .open_window(window)
-            .map_err(WorkspaceError::Layout)?;
-        self.layouts[self.active]
-            .close_window(window)
-            .map_err(WorkspaceError::Layout)?;
+        if self.focused_window_is_floating() {
+            let Some(window) = self.floating[self.active].focused_window() else {
+                return Ok(false);
+            };
+            let entry = self.floating[self.active]
+                .remove(window)
+                .map_err(WorkspaceError::Layout)?;
+            if let Err(error) = self.floating[workspace].add_entry(entry) {
+                self.floating[self.active]
+                    .add_entry(entry)
+                    .expect("floating workspace move rollback has capacity");
+                return Err(WorkspaceError::Layout(error));
+            }
+            if self.floating[self.active].is_empty() {
+                self.floating_active[self.active] = false;
+            }
+            self.floating_active[workspace] = true;
+        } else {
+            let Some(window) = self.layouts[self.active].focused_window() else {
+                return Ok(false);
+            };
+            self.layouts[workspace]
+                .open_window(window)
+                .map_err(WorkspaceError::Layout)?;
+            self.layouts[self.active]
+                .close_window(window)
+                .map_err(WorkspaceError::Layout)?;
+            self.floating_active[workspace] = false;
+        }
         self.previous = self.active;
         self.active = workspace;
         Ok(true)
@@ -1090,9 +1734,14 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         let mut changed = false;
         let mut workspace = persistent;
         while workspace + 1 < self.count {
-            if self.layouts[workspace].is_empty() && self.active != workspace {
+            if self.layouts[workspace].is_empty()
+                && self.floating[workspace].is_empty()
+                && self.active != workspace
+            {
                 for index in workspace..self.count - 1 {
                     self.layouts.swap(index, index + 1);
+                    self.floating.swap(index, index + 1);
+                    self.floating_active.swap(index, index + 1);
                 }
                 self.count -= 1;
                 if self.active > workspace {
@@ -1108,8 +1757,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
                 workspace += 1;
             }
         }
-        if !self.layouts[self.count - 1].is_empty() && self.count < WORKSPACES {
-            if !self.layouts[self.count].is_empty() {
+        if (!self.layouts[self.count - 1].is_empty() || !self.floating[self.count - 1].is_empty())
+            && self.count < WORKSPACES
+        {
+            if !self.layouts[self.count].is_empty() || !self.floating[self.count].is_empty() {
                 return Err(WorkspaceError::InvalidCount);
             }
             self.count += 1;
@@ -1148,6 +1799,8 @@ mod tests {
                 Mod+BracketLeft { consume-or-expel-window-left; }
                 Mod+BracketRight { consume-or-expel-window-right; }
                 Mod+W { toggle-column-tabbed-display; }
+                Mod+V { toggle-window-floating; }
+                Mod+Shift+V { switch-focus-between-floating-and-tiling; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
                 Mod+Shift+Minus { set-window-height "-10%"; }
@@ -1167,10 +1820,12 @@ mod tests {
             window-rule {
                 match app-id="slopos-config"
                 open-on-workspace "main"
+                open-floating true
             }
             window-rule {
                 match app-id="slopos-config"
                 open-on-workspace "config"
+                open-floating false
             }
             "#,
         )
@@ -1181,7 +1836,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 33);
+        assert_eq!(config.bindings.len(), 35);
         assert_eq!(
             config
                 .bindings
@@ -1379,6 +2034,19 @@ mod tests {
         assert_eq!(
             config
                 .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'V')),
+            Some(NiriAction::ToggleWindowFloating)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::SHIFT),
+                BindingKey::Character(b'V')
+            ),
+            Some(NiriAction::SwitchFocusBetweenFloatingAndTiling)
+        );
+        assert_eq!(
+            config
+                .bindings
                 .action(BindingModifiers::MOD, BindingKey::Minus),
             Some(NiriAction::SetColumnWidth(
                 ColumnWidthChange::AdjustProportion(-100)
@@ -1426,6 +2094,10 @@ mod tests {
             config.window_rules.workspace_for("slopos-config"),
             Some("config")
         );
+        assert_eq!(
+            config.window_rules.floating_for("slopos-config"),
+            Some(false)
+        );
     }
 
     #[test]
@@ -1441,6 +2113,10 @@ mod tests {
         assert_eq!(
             parse_niri_shell_config("binds { Mod+Q { explode-window; } }"),
             Err(NiriConfigError::InvalidBinding)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { open-floating maybe; }"),
+            Err(NiriConfigError::InvalidWindowRule)
         );
         assert!(
             parse_niri_shell_config(
@@ -1466,6 +2142,75 @@ mod tests {
                 Err(NiriConfigError::InvalidBinding)
             );
         }
+    }
+
+    #[test]
+    fn moves_windows_between_tiling_and_floating_layers() {
+        let mut workspaces =
+            WorkspaceSet::<3, 3, 3>::new(2, 1000, 700, 40, LayoutConfig::default()).unwrap();
+        workspaces.open_window(0, 1).unwrap();
+        workspaces.open_window(0, 2).unwrap();
+        workspaces.focus_window(1).unwrap();
+
+        assert!(workspaces.toggle_focused_window_floating());
+        assert!(workspaces.focused_window_is_floating());
+        assert!(workspaces.window_is_floating(1));
+        assert_eq!(
+            workspaces.tile_rect(1).unwrap(),
+            Rect {
+                x: 16,
+                y: 150,
+                width: 476,
+                height: 440,
+            }
+        );
+        assert_eq!(workspaces.tile_rect(2).unwrap().x, 16);
+        assert!(workspaces.switch_focus_between_floating_and_tiling());
+        assert_eq!(workspaces.focused_window(), Some(2));
+        assert!(!workspaces.focused_window_is_floating());
+        assert!(workspaces.switch_focus_between_floating_and_tiling());
+        assert_eq!(workspaces.focused_window(), Some(1));
+
+        assert!(workspaces.move_focused_floating(100, 20));
+        assert_eq!(workspaces.tile_rect(1).unwrap().x, 116);
+        assert_eq!(workspaces.tile_rect(1).unwrap().y, 170);
+        assert!(
+            workspaces
+                .change_focused_column_width(ColumnWidthChange::AdjustFixed(50))
+                .unwrap()
+        );
+        assert_eq!(workspaces.tile_rect(1).unwrap().width, 526);
+        assert!(
+            workspaces
+                .change_focused_window_height(ColumnWidthChange::AdjustFixed(-40))
+                .unwrap()
+        );
+        assert_eq!(workspaces.tile_rect(1).unwrap().height, 400);
+        assert!(workspaces.reset_focused_window_height());
+        assert_eq!(workspaces.tile_rect(1).unwrap().height, 440);
+
+        assert!(workspaces.move_focused_to_workspace(1).unwrap());
+        assert_eq!(workspaces.active(), 1);
+        assert!(workspaces.focused_window_is_floating());
+        assert!(workspaces.window_is_floating(1));
+        assert!(workspaces.toggle_focused_window_floating());
+        assert!(!workspaces.focused_window_is_floating());
+        assert!(!workspaces.window_is_floating(1));
+        assert_eq!(workspaces.tile_rect(1).unwrap().y, 56);
+
+        workspaces.open_floating_window(1, 3).unwrap();
+        workspaces.focus_window(3).unwrap();
+        assert_eq!(workspaces.floating_window_at_z(0), Some(3));
+        assert!(workspaces.switch_focus_between_floating_and_tiling());
+        assert_eq!(workspaces.focused_window(), Some(1));
+        assert!(workspaces.switch_focus_between_floating_and_tiling());
+        assert_eq!(workspaces.focused_window(), Some(3));
+
+        let mut floating_only =
+            WorkspaceSet::<2, 2, 2>::new(1, 1000, 700, 40, LayoutConfig::default()).unwrap();
+        floating_only.open_floating_window(0, 9).unwrap();
+        assert!(floating_only.focused_window_is_floating());
+        assert_eq!(floating_only.focused_window(), Some(9));
     }
 
     #[test]
