@@ -491,10 +491,16 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         .close(write_fd)
         .unwrap_or_else(|_| device.fail("VFS writable descriptor close failed"));
     let create_transaction = mount
-        .probe_file_creation_transactions(&mut device, &journal, write_probe.parent_inode)
+        .probe_file_creation_transactions(
+            &mut device,
+            &journal,
+            write_probe.parent_inode,
+            &mut descriptors,
+        )
         .await;
     crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: create journal transactions valid inode={} parent_inode={} inode_bitmap_block={} group_descriptor_block={} inode_table_block={} directory_block={} free_inodes=7/6/7 size=0 checksums=superblock/group/bitmap/inode/directory transactions=2 sequences={}/{} final_sequence={} test_sequence_rewound=true restored=true path=/usr/share/slopos/create-probe",
+        "SLOPOS-EXT4: VFS create journal transactions valid fd={} inode={} parent_inode={} inode_bitmap_block={} group_descriptor_block={} inode_table_block={} directory_block={} free_inodes=7/6/7 size=0 access=readwrite checksums=superblock/group/bitmap/inode/directory transactions=2 sequences={}/{} final_sequence={} test_sequence_rewound=true restored=true path=/usr/share/slopos/create-probe",
+        create_transaction.fd,
         CREATE_PROBE_INODE,
         write_probe.parent_inode,
         create_transaction.inode_bitmap_block,
@@ -2067,6 +2073,7 @@ impl Ext4Mount {
         device: &mut BlockDevice,
         journal: &JournalProbe,
         parent_inode_number: u32,
+        descriptors: &mut FileDescriptorTable<8>,
     ) -> CreateJournalProbe {
         let group_index = self
             .superblock
@@ -2198,6 +2205,25 @@ impl Ext4Mount {
         {
             device.fail("create probe file readback is invalid");
         }
+        let fd = descriptors
+            .open_with_mode(
+                FileNode {
+                    filesystem_id: ROOT_FILESYSTEM_ID,
+                    node_id: u64::from(created.inode.number),
+                    size: created.inode.size,
+                },
+                AccessMode::ReadWrite,
+            )
+            .unwrap_or_else(|_| device.fail("create probe descriptor allocation failed"));
+        let mut empty_read = [0u8; 1];
+        if fd != 3
+            || read_descriptor(self, device, descriptors, fd, &created, &mut empty_read).await != 0
+        {
+            device.fail("create probe descriptor readback failed");
+        }
+        descriptors
+            .close(fd)
+            .unwrap_or_else(|_| device.fail("create probe descriptor close failed"));
 
         set_superblock_free_inode_count(
             &mut modified.block_mut(0)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
@@ -2276,6 +2302,7 @@ impl Ext4Mount {
         }
 
         CreateJournalProbe {
+            fd,
             inode_bitmap_block: group.inode_bitmap_block,
             group_descriptor_block: group_descriptor_location.block,
             inode_table_block: inode_location.block,
@@ -3165,6 +3192,7 @@ struct AllocationJournalProbe {
 }
 
 struct CreateJournalProbe {
+    fd: u32,
     inode_bitmap_block: u64,
     group_descriptor_block: u64,
     inode_table_block: u64,
