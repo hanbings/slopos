@@ -641,7 +641,12 @@ impl<'a> JsonParser<'a> {
 
     fn module_action_value(&mut self) -> Result<&'a str, BarConfigError> {
         let value = self.string_value()?;
-        if value.is_empty() || value.len() > MAX_BAR_TEXT || !value.is_ascii() {
+        if value.is_empty()
+            || value.len() > MAX_BAR_TEXT
+            || !value
+                .bytes()
+                .all(|byte| byte == b' ' || byte.is_ascii_graphic())
+        {
             return Err(BarConfigError::InvalidModuleOption);
         }
         Ok(value)
@@ -869,6 +874,10 @@ mod tests {
         );
         assert_eq!(
             parse_waybar_config(r#"{ "clock": { "on-click": "状态" } }"#),
+            Err(BarConfigError::InvalidModuleOption)
+        );
+        assert_eq!(
+            parse_waybar_config("{ \"clock\": { \"on-click\": \"status\nabout\" } }"),
             Err(BarConfigError::InvalidModuleOption)
         );
     }
