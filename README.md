@@ -6,7 +6,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 root image 现在包含两个独立 Rust `no_std` ELF：inode 23 的 `/sbin/slop-init`（26344 bytes）和 inode 24 的 `/sbin/slop-shell`（26560 bytes）。kernel 经 ext4 path walker 各跨七个文件块读入；PID 1 image 仍须与 BootInfo v2 保留的 ESP 引导副本逐字节相同，desktop service 则只来自 root VFS。两者各有独立 CR3、user code page、两页 user stack、Linux `argc/argv/envp/auxv`、保存的 syscall/interrupt frame、pending request 和容量 8 的 fd 表。容量 4 的 process table 实现 `Ready/Running/Blocked/Runnable/Exited`；除 `sched_yield` cooperative round-robin 外，100 Hz PIT 现在会在 CPL3 保存全部 15 个 GPR、RIP/RFLAGS/RSP 后抢占当前进程，并由 block-task continuation 选择另一个 Ready/Runnable CR3。QEMU 已实测 PID 1→2 与 PID 2→1 的非合作式切换，两个用户程序各用约 100,000,000 TSC tick 的无 syscall 窗口证明至少被抢占一次，并在其余交错执行中各自拥有数字相同但 ownership 独立的 fd 3。
 
-PID 1 完成 17 次 syscall 与跨两页可逆 write/read，显式关闭最后一个 fd 后以 `wait4(-1)` 常驻为 supervisor；PID 2 分块读取完整 Waybar JSONC 与 swww environment并确认 EOF，再经有 magic/version/size/capability/config-hash 校验的 `slopos-desktop-v1` 私有提交 ABI 发布 CPU/memory provider 值与 Aurora 初始壁纸策略。desktop task 实际应用 policy 后回送 32-byte `policy-applied`，配置 bank 实际应用后另回送 `config-applied`。PID 2 收到后一事件便再次从 root VFS 读取 Waybar/swww、提交下一代 policy，然后继续阻塞等待下一代配置。初始 config generation 1 已推动 policy generation 2；交互 QEMU 又验证 `RELOAD` 的 config generation 2 推动 policy generation 3，而非法 reload 既不发布 config generation 3，也不唤醒出 policy generation 4。PID 1/2 的地址空间、frame、fd table 与 VFS backing array 因而由 block task 常驻持有；framebuffer、输入、niri 状态机与实际合成目前仍属于 kernel mechanism。
+PID 1 完成 17 次 syscall 与跨两页可逆 write/read，显式关闭最后一个 fd 后以 `wait4(-1)` 常驻为 supervisor；PID 2 用 256-byte buffer 流式读取非空、最多 4096-byte 的 Waybar JSONC 与最多 512-byte 的 swww environment，确认 EOF并增量计算 FNV-1a，再经有 magic/version/size/capability/config-hash 校验的 `slopos-desktop-v1` 私有提交 ABI 发布 CPU/memory provider 值与 Aurora 初始壁纸策略。kernel 不再把摘要与编译期默认文件绑定；配置 bank 仍独立执行 UTF-8、JSONC/CSS/KDL/environment parse-before-swap。desktop task 实际应用 policy 后回送 32-byte `policy-applied`，配置 bank 实际应用后另回送 `config-applied`。PID 2 收到后一事件便再次从 root VFS 读取 Waybar/swww、提交下一代 policy，然后继续阻塞等待下一代配置。初始 config generation 1 已推动 policy generation 2；交互 QEMU 又验证 `RELOAD` 的 config generation 2 推动 policy generation 3，而非法 reload 既不发布 config generation 3，也不唤醒出 policy generation 4。PID 1/2 的地址空间、frame、fd table 与 VFS backing array 因而由 block task 常驻持有；framebuffer、输入、niri 状态机与实际合成目前仍属于 kernel mechanism。
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
@@ -25,6 +25,7 @@ QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk�
 - Waybar GTK CSS selector 的颜色、背景、padding/margin 与底边框子集；
 - swww 式 daemon 状态、`img/query/kill` 命令、环境默认值与 CPU transition；
 - root VFS `/sbin/slop-shell` 常驻用户态服务读取 Waybar/swww 配置，经版本化协议发布 bar provider 与 wallpaper policy，并在配置 generation 更新后重读；
+- 非默认但可解析的 Waybar JSONC 能从 ext4 注入并跨 config generation 重新发布；用户服务拒绝空文件和超过 4096/512-byte 上限的输入；
 - 两张可在运行时切换的嵌入式 P3/PNM 壁纸；
 - niri KDL、Waybar JSONC/CSS 与 swww 配置/状态机子集，加桌面提交/事件协议，共 32 项宿主测试；
 - root ext4 上按 XDG/系统/fallback 顺序发现四份桌面配置，parse-before-swap 后以双 bank generation 原子发布；

@@ -6,7 +6,7 @@ SlopOS 桌面以 niri、Waybar 和 swww 的用户习惯作为兼容目标，但�
 
 root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`。PID 2 使用独立 CR3、Linux 风格 initial stack 和 100 Hz TSC preemption 路径启动，以异步 `openat/read/close` 每次最多 256 bytes 分块读取 `/etc/slopos/waybar.jsonc` 与 `/etc/slopos/swww.env`，分别限制为 4096/512 bytes并验证非空 EOF；这些 bytes 不再只是 kernel 内的编译期常量。
 
-`crates/desktop-protocol` 定义 40-byte、显式 magic/version/size 的 `DesktopCommit`。消息包含 Waybar provider 与 swww policy capability、两份配置的增量 FNV-1a hash、CPU/Memory 初始值范围和 wallpaper id；reserved bit/byte 必须为零。私有 syscall `0x534c0001` 只接受 PID 2，并要求上一代 policy 已被实际应用后才接受下一代；kernel 将 hash 与 VFS config bank 当前发布的 bytes 比较，成功后用 release/acquire snapshot 唤醒 desktop task，因此合法的有界自定义配置不必等于编译期 asset。当前 PID 2 发布 CPU 0%、Memory 36% 和 Aurora wallpaper，desktop 在首个 snapshot 到达前明确保持 `awaiting-user-policy`，而不是自行选择初始壁纸。
+`crates/desktop-protocol` 定义 40-byte、显式 magic/version/size 的 `DesktopCommit`。消息包含 Waybar provider 与 swww policy capability、两份实际文件的增量 FNV-1a hash、CPU/Memory 初始值范围和 wallpaper id；reserved bit/byte 必须为零。私有 syscall `0x534c0001` 只接受 PID 2，拒绝零摘要，并要求上一代 policy 已被实际应用后才接受下一代；kernel 不再把摘要与编译期默认 asset 比较。语法、UTF-8 与 top-position 等语义仍由独立 VFS config bank 在发布 `config-applied` 前验证，摘要本身是 service provenance，不是 parser 或认证机制。当前 PID 2 发布 CPU 0%、Memory 36% 和 Aurora wallpaper，desktop 在首个 snapshot 到达前明确保持 `awaiting-user-policy`，而不是自行选择初始壁纸。
 
 私有 syscall `0x534c0002` 建立反向生命周期事件。PID 2 传入 event kind、上一代 generation 与 writable user buffer 后阻塞；desktop task 真正应用 policy 时发布 32-byte `policy-applied`，真正 swap 一套 VFS 配置时发布同结构的 `config-applied`。kernel 分别保存两条单调 generation，验证 kind/generation/capability/reserved fields，复制 event 到 PID 2 user stack并恢复其 CR3/frame。事件可以先于 block task 进入等待而到达，generation 状态仍保证不丢通知。五条主要 QEMU 回归都出现 `Blocked → desktop-event → Runnable`，所以这不是同步伪造的成功返回。
 
@@ -26,6 +26,8 @@ root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`�
 前三份上限各为 4096 bytes，swww environment 上限为 512 bytes；每份都必须是非空 UTF-8。block task 是唯一 writer，在 inactive static bank 中读齐四份文本，先验证 niri layout/shell、Waybar JSONC/top position、Waybar CSS 与 swww environment，再用 release/acquire generation 发布。desktop task 在 local value 中再次 parse，重建 workspace 状态并尽量保留窗口、当前 workspace 与 focus，全部成功后才 swap 并 acknowledge；双 bank 因此不会暴露半套新配置或覆写仍被 renderer 引用的字符串。
 
 Config surface 的按钮或图形 monitor 的 `RELOAD` 命令会唤醒 block task 并触发运行时 VFS 重读。缺失、超长、非法 UTF-8、parse 错误或 early renderer 不支持的非 top Waybar position 都保留上一代。`make test-interaction` 先确认 config generation 1→2 的完整 reload、`config-applied` 唤醒和 PID 2 policy generation 2→3，再以仅供诊断的 `RELOAD BAD` 注入非法 CSS，确认 config 保持 generation 2、service 不被唤醒且没有 policy generation 4；这证明 request/reload/rollback 与常驻 user service 串接路径，不是文件 watcher 或 inotify。当前没有内建配置编辑器，也没有自动监听磁盘变更。
+
+`make test-desktop-custom-config` 复制标准磁盘，在临时 ext4 副本中把默认 904-byte Waybar 文件替换为可解析的 960-byte JSONC（增加用户注释），再从 OVMF 启动。日志要求 PID 2 两轮都读到 960 bytes、policy generation 1/2 都携带相同的非默认 hash `0x7db7bed329c6edbc`、config generation 1 正常应用、服务最后阻塞在 `config-applied after_generation=1`，并拒绝任何 exit/FATAL；宿主最后运行 `e2fsck -fn`。这个回归证明当前支持有界的非默认文件，而不是证明完整 Waybar 配置兼容。
 
 ## niri 式滚动平铺
 
