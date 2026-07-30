@@ -749,7 +749,7 @@ impl Desktop {
         framebuffer.rect(x, y + 110, (window.width - 32) * 36 / 100, 10, CYAN);
         framebuffer.text(x, y + 132, "36% RESERVED DURING BOOT", MUTED, 1);
         framebuffer.text(x, y + 164, "TASKS", WHITE, 1);
-        framebuffer.text(x + 114, y + 164, "PID 1 EXITED OK", GREEN, 1);
+        framebuffer.text(x + 84, y + 164, "PID 1/2 SERVICES", GREEN, 1);
     }
 
     fn render_config(&self, framebuffer: &mut Framebuffer, window: Window) {

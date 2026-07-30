@@ -13,6 +13,7 @@ pub const WALLPAPER_AURORA: u8 = 1;
 pub const COMMIT_SIZE: usize = 40;
 pub const EVENT_SIZE: usize = 32;
 pub const EVENT_POLICY_APPLIED: u16 = 1;
+pub const EVENT_CONFIG_APPLIED: u16 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -141,11 +142,19 @@ pub struct DesktopServiceEvent {
 
 impl DesktopServiceEvent {
     pub const fn policy_applied(generation: u64) -> Self {
+        Self::new(EVENT_POLICY_APPLIED, generation)
+    }
+
+    pub const fn config_applied(generation: u64) -> Self {
+        Self::new(EVENT_CONFIG_APPLIED, generation)
+    }
+
+    const fn new(kind: u16, generation: u64) -> Self {
         Self {
             magic: DESKTOP_PROTOCOL_MAGIC,
             version: DESKTOP_PROTOCOL_VERSION,
             size: EVENT_SIZE as u16,
-            kind: EVENT_POLICY_APPLIED,
+            kind,
             flags: 0,
             generation,
             capabilities: REQUIRED_CAPABILITIES,
@@ -224,7 +233,7 @@ impl DesktopServiceEvent {
         if usize::from(self.size) != EVENT_SIZE {
             return Err(ProtocolError::InvalidSize);
         }
-        if self.kind != EVENT_POLICY_APPLIED {
+        if self.kind != EVENT_POLICY_APPLIED && self.kind != EVENT_CONFIG_APPLIED {
             return Err(ProtocolError::InvalidEvent);
         }
         if self.flags != 0 || self.reserved != [0; 4] {
@@ -323,9 +332,13 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_a_policy_applied_event() {
-        let event = DesktopServiceEvent::policy_applied(7);
-        assert_eq!(DesktopServiceEvent::decode(&event.encode()), Ok(event));
+    fn round_trips_desktop_service_events() {
+        for event in [
+            DesktopServiceEvent::policy_applied(7),
+            DesktopServiceEvent::config_applied(11),
+        ] {
+            assert_eq!(DesktopServiceEvent::decode(&event.encode()), Ok(event));
+        }
     }
 
     #[test]
@@ -347,6 +360,12 @@ mod tests {
         assert_eq!(
             DesktopServiceEvent::decode(&event.encode()),
             Err(ProtocolError::InvalidCapabilities)
+        );
+        event.capabilities = REQUIRED_CAPABILITIES;
+        event.kind = 3;
+        assert_eq!(
+            DesktopServiceEvent::decode(&event.encode()),
+            Err(ProtocolError::InvalidEvent)
         );
     }
 }

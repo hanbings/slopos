@@ -6,11 +6,13 @@ SlopOS 桌面以 niri、Waybar 和 swww 的用户习惯作为兼容目标，但�
 
 root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`。PID 2 使用独立 CR3、Linux 风格 initial stack 和 100 Hz TSC preemption 路径启动，以异步 `openat/read/close` 分块读取恰好 904-byte 的 `/etc/slopos/waybar.jsonc` 与 172-byte 的 `/etc/slopos/swww.env`，并分别做一次 EOF read；这些 bytes 不再只是 kernel 内的编译期常量。
 
-`crates/desktop-protocol` 定义 40-byte、显式 magic/version/size 的 `DesktopCommit`。消息包含 Waybar provider 与 swww policy capability、两份配置的 FNV-1a hash、CPU/Memory 初始值范围和 wallpaper id；reserved bit/byte 必须为零。私有 syscall `0x534c0001` 只接受 PID 2 的第一代提交，kernel 再以自己嵌入的同源 asset 校验 hash，成功后用 release/acquire snapshot 唤醒 desktop task。当前 PID 2 发布 CPU 0%、Memory 36% 和 Aurora wallpaper，desktop 在 snapshot 到达前明确保持 `awaiting-user-policy`，而不是自行选择初始壁纸。
+`crates/desktop-protocol` 定义 40-byte、显式 magic/version/size 的 `DesktopCommit`。消息包含 Waybar provider 与 swww policy capability、两份配置的 FNV-1a hash、CPU/Memory 初始值范围和 wallpaper id；reserved bit/byte 必须为零。私有 syscall `0x534c0001` 只接受 PID 2，并要求上一代 policy 已被实际应用后才接受下一代；kernel 再以自己嵌入的同源 asset 校验 hash，成功后用 release/acquire snapshot 唤醒 desktop task。当前 PID 2 发布 CPU 0%、Memory 36% 和 Aurora wallpaper，desktop 在首个 snapshot 到达前明确保持 `awaiting-user-policy`，而不是自行选择初始壁纸。
 
-私有 syscall `0x534c0002` 建立反向生命周期事件：PID 2 提交后以 writable user buffer 阻塞等待；desktop task 真正应用 policy 后发布 32-byte `policy-applied` event、唤醒 block task，kernel 验证 generation/capability/reserved fields，复制到 PID 2 user stack并恢复其 CR3/frame。四条 QEMU 回归都出现 `Blocked → desktop-event → Runnable`，所以这不是同步伪造的成功返回。
+私有 syscall `0x534c0002` 建立反向生命周期事件。PID 2 传入 event kind、上一代 generation 与 writable user buffer 后阻塞；desktop task 真正应用 policy 时发布 32-byte `policy-applied`，真正 swap 一套 VFS 配置时发布同结构的 `config-applied`。kernel 分别保存两条单调 generation，验证 kind/generation/capability/reserved fields，复制 event 到 PID 2 user stack并恢复其 CR3/frame。事件可以先于 block task 进入等待而到达，generation 状态仍保证不丢通知。四条 QEMU 回归都出现 `Blocked → desktop-event → Runnable`，所以这不是同步伪造的成功返回。
 
-这仍不是完整的用户态桌面。`/sbin/slop-shell` 收到首次应用确认后退出，并由 PID 1 的 `wait4` 回收；PS/2 输入、niri 状态机、运行时配置 reload、swww daemon/transition、surface、GOP renderer 与 composition 仍在 kernel。当前还没有常驻服务、通用 message queue/socket、共享 surface buffer、Wayland protocol 或普通用户 client。
+`/sbin/slop-shell` 现在是跨 reload 常驻的 service：初次提交 policy generation 1 并收到确认后，它等待 config generation 1；收到后重新读取 Waybar/swww、提交 policy generation 2，再等待下一代 config。交互回归中的有效 `RELOAD` 发布 config generation 2，令 PID 2 再读文件并提交 policy generation 3；`RELOAD BAD` 保持 config generation 2，所以 PID 2 继续休眠且没有 policy generation 4。PID 1 在关闭自己的最后一个 fd 后常驻 `wait4` 作为 supervisor，block task 持有两者的 process/VFS runtime。
+
+这仍不是完整的用户态桌面。PS/2 输入、四份配置的发现与 parse bank、niri 状态机、swww daemon/transition、surface、GOP renderer 与 composition 仍在 kernel。当前还没有通用 message queue/socket、共享 surface buffer、Wayland protocol 或普通用户 client。
 
 ## VFS 配置发现与原子重载
 
@@ -23,7 +25,7 @@ root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`�
 
 前三份上限各为 4096 bytes，swww environment 上限为 512 bytes；每份都必须是非空 UTF-8。block task 是唯一 writer，在 inactive static bank 中读齐四份文本，先验证 niri layout/shell、Waybar JSONC/top position、Waybar CSS 与 swww environment，再用 release/acquire generation 发布。desktop task 在 local value 中再次 parse，重建 workspace 状态并尽量保留窗口、当前 workspace 与 focus，全部成功后才 swap 并 acknowledge；双 bank 因此不会暴露半套新配置或覆写仍被 renderer 引用的字符串。
 
-Config surface 的按钮或图形 monitor 的 `RELOAD` 命令会唤醒 block task 并触发运行时 VFS 重读。缺失、超长、非法 UTF-8、parse 错误或 early renderer 不支持的非 top Waybar position 都保留上一代。`make test-interaction` 先确认 generation 1→2 的完整 reload，再以仅供诊断的 `RELOAD BAD` 注入非法 CSS，确认拒绝并保持 generation 2；这证明 request/reload/rollback 路径，不是文件 watcher 或 inotify。当前没有内建配置编辑器，也没有自动监听磁盘变更。
+Config surface 的按钮或图形 monitor 的 `RELOAD` 命令会唤醒 block task 并触发运行时 VFS 重读。缺失、超长、非法 UTF-8、parse 错误或 early renderer 不支持的非 top Waybar position 都保留上一代。`make test-interaction` 先确认 config generation 1→2 的完整 reload、`config-applied` 唤醒和 PID 2 policy generation 2→3，再以仅供诊断的 `RELOAD BAD` 注入非法 CSS，确认 config 保持 generation 2、service 不被唤醒且没有 policy generation 4；这证明 request/reload/rollback 与常驻 user service 串接路径，不是文件 watcher 或 inotify。当前没有内建配置编辑器，也没有自动监听磁盘变更。
 
 ## niri 式滚动平铺
 

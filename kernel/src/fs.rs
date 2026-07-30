@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: 0BSD
 
 use core::cell::UnsafeCell;
+use core::future::Future;
 #[cfg(feature = "journal-replay-injection")]
 use core::future::pending;
+use core::pin::Pin;
 use core::ptr;
+use core::task::{Context, Poll};
+use slopos_desktop_protocol::EVENT_CONFIG_APPLIED;
 use slopos_ext4::{
     DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DIRECTORY_ENTRY_SYMLINK,
     DirectoryBlock, Extent, ExtentNode, FEATURE_INCOMPAT_RECOVER, GroupDescriptor,
@@ -63,6 +67,40 @@ const LINUX_EINVAL: i64 = -22;
 const LINUX_EMFILE: i64 = -24;
 type ProcessOpenFiles =
     [[Option<Ext4File>; PROCESS_FILE_CAPACITY]; crate::process::PROCESS_CAPACITY];
+
+struct UserProcessRuntime {
+    namespace: MountTable<4>,
+    open_files: ProcessOpenFiles,
+    desktop_wait: crate::process::DesktopWaitRequest,
+}
+
+enum BlockRuntimeEvent {
+    Desktop(slopos_desktop_protocol::DesktopServiceEvent),
+    Reload { inject_invalid: bool },
+}
+
+struct NextBlockRuntimeEvent {
+    desktop_wait: crate::process::DesktopWaitRequest,
+}
+
+impl Future for NextBlockRuntimeEvent {
+    type Output = BlockRuntimeEvent;
+
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Some(event) = crate::desktop_service::event_after(
+            self.desktop_wait.kind(),
+            self.desktop_wait.after_generation(),
+        ) {
+            return Poll::Ready(BlockRuntimeEvent::Desktop(event));
+        }
+        if crate::desktop_config::take_reload_request() {
+            return Poll::Ready(BlockRuntimeEvent::Reload {
+                inject_invalid: crate::desktop_config::take_invalid_reload_request(),
+            });
+        }
+        Poll::Pending
+    }
+}
 const NIRI_USER_PATH: [&[u8]; 5] = [b"home", b"slop", b".config", b"niri", b"config.kdl"];
 const NIRI_SYSTEM_PATH: [&[u8]; 3] = [b"etc", b"niri", b"config.kdl"];
 const NIRI_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"niri.kdl"];
@@ -82,8 +120,8 @@ const SWWW_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"swww.env"];
 struct InitExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
 struct DesktopExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
 
-// The block task is the sole writer and invokes PID 1 synchronously before it
-// resumes filesystem work, so the executable bytes cannot be mutated in use.
+// The block task is the sole writer and starts both user processes before it
+// resumes filesystem work. Their executable bytes remain immutable afterward.
 unsafe impl Sync for InitExecutableStorage {}
 unsafe impl Sync for DesktopExecutableStorage {}
 
@@ -189,7 +227,8 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
             ));
         }
     }
-    load_and_run_init(&mut mount, &mut device, boot_user_image).await;
+    let mut user_processes =
+        load_and_start_user_processes(&mut mount, &mut device, boot_user_image).await;
     #[cfg(feature = "journal-replay-injection")]
     if mount.recovery.is_none() {
         let file = mount.open_file(&mut device, &WRITE_PROBE_PATH).await;
@@ -645,17 +684,40 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
         device.max_in_flight()
     ));
     loop {
-        crate::desktop_config::next_reload_request().await;
-        let inject_invalid = crate::desktop_config::take_invalid_reload_request();
-        load_and_publish_desktop_config(&mut mount, &mut device, false, inject_invalid).await;
+        match (NextBlockRuntimeEvent {
+            desktop_wait: user_processes.desktop_wait,
+        })
+        .await
+        {
+            BlockRuntimeEvent::Desktop(event) => {
+                let process_event =
+                    crate::process::resume_desktop_wait(user_processes.desktop_wait, event);
+                user_processes.desktop_wait = drive_user_processes(
+                    &mut mount,
+                    &mut device,
+                    &user_processes.namespace,
+                    &mut user_processes.open_files,
+                    process_event,
+                )
+                .await;
+                crate::serial::serialln(format_args!(
+                    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation={} init=wait4 resources=retained",
+                    user_processes.desktop_wait.after_generation()
+                ));
+            }
+            BlockRuntimeEvent::Reload { inject_invalid } => {
+                load_and_publish_desktop_config(&mut mount, &mut device, false, inject_invalid)
+                    .await;
+            }
+        }
     }
 }
 
-async fn load_and_run_init(
+async fn load_and_start_user_processes(
     mount: &mut Ext4Mount,
     device: &mut BlockDevice,
     boot_user_image: &[u8],
-) {
+) -> UserProcessRuntime {
     let init_executable = mount
         .try_open_file(device, &INIT_EXECUTABLE_PATH)
         .await
@@ -724,11 +786,8 @@ async fn load_and_run_init(
     namespace
         .mount(&root_path, ROOT_FILESYSTEM_ID)
         .unwrap_or_else(|_| device.fail("process VFS root mount failed"));
-    let mut open_files: [[Option<Ext4File>; PROCESS_FILE_CAPACITY];
-        crate::process::PROCESS_CAPACITY] =
-        core::array::from_fn(|_| core::array::from_fn(|_| None));
-    let mut exited_processes = 0usize;
-    let mut event = crate::process::start_processes(
+    let mut open_files: ProcessOpenFiles = core::array::from_fn(|_| core::array::from_fn(|_| None));
+    let event = crate::process::start_processes(
         init_image,
         "vfs",
         INIT_EXECUTABLE_DISPLAY,
@@ -736,19 +795,39 @@ async fn load_and_run_init(
         "vfs",
         DESKTOP_EXECUTABLE_DISPLAY,
     );
+    let desktop_wait =
+        drive_user_processes(mount, device, &namespace, &mut open_files, event).await;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-PROCESS: userspace runtime parked init=wait4 desktop=config-applied after_generation={} resources=retained",
+        desktop_wait.after_generation()
+    ));
+    UserProcessRuntime {
+        namespace,
+        open_files,
+        desktop_wait,
+    }
+}
+
+async fn drive_user_processes(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    namespace: &MountTable<4>,
+    open_files: &mut ProcessOpenFiles,
+    mut event: crate::process::ProcessEvent,
+) -> crate::process::DesktopWaitRequest {
     loop {
         event = match event {
             crate::process::ProcessEvent::OpenAt(request) => {
-                complete_process_openat(mount, device, &namespace, &mut open_files, request).await
+                complete_process_openat(mount, device, namespace, open_files, request).await
             }
             crate::process::ProcessEvent::Read(request) => {
-                complete_process_read(mount, device, &open_files, request).await
+                complete_process_read(mount, device, open_files, request).await
             }
             crate::process::ProcessEvent::Write(request) => {
-                complete_process_write(mount, device, &open_files, request).await
+                complete_process_write(mount, device, open_files, request).await
             }
             crate::process::ProcessEvent::Close(request) => {
-                complete_process_close(&mut open_files, request)
+                complete_process_close(open_files, request)
             }
             crate::process::ProcessEvent::Yielded { pid } => crate::process::schedule_next(pid),
             crate::process::ProcessEvent::Preempted { pid, tick, count } => {
@@ -756,20 +835,17 @@ async fn load_and_run_init(
             }
             crate::process::ProcessEvent::Waiting { pid } => crate::process::schedule_next(pid),
             crate::process::ProcessEvent::DesktopWaiting(request) => {
+                if request.kind() == EVENT_CONFIG_APPLIED {
+                    return request;
+                }
                 let event =
-                    crate::desktop_service::next_applied_event(request.after_generation()).await;
+                    crate::desktop_service::next_event(request.kind(), request.after_generation())
+                        .await;
                 crate::process::resume_desktop_wait(request, event)
             }
             crate::process::ProcessEvent::Exited { pid } => {
-                release_exited_process_files(device, &mut open_files, pid);
-                exited_processes += 1;
-                if let Some(event) = crate::process::reap_exited_process(pid) {
-                    event
-                } else if exited_processes == 2 {
-                    break;
-                } else {
-                    crate::process::schedule_next(pid)
-                }
+                release_exited_process_files(device, open_files, pid);
+                device.fail("persistent user process exited");
             }
         };
     }

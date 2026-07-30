@@ -65,8 +65,8 @@ required_markers=(
     "SLOPOS-VIRTIO: modern block queue ready size=8 capacity_sectors=524288 flush=true"
     "SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT"
     "blocks=65536 inodes=32 groups=2"
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26312 blocks=7 matches_boot=true"
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-shell inode=24 bytes=27512 blocks=7 matches_boot=not-required role=desktop-service"
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26344 blocks=7 matches_boot=true"
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-shell inode=24 bytes=27656 blocks=7 matches_boot=not-required role=desktop-service"
     "SLOPOS-EXT4: root directory valid group_inode_table=37 inode=2 extent_block=39 entries=6 etc_inode=13 lost_found_inode=11 metadata_checksums=group/inode/directory"
     "SLOPOS-CONFIG: VFS load published initial=true generation=1 atomic=true paths=/etc/slopos/niri.kdl,/etc/slopos/waybar.jsonc,/etc/slopos/waybar.css,/etc/slopos/swww.env"
     "SLOPOS-CONFIG: reload applied generation=1 atomic=true niri=/etc/slopos/niri.kdl waybar=/etc/slopos/waybar.jsonc style=/etc/slopos/waybar.css swww=/etc/slopos/swww.env workspaces=3 module_configs=6 css_rules=12"
@@ -94,13 +94,13 @@ required_markers=(
     "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
     "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized"
     "SLOPOS-PROCESS: table initialized capacity=4 processes=2 pids=1/2 roles=init/desktop-service states=ready/ready fd_capacity=8 per_process_fds=true"
-    "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64 entry=0x40000000 segments=1 file_bytes=26312"
-    "load_bytes=2576 memory_bytes=2576 address_space="
+    "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64 entry=0x40000000 segments=1 file_bytes=26344"
+    "load_bytes=2608 memory_bytes=2608 address_space="
     "user_code=0x40000000 user_stack=0x40003000"
     "code=user-readonly stack=user-writable kernel=supervisor"
     "stack_frames="
     "SLOPOS-PROCESS: pid=1 initial_stack abi=linux-x86_64 rsp=0x40002ec0 aligned=16 stack_pages=2 argc=2 argv0=/sbin/slop-init argv1=--system envc=3 auxv_pairs=9 bytes=320"
-    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-shell argv1=--session format=elf64 entry=0x40000000 segments=1 file_bytes=27512 load_bytes=3520 memory_bytes=3520"
+    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-shell argv1=--session format=elf64 entry=0x40000000 segments=1 file_bytes=27656 load_bytes=3664 memory_bytes=3664"
     "SLOPOS-PROCESS: pid=2 initial_stack abi=linux-x86_64 rsp=0x40002ec0 aligned=16 stack_pages=2 argc=2 argv0=/sbin/slop-shell argv1=--session envc=3 auxv_pairs=9 bytes=320"
     "SLOPOS-SYSCALL: fast path ready instruction=syscall return=sysretq"
     "fmask=0x47700 efer_sce=true"
@@ -123,11 +123,9 @@ required_markers=(
     "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=64 user_pages=2 origin=cpl3"
     "SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true flushed=true"
     "SLOPOS-VFS: process read complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true"
+    "SLOPOS-VFS: process close complete pid=1 fd=3 inode=31 async=false"
     "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=18 origin=cpl3 result=18"
-    "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=60 exit status=0 origin=cpl3"
-    "nr=61 wait4 child="
-    "SLOPOS-PROCESS: pid=1 state=exited status=0 syscalls=17 preemptions="
-    "SLOPOS-PROCESS: pid=1 exit resources released descriptors=1 backing_objects=1 address_space_release=pending-reap"
+    "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=61 wait4 child=any state=blocked origin=cpl3"
     "SLOPOS-VFS: process open complete pid=2 fd=3 inode=20 bytes=904 access=readonly async=true path=/etc/slopos/waybar.jsonc"
     "SLOPOS-VFS: process read complete pid=2 fd=3 inode=20 offset=768 requested=136 bytes=136 user_pages=1 cross_page=false async=true"
     "SLOPOS-VFS: process open complete pid=2 fd=3 inode=17 bytes=172 access=readonly async=true path=/etc/slopos/swww.env"
@@ -137,11 +135,14 @@ required_markers=(
     "SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=policy-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3"
     "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=1 owner_pid=2 event=policy-applied wake=block-task"
     "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1"
-    "SLOPOS-PROCESS: pid=2 state=exited status=0 syscalls=17 preemptions="
-    "SLOPOS-PROCESS: pid=2 exit resources released descriptors=0 backing_objects=0 address_space_release=pending-reap"
-    "SLOPOS-PROCESS: pid=2 state=reaped address_space_released=true frames=7 reuse_probe="
-    "SLOPOS-PROCESS: pid=1 wait4 child=2 status=0 child_reaped=true"
-    "SLOPOS-PROCESS: pid=1 state=reaped address_space_released=true frames=7 reuse_probe="
+    "SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=config-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3"
+    "SLOPOS-PROCESS: userspace runtime parked init=wait4 desktop=config-applied after_generation=0 resources=retained"
+    "SLOPOS-DESKTOP-SERVICE: config acknowledged generation=1 event=config-applied wake=block-task"
+    "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=config-applied generation=1"
+    "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=2 protocol=1 capabilities=waybar-provider/swww-policy cpu=0 memory=36 wallpaper=aurora"
+    "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=2 owner_pid=2 event=policy-applied wake=block-task"
+    "SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=config-applied after_generation=1 event_bytes=32 state=blocked origin=cpl3"
+    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=1 init=wait4 resources=retained"
     "SLOPOS-SHELL: config loaded niri_workspaces=3 named=2 binds=7 rules=1 active_columns=2 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4 module_configs=6 css_rules=12"
     "SLOPOS-WAYBAR: formats active workspace={value} window={title} cpu=\"CPU {usage}%\" memory=\"MEM {percentage}%\" intervals=5/10/30/60 css=foreground/background/padding/margin/border-bottom"
     "SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry=1024x768 image=awaiting-user-policy transition=simple step=2 fps=30 policy_owner=user-service"
@@ -160,6 +161,11 @@ for marker in "${required_markers[@]}"; do
         exit 1
     fi
 done
+
+if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; then
+    echo "persistent userspace reached an unexpected exit or fatal path" >&2
+    exit 1
+fi
 
 virtio_summary="$(grep -F "SLOPOS-VIRTIO: bounded block sequence complete requests=" "${serial_log}" | tail -n 1)"
 requests="${virtio_summary#*requests=}"

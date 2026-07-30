@@ -164,6 +164,9 @@ pub extern "C" fn slopos_init_main(initial_stack: *const u64) -> ! {
     {
         exit(7);
     }
+    if syscall1(SYS_CLOSE, fd as u64) != 0 {
+        exit(7);
+    }
     let result = syscall3(
         SYS_WRITE,
         STDOUT,

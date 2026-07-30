@@ -97,7 +97,7 @@ monitor_type() {
 sed -i 's/\r$//' "${serial_log}" "${debugcon_log}"
 
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26312 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26344 blocks=7 matches_boot=true" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64" \
@@ -122,20 +122,38 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true flushed=true" \
     "${serial_log}"
+grep -Fq "SLOPOS-VFS: process close complete pid=1 fd=3 inode=31 async=false" "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=1 exit resources released descriptors=1 backing_objects=1 address_space_release=pending-reap" \
+    "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=61 wait4 child=any state=blocked origin=cpl3" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=2 exit resources released descriptors=0 backing_objects=0 address_space_release=pending-reap" \
+    "SLOPOS-PROCESS: userspace runtime parked init=wait4 desktop=config-applied after_generation=0 resources=retained" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=1 init=wait4 resources=retained" \
     "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: reload requested generation=1 accepted=true" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: VFS load published initial=false generation=2 atomic=true" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: reload applied generation=2 atomic=true" "${serial_log}"
+grep -Fq \
+    "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=config-applied generation=2" \
+    "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=3" "${serial_log}"
+grep -Fq \
+    "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=3 owner_pid=2 event=policy-applied wake=block-task" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=2 init=wait4 resources=retained" \
+    "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: invalid reload requested generation=2 accepted=true" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: VFS load rejected initial=false error=invalid-waybar-style retained_generation=2" "${serial_log}"
 if grep -Fq "SLOPOS-CONFIG: reload applied generation=3" "${serial_log}"; then
     echo "invalid desktop configuration was published" >&2
+    exit 1
+fi
+if grep -Fq "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=4" "${serial_log}"; then
+    echo "desktop service was woken by a rejected configuration" >&2
     exit 1
 fi
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=30" "${serial_log}"
@@ -156,6 +174,10 @@ test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/window-moved.ppm"
 test -s "${repo_dir}/evidence/workspace-config.ppm"
 test -s "${repo_dir}/evidence/wallpaper-only.ppm"
+if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; then
+    echo "persistent userspace reached an unexpected exit or fatal path" >&2
+    exit 1
+fi
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${repo_dir}/evidence/terminal-status.ppm" \
         >"${repo_dir}/evidence/terminal-status.png"

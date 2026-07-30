@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: 0BSD
 
 use core::cell::UnsafeCell;
-use core::future::Future;
-use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use core::task::{Context, Poll};
 use slopos_shell::{
     BarPosition, parse_niri_layout, parse_niri_shell_config, parse_swww_environment,
     parse_waybar_config, parse_waybar_style,
@@ -218,6 +215,7 @@ pub fn latest_after(generation: u64) -> Option<DesktopConfigSources> {
 
 pub fn acknowledge(generation: u64) {
     CONSUMED_GENERATION.store(generation, Ordering::Release);
+    crate::desktop_service::acknowledge_config_applied(generation);
 }
 
 pub fn current_generation() -> u64 {
@@ -239,22 +237,8 @@ pub fn take_invalid_reload_request() -> bool {
     INVALID_RELOAD_REQUESTED.swap(false, Ordering::AcqRel)
 }
 
-pub async fn next_reload_request() {
-    ReloadRequest.await
-}
-
-struct ReloadRequest;
-
-impl Future for ReloadRequest {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
-        if RELOAD_REQUESTED.swap(false, Ordering::AcqRel) {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
-    }
+pub fn take_reload_request() -> bool {
+    RELOAD_REQUESTED.swap(false, Ordering::AcqRel)
 }
 
 fn sources_for_bank(bank: usize, generation: u64) -> DesktopConfigSources {

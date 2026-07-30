@@ -8,7 +8,7 @@ use core::mem::size_of;
 use core::panic::PanicInfo;
 use slopos_desktop_protocol::{
     COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit, DesktopServiceEvent,
-    EVENT_POLICY_APPLIED, EVENT_SIZE, WALLPAPER_AURORA, config_hash,
+    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WALLPAPER_AURORA, config_hash,
 };
 
 const USER_ENTRY: u64 = 0x4000_0000;
@@ -69,8 +69,41 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
         exit(1);
     }
     exercise_preemption();
+    let mut policy_generation = 0;
+    let mut config_generation = 0;
+    let mut announced = false;
+    loop {
+        let commit = load_policy(policy_generation == 0);
+        if syscall2(
+            DESKTOP_COMMIT_SYSCALL,
+            (&raw const commit) as u64,
+            COMMIT_SIZE as u64,
+        ) != 0
+        {
+            exit(8);
+        }
+        policy_generation =
+            wait_for_event(EVENT_POLICY_APPLIED, policy_generation).unwrap_or_else(|| exit(9));
+        if !announced {
+            let result = syscall3(
+                SYS_WRITE,
+                STDOUT,
+                MESSAGE.as_ptr() as u64,
+                MESSAGE.len() as u64,
+            );
+            if result != MESSAGE.len() as i64 {
+                exit(10);
+            }
+            announced = true;
+        }
+        config_generation =
+            wait_for_event(EVENT_CONFIG_APPLIED, config_generation).unwrap_or_else(|| exit(11));
+    }
+}
+
+fn load_policy(yield_after_open: bool) -> DesktopCommit {
     let fd = open(WAYBAR_PATH);
-    if fd != EXPECTED_FD || syscall0(SYS_SCHED_YIELD) != 0 {
+    if fd != EXPECTED_FD || (yield_after_open && syscall0(SYS_SCHED_YIELD) != 0) {
         exit(2);
     }
     let mut waybar = [0u8; EXPECTED_WAYBAR.len()];
@@ -91,48 +124,29 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
     if syscall1(SYS_CLOSE, fd as u64) != 0 {
         exit(7);
     }
-    let commit = DesktopCommit::new(
+    DesktopCommit::new(
         config_hash(&waybar),
         config_hash(&swww),
         0,
         36,
         WALLPAPER_AURORA,
-    );
-    if syscall2(
-        DESKTOP_COMMIT_SYSCALL,
-        (&raw const commit) as u64,
-        COMMIT_SIZE as u64,
-    ) != 0
-    {
-        exit(8);
-    }
+    )
+}
+
+fn wait_for_event(kind: u16, after_generation: u64) -> Option<u64> {
     let mut event_bytes = [0u8; EVENT_SIZE];
-    if syscall3(
+    if syscall4(
         DESKTOP_WAIT_SYSCALL,
         event_bytes.as_mut_ptr() as u64,
         EVENT_SIZE as u64,
-        0,
+        after_generation,
+        u64::from(kind),
     ) != 0
     {
-        exit(9);
+        return None;
     }
-    let Ok(event) = DesktopServiceEvent::decode(&event_bytes) else {
-        exit(10);
-    };
-    if event.kind != EVENT_POLICY_APPLIED || event.generation != 1 {
-        exit(11);
-    }
-    let result = syscall3(
-        SYS_WRITE,
-        STDOUT,
-        MESSAGE.as_ptr() as u64,
-        MESSAGE.len() as u64,
-    );
-    exit(if result == MESSAGE.len() as i64 {
-        0
-    } else {
-        12
-    })
+    let event = DesktopServiceEvent::decode(&event_bytes).ok()?;
+    (event.kind == kind && event.generation > after_generation).then_some(event.generation)
 }
 
 fn open(path: &[u8]) -> i64 {
@@ -345,5 +359,5 @@ fn exit(status: u64) -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
-    exit(13)
+    exit(12)
 }

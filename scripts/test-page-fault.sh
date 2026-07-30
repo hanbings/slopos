@@ -53,7 +53,7 @@ sed -i 's/\r$//' \
     "${repo_dir}/evidence/page-fault-uefi-debugcon.log"
 
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26312 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26344 blocks=7 matches_boot=true" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64" \
@@ -78,11 +78,12 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true flushed=true" \
     "${serial_log}"
+grep -Fq "SLOPOS-VFS: process close complete pid=1 fd=3 inode=31 async=false" "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=1 exit resources released descriptors=1 backing_objects=1 address_space_release=pending-reap" \
+    "SLOPOS-PROCESS: userspace runtime parked init=wait4 desktop=config-applied after_generation=0 resources=retained" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=2 exit resources released descriptors=0 backing_objects=0 address_space_release=pending-reap" \
+    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=1 init=wait4 resources=retained" \
     "${serial_log}"
 grep -Fq "SLOPOS-EXCEPTION: injecting page fault at 0x40000000" "${serial_log}"
 grep -Fq "SLOPOS-EXCEPTION: vector=14" "${serial_log}"

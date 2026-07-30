@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::{Context, Poll};
 use slopos_desktop_protocol::{
     CAPABILITY_SWWW_POLICY, CAPABILITY_WAYBAR_PROVIDER, DesktopCommit, DesktopServiceEvent,
-    WALLPAPER_AURORA, config_hash,
+    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, WALLPAPER_AURORA, config_hash,
 };
 
 const DESKTOP_SERVICE_PID: u32 = 2;
@@ -15,7 +15,8 @@ const EXPECTED_SWWW_HASH: u64 = config_hash(include_bytes!("../../assets/swww.en
 
 static STATE: AtomicU64 = AtomicU64::new(0);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
-static APPLIED_GENERATION: AtomicU64 = AtomicU64::new(0);
+static POLICY_APPLIED_GENERATION: AtomicU64 = AtomicU64::new(0);
+static CONFIG_APPLIED_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DesktopServiceSnapshot {
@@ -32,7 +33,7 @@ pub enum DesktopServiceError {
     PermissionDenied,
     InvalidProtocol,
     ConfigMismatch,
-    AlreadyCommitted,
+    CommitPending,
 }
 
 pub fn submit(pid: u32, commit: DesktopCommit) -> Result<u64, DesktopServiceError> {
@@ -45,26 +46,30 @@ pub fn submit(pid: u32, commit: DesktopCommit) -> Result<u64, DesktopServiceErro
     if commit.waybar_hash != EXPECTED_WAYBAR_HASH || commit.swww_hash != EXPECTED_SWWW_HASH {
         return Err(DesktopServiceError::ConfigMismatch);
     }
-    if GENERATION.load(Ordering::Acquire) != 0 {
-        return Err(DesktopServiceError::AlreadyCommitted);
+    let generation = GENERATION.load(Ordering::Acquire);
+    if generation != POLICY_APPLIED_GENERATION.load(Ordering::Acquire) {
+        return Err(DesktopServiceError::CommitPending);
     }
+    let next_generation = generation
+        .checked_add(1)
+        .ok_or(DesktopServiceError::CommitPending)?;
     let state = u64::from(pid)
         | (u64::from(commit.capabilities) << 32)
         | (u64::from(commit.cpu_usage) << 40)
         | (u64::from(commit.memory_percentage) << 48)
         | (u64::from(commit.wallpaper) << 56);
     STATE.store(state, Ordering::Relaxed);
-    GENERATION.store(1, Ordering::Release);
+    GENERATION.store(next_generation, Ordering::Release);
     crate::executor::wake_task(crate::executor::INPUT_TASK);
     crate::serial::serialln(format_args!(
-        "SLOPOS-DESKTOP-SERVICE: policy submitted pid={pid} generation=1 protocol={} capabilities=waybar-provider/swww-policy cpu={} memory={} wallpaper=aurora config_hashes={:#x}/{:#x}",
+        "SLOPOS-DESKTOP-SERVICE: policy submitted pid={pid} generation={next_generation} protocol={} capabilities=waybar-provider/swww-policy cpu={} memory={} wallpaper=aurora config_hashes={:#x}/{:#x}",
         commit.version,
         commit.cpu_usage,
         commit.memory_percentage,
         commit.waybar_hash,
         commit.swww_hash
     ));
-    Ok(1)
+    Ok(next_generation)
 }
 
 pub fn latest_after(generation: u64) -> Option<DesktopServiceSnapshot> {
@@ -96,8 +101,13 @@ pub fn acknowledge_applied(generation: u64) {
     if generation == 0 || generation != submitted {
         crate::fatal("desktop service acknowledged an invalid policy generation");
     }
-    if APPLIED_GENERATION
-        .compare_exchange(0, generation, Ordering::AcqRel, Ordering::Acquire)
+    if POLICY_APPLIED_GENERATION
+        .compare_exchange(
+            generation - 1,
+            generation,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
         .is_err()
     {
         crate::fatal("desktop service policy was acknowledged more than once");
@@ -108,23 +118,57 @@ pub fn acknowledge_applied(generation: u64) {
     ));
 }
 
-pub async fn next_applied_event(after_generation: u64) -> DesktopServiceEvent {
-    AppliedEvent { after_generation }.await
+pub fn acknowledge_config_applied(generation: u64) {
+    if generation == 0
+        || CONFIG_APPLIED_GENERATION
+            .compare_exchange(
+                generation - 1,
+                generation,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+    {
+        crate::fatal("desktop service observed an invalid config generation");
+    }
+    crate::executor::wake_task(crate::executor::BLOCK_TASK);
+    crate::serial::serialln(format_args!(
+        "SLOPOS-DESKTOP-SERVICE: config acknowledged generation={generation} event=config-applied wake=block-task"
+    ));
 }
 
-struct AppliedEvent {
+pub fn event_after(kind: u16, after_generation: u64) -> Option<DesktopServiceEvent> {
+    let generation = match kind {
+        EVENT_POLICY_APPLIED => POLICY_APPLIED_GENERATION.load(Ordering::Acquire),
+        EVENT_CONFIG_APPLIED => CONFIG_APPLIED_GENERATION.load(Ordering::Acquire),
+        _ => return None,
+    };
+    if generation == 0 || generation <= after_generation {
+        None
+    } else if kind == EVENT_POLICY_APPLIED {
+        Some(DesktopServiceEvent::policy_applied(generation))
+    } else {
+        Some(DesktopServiceEvent::config_applied(generation))
+    }
+}
+
+pub async fn next_event(kind: u16, after_generation: u64) -> DesktopServiceEvent {
+    ServiceEvent {
+        kind,
+        after_generation,
+    }
+    .await
+}
+
+struct ServiceEvent {
+    kind: u16,
     after_generation: u64,
 }
 
-impl Future for AppliedEvent {
+impl Future for ServiceEvent {
     type Output = DesktopServiceEvent;
 
     fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
-        let generation = APPLIED_GENERATION.load(Ordering::Acquire);
-        if generation == 0 || generation <= self.after_generation {
-            Poll::Pending
-        } else {
-            Poll::Ready(DesktopServiceEvent::policy_applied(generation))
-        }
+        event_after(self.kind, self.after_generation).map_or(Poll::Pending, Poll::Ready)
     }
 }

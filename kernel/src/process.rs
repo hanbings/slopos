@@ -6,7 +6,7 @@ use core::cell::UnsafeCell;
 use core::ptr;
 use slopos_desktop_protocol::{
     COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit, DesktopServiceEvent,
-    EVENT_SIZE,
+    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE,
 };
 use slopos_process::{
     ProcessError, ProcessImage, ProcessState, ProcessTable, build_linux_initial_stack,
@@ -17,7 +17,7 @@ const INIT_PID: u32 = 1;
 const DESKTOP_PID: u32 = 2;
 pub const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
-const INIT_EXPECTED_SYSCALLS: u64 = 17;
+const INIT_EXPECTED_SYSCALLS: u64 = 18;
 const DESKTOP_EXPECTED_SYSCALLS: u64 = 17;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
@@ -167,6 +167,7 @@ pub struct CloseRequest {
 #[derive(Clone, Copy)]
 struct WaitRequest {
     pid: u32,
+    #[allow(dead_code)]
     status_address: u64,
 }
 
@@ -174,10 +175,15 @@ struct WaitRequest {
 pub struct DesktopWaitRequest {
     pid: u32,
     destination: u64,
+    kind: u16,
     after_generation: u64,
 }
 
 impl DesktopWaitRequest {
+    pub const fn kind(&self) -> u16 {
+        self.kind
+    }
+
     pub const fn after_generation(&self) -> u64 {
         self.after_generation
     }
@@ -596,6 +602,7 @@ pub(crate) fn preempt_from_timer(frame: &InterruptFrame, tick: u64) -> bool {
     true
 }
 
+#[allow(dead_code)]
 pub fn reap_exited_process(pid: u32) -> Option<ProcessEvent> {
     let process = process_table()
         .snapshot(pid)
@@ -729,8 +736,10 @@ pub fn resume_desktop_wait(
     };
     if pending_request.pid != request.pid
         || pending_request.destination != request.destination
+        || pending_request.kind != request.kind
         || pending_request.after_generation != request.after_generation
         || event.validate().is_err()
+        || event.kind != request.kind
         || event.generation <= request.after_generation
     {
         crate::fatal("desktop event completion failed validation");
@@ -749,10 +758,19 @@ pub fn resume_desktop_wait(
         .mark_runnable(pid)
         .unwrap_or_else(|_| crate::fatal("desktop service blocked-to-runnable transition failed"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-SCHED: pid={pid} state=blocked->runnable reason=desktop-event event=policy-applied generation={}",
-        event.generation
+        "SLOPOS-SCHED: pid={pid} state=blocked->runnable reason=desktop-event event={} generation={}",
+        desktop_event_name(event.kind),
+        event.generation,
     ));
     run_process(pid)
+}
+
+const fn desktop_event_name(kind: u16) -> &'static str {
+    match kind {
+        EVENT_POLICY_APPLIED => "policy-applied",
+        EVENT_CONFIG_APPLIED => "config-applied",
+        _ => "invalid",
+    }
 }
 
 pub fn schedule_next(after_pid: u32) -> ProcessEvent {
@@ -1057,7 +1075,14 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             0
         }
         DESKTOP_WAIT_SYSCALL => {
-            if pid != DESKTOP_PID || frame.rsi != EVENT_SIZE as u64 || frame.rdx != 0 {
+            let Ok(kind) = u16::try_from(frame.r10) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            if pid != DESKTOP_PID
+                || frame.rsi != EVENT_SIZE as u64
+                || !matches!(kind, EVENT_POLICY_APPLIED | EVENT_CONFIG_APPLIED)
+            {
                 frame.rax = LINUX_EINVAL as u64;
                 return 0;
             }
@@ -1068,12 +1093,14 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             let request = DesktopWaitRequest {
                 pid,
                 destination: frame.rdi,
+                kind,
                 after_generation: frame.rdx,
             };
             suspend_io_syscall(pid, frame, PendingSyscall::DesktopWait(request));
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={pid} abi=slopos-desktop-v1 entry=syscall return=kernel nr={DESKTOP_WAIT_SYSCALL} wait_event=policy-applied after_generation={} event_bytes={EVENT_SIZE} state=blocked origin=cpl3",
-                request.after_generation
+                "SLOPOS-SYSCALL: pid={pid} abi=slopos-desktop-v1 entry=syscall return=kernel nr={DESKTOP_WAIT_SYSCALL} wait_event={} after_generation={} event_bytes={EVENT_SIZE} state=blocked origin=cpl3",
+                desktop_event_name(request.kind),
+                request.after_generation,
             ));
             2
         }
