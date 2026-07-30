@@ -4,8 +4,8 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=151344
-SLOPOS-UEFI: kernel mapped 0x4000000..0x4015000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=157208
+SLOPOS-UEFI: kernel mapped 0x4000000..0x4016000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: Boot Services exited descriptors=117
 SLOPOS-UEFI: transferring control to kernel
@@ -15,7 +15,7 @@ SLOPOS-ACPI: XSDT MADT validated cpus=1 lapic=0xfee00000 ioapics=1 overrides=5 i
 SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
 SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
 SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
-SLOPOS-MM: frame allocator initialized regions=8 free_frames=53012 probe=0x100000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=53011 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
@@ -49,9 +49,10 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: cross-block directory valid directory_inode=22 directory_blocks=2 entry_block=1 target_inode=23 target_bytes=40 metadata_checksums=valid path=/usr/share/slopos/large-directory/tail-29
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: fast symlink valid link_inode=14 target_inode=17 target_bytes=40 target=slopos-release path=/etc/current-release
-SLOPOS-FS: block cache entries=8 hits=39 misses=39 batched_pairs=1
-SLOPOS-VIRTIO: bounded block sequence complete requests=40 max_in_flight=2 interrupts=39 queue_interrupts=39
-SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=39/39
-SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=39/39
-SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=39/39
-SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=39/39
+SLOPOS-VFS: namespace valid mounts=1 root_fs=1 fd=3 inode=16 bytes=76 chunk_reads=5 seek_offset=7 seek_bytes=11
+SLOPOS-FS: block cache entries=8 hits=50 misses=41 batched_pairs=1
+SLOPOS-VIRTIO: bounded block sequence complete requests=42 max_in_flight=2 interrupts=41 queue_interrupts=41
+SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=41/41
+SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=41/41
+SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=41/41
+SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=41/41
