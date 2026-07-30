@@ -10,6 +10,9 @@ build = "build.rs"
 name = "slopos-kernel"
 path = "src/main.rs"
 
+[features]
+journal-replay-injection = []
+
 [dependencies]
 slopos-acpi = { path = "../crates/acpi" }
 slopos-boot-protocol = { path = "../crates/boot-protocol" }

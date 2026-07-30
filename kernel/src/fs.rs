@@ -4,10 +4,11 @@ use core::future::pending;
 use core::ptr;
 use slopos_ext4::{
     DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DIRECTORY_ENTRY_SYMLINK,
-    DirectoryBlock, Extent, ExtentNode, GroupDescriptor, INODE_FLAG_DIRECTORY_INDEX, Inode,
-    JOURNAL_INODE, JournalCommit, JournalDescriptor, JournalSuperblock, ParseError, ROOT_INODE,
-    SUPERBLOCK_SIZE, Superblock, encode_single_block_journal_transaction, set_inode_size,
-    set_journal_superblock_state, set_superblock_recovery, validate_path_component,
+    DirectoryBlock, Extent, ExtentNode, FEATURE_INCOMPAT_RECOVER, GroupDescriptor,
+    INODE_FLAG_DIRECTORY_INDEX, Inode, JOURNAL_INODE, JournalCommit, JournalDescriptor,
+    JournalSuperblock, ParseError, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
+    decode_single_block_journal_transaction, encode_single_block_journal_transaction,
+    set_inode_size, set_journal_superblock_state, set_superblock_recovery, validate_path_component,
 };
 use slopos_vfs::{AbsolutePath, AccessMode, FileDescriptorTable, FileNode, MountTable};
 
@@ -41,6 +42,46 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         device.flush_supported()
     ));
     let mut mount = Ext4Mount::mount(&mut device).await;
+    if let Some(recovery) = mount.recovery {
+        if recovery.replayed {
+            crate::serial::serialln(format_args!(
+                "SLOPOS-EXT4: journal recovery replayed sequence={} start={} target_block={} escaped={} home_readback=true next_sequence={} records_cleared=true recovery=false",
+                recovery.sequence,
+                recovery.start,
+                recovery.target_block,
+                recovery.escaped,
+                recovery.next_sequence
+            ));
+        } else {
+            crate::serial::serialln(format_args!(
+                "SLOPOS-EXT4: journal recovery completed sequence={} start=0 replayed=false recovery=false",
+                recovery.sequence
+            ));
+        }
+    }
+    #[cfg(feature = "journal-replay-injection")]
+    if mount.recovery.is_none() {
+        let file = mount.open_file(&mut device, &WRITE_PROBE_PATH).await;
+        let target_block = mount
+            .inode_physical_block(&mut device, &file.inode, 0)
+            .await
+            .unwrap_or_else(|| device.fail("journal replay injection target is sparse"));
+        let journal = mount.probe_journal(&mut device).await;
+        mount
+            .inject_committed_journal_transaction(
+                &mut device,
+                &journal,
+                target_block,
+                &WRITE_PROBE_ORIGINAL_BLOCK,
+            )
+            .await;
+        crate::serial::serialln(format_args!(
+            "SLOPOS-EXT4: journal crash injected sequence={} start={} target_block={} old_home=J new_home=P crash_point=after_commit_before_home writes=6 flushes=5",
+            journal.superblock.sequence, journal.superblock.first_log_block, target_block
+        ));
+        pending::<()>().await;
+        unreachable!();
+    }
     let superblock = &mount.superblock;
     let volume_name = core::str::from_utf8(superblock.volume_name())
         .unwrap_or_else(|_| device.fail("ext4 volume label is not UTF-8"));
@@ -267,6 +308,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         .inode_physical_block(&mut device, &write_probe.inode, 0)
         .await
         .unwrap_or_else(|| device.fail("ext4 write probe is sparse"));
+    let write_probe_initial_invalidations = mount.cache.invalidations;
     let write_fd = descriptors
         .open_with_mode(
             FileNode {
@@ -352,7 +394,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     {
         device.fail("VFS partial write restoration failed");
     }
-    if mount.cache.invalidations != 2 {
+    if mount.cache.invalidations != write_probe_initial_invalidations + 2 {
         device.fail("ext4 write probe cache invalidation count mismatch");
     }
     descriptors
@@ -362,7 +404,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         "SLOPOS-VFS: writable descriptor valid fd={write_fd} inode={} physical_block={physical_block} offset=123 bytes={} writes=2 flushes=2 cache_invalidations={} restored=true path=/usr/share/slopos/write-probe.bin",
         write_probe.inode.number,
         write_bytes.len(),
-        mount.cache.invalidations
+        mount.cache.invalidations - write_probe_initial_invalidations
     ));
 
     let journal = mount.probe_journal(&mut device).await;
@@ -435,6 +477,7 @@ struct Ext4Mount {
     superblock: Superblock,
     group0: GroupDescriptor,
     cache: BlockCache,
+    recovery: Option<JournalRecovery>,
 }
 
 async fn read_descriptor(
@@ -532,17 +575,408 @@ async fn write_descriptor(
 impl Ext4Mount {
     async fn mount(device: &mut BlockDevice) -> Self {
         device.read(SUPERBLOCK_SECTOR, SUPERBLOCK_SIZE).await;
-        let superblock = Superblock::parse(device.data(SUPERBLOCK_SIZE))
-            .unwrap_or_else(|_| device.fail("ext4 superblock validation failed"));
+        let (superblock, recovery_required) = match Superblock::parse(device.data(SUPERBLOCK_SIZE))
+        {
+            Ok(superblock) => (superblock, false),
+            Err(ParseError::DirtyFilesystem) => {
+                let superblock = Superblock::parse_for_recovery(device.data(SUPERBLOCK_SIZE))
+                    .unwrap_or_else(|_| device.fail("ext4 recovery superblock is invalid"));
+                if superblock.feature_incompat & FEATURE_INCOMPAT_RECOVER == 0 {
+                    device.fail("ext4 dirty state has no replayable journal");
+                }
+                (superblock, true)
+            }
+            Err(_) => device.fail("ext4 superblock validation failed"),
+        };
         if superblock.block_size as usize != BLOCK_SIZE {
             device.fail("ext4 mount requires a 4096-byte block size");
         }
         let mut cache = BlockCache::new();
         let group0 = read_group_descriptor(device, &superblock, 0, &mut cache).await;
-        Self {
+        let mut mount = Self {
             superblock,
             group0,
             cache,
+            recovery: None,
+        };
+        if recovery_required {
+            let journal = mount.probe_journal(device).await;
+            mount.recovery = Some(mount.replay_single_block_journal(device, &journal).await);
+        }
+        mount
+    }
+
+    async fn replay_single_block_journal(
+        &mut self,
+        device: &mut BlockDevice,
+        journal: &JournalProbe,
+    ) -> JournalRecovery {
+        let start = journal.superblock.start;
+        if start == 0 {
+            let filesystem_sector = block_to_sector(device, &self.superblock, 0);
+            let mut scratch = JournalStateScratch::new();
+            device.read(filesystem_sector, BLOCK_SIZE).await;
+            scratch
+                .filesystem_block_mut()
+                .copy_from_slice(device.data(BLOCK_SIZE));
+            set_superblock_recovery(
+                &mut scratch.filesystem_block_mut()
+                    [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+                false,
+            )
+            .unwrap_or_else(|_| device.fail("inactive JBD2 recovery cleanup failed"));
+            device
+                .write(filesystem_sector, scratch.filesystem_block())
+                .await;
+            device.flush().await;
+            device.read(filesystem_sector, BLOCK_SIZE).await;
+            let clean_superblock = Superblock::parse(
+                &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            )
+            .unwrap_or_else(|_| device.fail("inactive JBD2 recovery readback failed"));
+            if device.data(BLOCK_SIZE) != scratch.filesystem_block() {
+                device.fail("inactive JBD2 recovery cleanup mismatch");
+            }
+            self.superblock = clean_superblock;
+            return JournalRecovery {
+                replayed: false,
+                sequence: journal.superblock.sequence,
+                start,
+                target_block: 0,
+                escaped: false,
+                next_sequence: journal.superblock.sequence,
+            };
+        }
+        let descriptor_block = journal
+            .physical_block
+            .checked_add(u64::from(start))
+            .unwrap_or_else(|| device.fail("JBD2 recovery descriptor block overflow"));
+        let data_block = descriptor_block
+            .checked_add(1)
+            .unwrap_or_else(|| device.fail("JBD2 recovery data block overflow"));
+        let commit_block = descriptor_block
+            .checked_add(2)
+            .unwrap_or_else(|| device.fail("JBD2 recovery commit block overflow"));
+        let journal_end = journal
+            .physical_block
+            .checked_add(u64::from(journal.superblock.max_length))
+            .unwrap_or_else(|| device.fail("JBD2 recovery extent overflow"));
+        if commit_block >= journal_end {
+            device.fail("wrapped JBD2 recovery transaction is unsupported");
+        }
+
+        let filesystem_sector = block_to_sector(device, &self.superblock, 0);
+        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
+        let mut scratch = JournalReplayScratch::new();
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        scratch
+            .transaction
+            .state
+            .filesystem_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        if Superblock::parse(
+            &scratch.transaction.state.filesystem_block()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+        ) != Err(ParseError::DirtyFilesystem)
+        {
+            device.fail("JBD2 recovery requires the ext4 recovery flag");
+        }
+        device.read(journal_sector, BLOCK_SIZE).await;
+        scratch
+            .transaction
+            .state
+            .journal_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        if JournalSuperblock::parse(scratch.transaction.state.journal_block())
+            != Ok(journal.superblock)
+        {
+            device.fail("JBD2 recovery superblock changed during mount");
+        }
+
+        device
+            .read(
+                block_to_sector(device, &self.superblock, descriptor_block),
+                BLOCK_SIZE,
+            )
+            .await;
+        scratch
+            .transaction
+            .records
+            .descriptor_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        device
+            .read(
+                block_to_sector(device, &self.superblock, data_block),
+                BLOCK_SIZE,
+            )
+            .await;
+        scratch
+            .transaction
+            .records
+            .data_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        device
+            .read(
+                block_to_sector(device, &self.superblock, commit_block),
+                BLOCK_SIZE,
+            )
+            .await;
+        scratch
+            .transaction
+            .records
+            .commit_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+
+        let descriptor = decode_single_block_journal_transaction(
+            scratch_frame_bytes_mut(scratch.home_frame),
+            scratch_frame_bytes(scratch.transaction.records.descriptor_frame),
+            scratch_frame_bytes(scratch.transaction.records.data_frame),
+            scratch_frame_bytes(scratch.transaction.records.commit_frame),
+            journal.superblock.sequence,
+            &self.superblock.uuid,
+        )
+        .unwrap_or_else(|_| device.fail("JBD2 recovery transaction validation failed"));
+        let target_block = u64::from(descriptor.target_block);
+        if target_block == 0
+            || target_block >= self.superblock.block_count
+            || (target_block >= journal.physical_block && target_block < journal_end)
+        {
+            device.fail("JBD2 recovery target block is unsafe");
+        }
+
+        device
+            .write(
+                block_to_sector(device, &self.superblock, target_block),
+                scratch.home_block(),
+            )
+            .await;
+        device.flush().await;
+        device
+            .read(
+                block_to_sector(device, &self.superblock, target_block),
+                BLOCK_SIZE,
+            )
+            .await;
+        if device.data(BLOCK_SIZE) != scratch.home_block() {
+            device.fail("JBD2 recovery home-block readback mismatch");
+        }
+        self.cache.invalidate(target_block);
+
+        let next_sequence = journal
+            .superblock
+            .sequence
+            .checked_add(1)
+            .unwrap_or_else(|| device.fail("JBD2 recovery sequence overflow"));
+        set_journal_superblock_state(
+            scratch.transaction.state.journal_block_mut(),
+            next_sequence,
+            0,
+        )
+        .unwrap_or_else(|_| device.fail("JBD2 recovery checkpoint update failed"));
+        for block in [descriptor_block, data_block, commit_block] {
+            device
+                .write(
+                    block_to_sector(device, &self.superblock, block),
+                    &ZERO_BLOCK,
+                )
+                .await;
+        }
+        device
+            .write(journal_sector, scratch.transaction.state.journal_block())
+            .await;
+        device.flush().await;
+        self.cache.invalidate(journal.physical_block);
+
+        set_superblock_recovery(
+            &mut scratch.transaction.state.filesystem_block_mut()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            false,
+        )
+        .unwrap_or_else(|_| device.fail("ext4 recovery flag clearing failed"));
+        device
+            .write(
+                filesystem_sector,
+                scratch.transaction.state.filesystem_block(),
+            )
+            .await;
+        device.flush().await;
+
+        device.read(journal_sector, BLOCK_SIZE).await;
+        let checkpointed = JournalSuperblock::parse(device.data(BLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("JBD2 recovery checkpoint readback failed"));
+        if device.data(BLOCK_SIZE) != scratch.transaction.state.journal_block()
+            || checkpointed.sequence != next_sequence
+            || checkpointed.start != 0
+        {
+            device.fail("JBD2 recovery checkpoint state mismatch");
+        }
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        let clean_superblock = Superblock::parse(
+            &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+        )
+        .unwrap_or_else(|_| device.fail("ext4 recovery cleanup validation failed"));
+        if device.data(BLOCK_SIZE) != scratch.transaction.state.filesystem_block() {
+            device.fail("ext4 recovery cleanup readback mismatch");
+        }
+        self.superblock = clean_superblock;
+
+        JournalRecovery {
+            replayed: true,
+            sequence: journal.superblock.sequence,
+            start,
+            target_block: descriptor.target_block,
+            escaped: descriptor.escaped,
+            next_sequence,
+        }
+    }
+
+    #[cfg(feature = "journal-replay-injection")]
+    async fn inject_committed_journal_transaction(
+        &mut self,
+        device: &mut BlockDevice,
+        journal: &JournalProbe,
+        target_block: u64,
+        new_home: &[u8],
+    ) {
+        if journal.superblock.start != 0 || new_home.len() != BLOCK_SIZE {
+            device.fail("journal replay injection requires a clean single-block journal");
+        }
+        let descriptor_block = journal
+            .physical_block
+            .checked_add(u64::from(journal.superblock.first_log_block))
+            .unwrap_or_else(|| device.fail("journal replay injection descriptor overflow"));
+        let data_block = descriptor_block
+            .checked_add(1)
+            .unwrap_or_else(|| device.fail("journal replay injection data overflow"));
+        let commit_block = descriptor_block
+            .checked_add(2)
+            .unwrap_or_else(|| device.fail("journal replay injection commit overflow"));
+        let journal_end = journal
+            .physical_block
+            .checked_add(u64::from(journal.superblock.max_length))
+            .unwrap_or_else(|| device.fail("journal replay injection extent overflow"));
+        if commit_block >= journal_end {
+            device.fail("journal replay injection exceeds journal extent");
+        }
+
+        let filesystem_sector = block_to_sector(device, &self.superblock, 0);
+        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
+        let target_sector = block_to_sector(device, &self.superblock, target_block);
+        let mut scratch = ActiveJournalScratch::new();
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        scratch
+            .state
+            .filesystem_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        device.read(journal_sector, BLOCK_SIZE).await;
+        scratch
+            .state
+            .journal_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        device.read(target_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != new_home {
+            device.fail("journal replay injection new home is not the expected original");
+        }
+        for block in [descriptor_block, data_block, commit_block] {
+            device
+                .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
+                .await;
+            if device.data(BLOCK_SIZE).iter().any(|byte| *byte != 0) {
+                device.fail("journal replay injection record block is not empty");
+            }
+        }
+
+        let target_block_u32 = u32::try_from(target_block)
+            .unwrap_or_else(|_| device.fail("journal replay injection target exceeds 32 bits"));
+        {
+            let (descriptor, data, commit) = scratch.records.buffers();
+            encode_single_block_journal_transaction(
+                descriptor,
+                data,
+                commit,
+                journal.superblock.sequence,
+                target_block_u32,
+                &self.superblock.uuid,
+                new_home,
+            )
+            .unwrap_or_else(|_| device.fail("journal replay injection encoding failed"));
+        }
+
+        device.write(target_sector, &JOURNAL_PROBE_BLOCK).await;
+        device.flush().await;
+        set_superblock_recovery(
+            &mut scratch.state.filesystem_block_mut()
+                [SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            true,
+        )
+        .unwrap_or_else(|_| device.fail("journal replay injection recovery update failed"));
+        device
+            .write(filesystem_sector, scratch.state.filesystem_block())
+            .await;
+        device.flush().await;
+        set_journal_superblock_state(
+            scratch.state.journal_block_mut(),
+            journal.superblock.sequence,
+            journal.superblock.first_log_block,
+        )
+        .unwrap_or_else(|_| device.fail("journal replay injection state update failed"));
+        device
+            .write(journal_sector, scratch.state.journal_block())
+            .await;
+        device.flush().await;
+        device
+            .write(
+                block_to_sector(device, &self.superblock, descriptor_block),
+                scratch.records.descriptor(),
+            )
+            .await;
+        device
+            .write(
+                block_to_sector(device, &self.superblock, data_block),
+                scratch.records.data(),
+            )
+            .await;
+        device.flush().await;
+        device
+            .write(
+                block_to_sector(device, &self.superblock, commit_block),
+                scratch.records.commit(),
+            )
+            .await;
+        device.flush().await;
+
+        device.read(filesystem_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != scratch.state.filesystem_block()
+            || Superblock::parse(
+                &device.data(BLOCK_SIZE)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            ) != Err(ParseError::DirtyFilesystem)
+        {
+            device.fail("journal replay injection dirty state readback mismatch");
+        }
+        device.read(journal_sector, BLOCK_SIZE).await;
+        let active = JournalSuperblock::parse(device.data(BLOCK_SIZE))
+            .unwrap_or_else(|_| device.fail("journal replay injection state readback failed"));
+        if device.data(BLOCK_SIZE) != scratch.state.journal_block()
+            || active.sequence != journal.superblock.sequence
+            || active.start != journal.superblock.first_log_block
+        {
+            device.fail("journal replay injection active state mismatch");
+        }
+        for (block, expected) in [
+            (descriptor_block, scratch.records.descriptor()),
+            (data_block, scratch.records.data()),
+            (commit_block, scratch.records.commit()),
+        ] {
+            device
+                .read(block_to_sector(device, &self.superblock, block), BLOCK_SIZE)
+                .await;
+            if device.data(BLOCK_SIZE) != expected {
+                device.fail("journal replay injection record readback mismatch");
+            }
+        }
+        device.read(target_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE).iter().any(|byte| *byte != b'J') {
+            device.fail("journal replay injection old home readback mismatch");
         }
     }
 
@@ -605,7 +1039,8 @@ impl Ext4Mount {
             || u64::from(superblock.max_length) != expected_blocks
             || superblock.first_log_block != 1
             || superblock.sequence == 0
-            || superblock.start != 0
+            || (self.superblock.feature_incompat & FEATURE_INCOMPAT_RECOVER == 0
+                && superblock.start != 0)
             || superblock.error != 0
             || superblock.user_count != 1
             || superblock.uuid != self.superblock.uuid
@@ -1762,6 +2197,16 @@ struct JournalStateProbe {
     active_start: u32,
 }
 
+#[derive(Clone, Copy)]
+struct JournalRecovery {
+    replayed: bool,
+    sequence: u32,
+    start: u32,
+    target_block: u32,
+    escaped: bool,
+    next_sequence: u32,
+}
+
 struct ActiveJournalProbe {
     sequence: u32,
     target_block: u32,
@@ -1786,6 +2231,24 @@ impl ActiveJournalScratch {
             records: JournalScratch::new(),
             state: JournalStateScratch::new(),
         }
+    }
+}
+
+struct JournalReplayScratch {
+    transaction: ActiveJournalScratch,
+    home_frame: usize,
+}
+
+impl JournalReplayScratch {
+    fn new() -> Self {
+        Self {
+            transaction: ActiveJournalScratch::new(),
+            home_frame: allocate_scratch_frame(),
+        }
+    }
+
+    fn home_block(&self) -> &[u8] {
+        scratch_frame_bytes(self.home_frame)
     }
 }
 
@@ -1850,12 +2313,24 @@ impl JournalScratch {
         scratch_frame_bytes(self.descriptor_frame)
     }
 
+    fn descriptor_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.descriptor_frame)
+    }
+
     fn data(&self) -> &[u8] {
         scratch_frame_bytes(self.data_frame)
     }
 
+    fn data_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.data_frame)
+    }
+
     fn commit(&self) -> &[u8] {
         scratch_frame_bytes(self.commit_frame)
+    }
+
+    fn commit_mut(&mut self) -> &mut [u8] {
+        scratch_frame_bytes_mut(self.commit_frame)
     }
 }
 
