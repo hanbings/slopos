@@ -91,7 +91,7 @@ required_markers=(
     "SLOPOS-VIRTIO: bounded block sequence complete requests="
     "max_in_flight=2 interrupts="
     "SLOPOS-KERNEL: framebuffer ownership accepted"
-    "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
+    "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed wheel=true"
     "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized"
     "SLOPOS-PROCESS: table initialized capacity=4 processes=2 pids=1/2 roles=init/desktop-service states=ready/ready fd_capacity=8 per_process_fds=true"
     "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64 entry=0x40000000 segments=1 file_bytes=26344"

@@ -59,6 +59,7 @@ pub struct KeyEvent {
 pub struct MouseEvent {
     pub dx: i16,
     pub dy: i16,
+    pub wheel: i8,
     pub buttons: u8,
     pub modifiers: KeyModifiers,
 }
@@ -81,15 +82,18 @@ pub struct Controller {
     alt: bool,
     logo: bool,
     extended: bool,
-    mouse_packet: [u8; 3],
+    mouse_packet: [u8; 4],
+    mouse_packet_length: usize,
     mouse_index: usize,
     mouse_present: bool,
+    mouse_wheel_present: bool,
 }
 
 impl Controller {
     pub fn initialize() -> Self {
         drain_output();
         let mut mouse_present = false;
+        let mut mouse_wheel_present = false;
 
         if write_command(0xa8) && write_command(0xae) {
             let config = if write_command(0x20) {
@@ -102,7 +106,11 @@ impl Controller {
                 // but enable both clocks. Preserve firmware's translation setting.
                 let _ = write_data((config & !0x33) | 0x03);
             }
-            mouse_present = mouse_command(0xf6) && mouse_command(0xf4);
+            if mouse_command(0xf6) {
+                mouse_wheel_present = enable_mouse_wheel()
+                    && mouse_device_id().is_some_and(|device_id| matches!(device_id, 3 | 4));
+                mouse_present = mouse_command(0xf4);
+            }
             let _ = keyboard_command(0xf4);
         }
         drain_output();
@@ -113,14 +121,20 @@ impl Controller {
             alt: false,
             logo: false,
             extended: false,
-            mouse_packet: [0; 3],
+            mouse_packet: [0; 4],
+            mouse_packet_length: if mouse_wheel_present { 4 } else { 3 },
             mouse_index: 0,
             mouse_present,
+            mouse_wheel_present,
         }
     }
 
     pub const fn mouse_present(&self) -> bool {
         self.mouse_present
+    }
+
+    pub const fn mouse_wheel_present(&self) -> bool {
+        self.mouse_wheel_present
     }
 
     pub fn consume(&mut self, byte: RawInputByte) -> Option<InputEvent> {
@@ -137,7 +151,7 @@ impl Controller {
         }
         self.mouse_packet[self.mouse_index] = byte;
         self.mouse_index += 1;
-        if self.mouse_index != 3 {
+        if self.mouse_index != self.mouse_packet_length {
             return None;
         }
         self.mouse_index = 0;
@@ -148,9 +162,16 @@ impl Controller {
         }
         let dx = self.mouse_packet[1] as i8 as i16;
         let dy = -(self.mouse_packet[2] as i8 as i16);
+        let wheel = if self.mouse_packet_length == 4 {
+            let value = (self.mouse_packet[3] & 0x0f) as i8;
+            if value & 0x08 != 0 { value - 16 } else { value }
+        } else {
+            0
+        };
         Some(InputEvent::Mouse(MouseEvent {
             dx,
             dy,
+            wheel,
             buttons: flags & 0x07,
             modifiers: KeyModifiers {
                 shift: self.shift,
@@ -459,6 +480,25 @@ fn mouse_command(command: u8) -> bool {
         return false;
     }
     matches!(read_data_wait(), Some((status, 0xfa)) if status & 0x20 != 0)
+}
+
+fn enable_mouse_wheel() -> bool {
+    for rate in [200, 100, 80] {
+        if !mouse_command(0xf3) || !mouse_command(rate) {
+            return false;
+        }
+    }
+    true
+}
+
+fn mouse_device_id() -> Option<u8> {
+    if !mouse_command(0xf2) {
+        return None;
+    }
+    match read_data_wait() {
+        Some((status, device_id)) if status & 0x20 != 0 => Some(device_id),
+        _ => None,
+    }
 }
 
 fn drain_output() {

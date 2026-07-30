@@ -63,8 +63,11 @@ monitor_type() {
     monitor_type "swww img sunset.ppm --transition-type none"
     sleep 4
     echo "mouse_move -300 -300"
+    sleep 1
     echo "mouse_button 1"
+    sleep 0.2
     echo "mouse_move -110 0"
+    sleep 1
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${repo_dir}/evidence/window-moved.ppm"
@@ -81,18 +84,22 @@ monitor_type() {
     echo "sendkey meta_l 2000"
     sleep 0.5
     echo "mouse_button 2"
+    sleep 0.2
     echo "mouse_move 96 0"
     sleep 1
     echo "screendump ${repo_dir}/evidence/mouse-resized.ppm"
     echo "mouse_move -96 0"
+    sleep 1
     echo "mouse_button 0"
     sleep 1
     echo "mouse_move -22 -64"
+    sleep 1
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${repo_dir}/evidence/waybar-workspace-click.ppm"
     echo "mouse_move -24 0"
+    sleep 1
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1

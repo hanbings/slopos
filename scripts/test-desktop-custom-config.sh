@@ -13,6 +13,8 @@ workspace_screenshot="${repo_dir}/evidence/custom-config-workspace-click.ppm"
 action_screenshot="${repo_dir}/evidence/custom-config-on-click.ppm"
 right_action_screenshot="${repo_dir}/evidence/custom-config-on-click-right.ppm"
 middle_action_screenshot="${repo_dir}/evidence/custom-config-on-click-middle.ppm"
+scroll_up_screenshot="${repo_dir}/evidence/custom-config-scroll-up.ppm"
+scroll_down_screenshot="${repo_dir}/evidence/custom-config-scroll-down.ppm"
 runtime_dir="$(mktemp -d /tmp/slopos-custom-config.XXXXXX)"
 runtime_esp="${runtime_dir}/slopos-esp.img"
 runtime_root="${runtime_dir}/slopos-root.ext4"
@@ -63,6 +65,8 @@ sed \
     -e '/"clock": {/a\        "on-click": "status",' \
     -e '/"clock": {/a\        "on-click-right": "help",' \
     -e '/"clock": {/a\        "on-click-middle": "swww query",' \
+    -e '/"clock": {/a\        "on-scroll-up": "swww img /usr/share/backgrounds/slopos-sunset.ppm --transition-type none",' \
+    -e '/"clock": {/a\        "on-scroll-down": "swww img /usr/share/backgrounds/slopos-aurora.ppm --transition-type none",' \
     "${repo_dir}/assets/waybar-config.jsonc" >"${custom_waybar}"
 custom_bytes="$(wc -c <"${custom_waybar}")"
 if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
@@ -92,6 +96,7 @@ set +e
     echo "sendkey b"
     echo "sendkey o"
     echo "mouse_move 503 0"
+    sleep 1
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
@@ -108,8 +113,14 @@ set +e
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${middle_action_screenshot}"
+    echo "mouse_move 0 0 -1"
+    sleep 1
+    echo "screendump ${scroll_up_screenshot}"
+    echo "mouse_move 0 0 1"
+    sleep 1
+    echo "screendump ${scroll_down_screenshot}"
     echo "quit"
-} | timeout 16s qemu-system-x86_64 \
+} | timeout 24s qemu-system-x86_64 \
     -machine q35,accel=tcg \
     -cpu qemu64 \
     -m 256M \
@@ -133,6 +144,7 @@ fi
 sed -i 's/\r$//' "${serial_log}" "${debug_log}" "${qemu_log}"
 
 required_markers=(
+    "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed wheel=true"
     "SLOPOS-VFS: process open complete pid=2 fd=3 inode="
     "bytes=${custom_bytes} access=readonly async=true path=/etc/slopos/waybar.jsonc"
     "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=1 protocol=1"
@@ -184,6 +196,12 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-WAYBAR: module clicked name=clock button=middle action=swww query accepted=true animate=false" \
     "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: module clicked name=clock button=scroll-up action=swww img /usr/share/backgrounds/slopos-sunset.ppm --transition-type none accepted=true animate=false" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: module clicked name=clock button=scroll-down action=swww img /usr/share/backgrounds/slopos-aurora.ppm --transition-type none accepted=true animate=false" \
+    "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=ABOUT" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=HELP" "${serial_log}"
@@ -192,6 +210,8 @@ test -s "${workspace_screenshot}"
 test -s "${action_screenshot}"
 test -s "${right_action_screenshot}"
 test -s "${middle_action_screenshot}"
+test -s "${scroll_up_screenshot}"
+test -s "${scroll_down_screenshot}"
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${workspace_screenshot}" \
         >"${repo_dir}/evidence/custom-config-workspace-click.png"
@@ -201,6 +221,10 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/custom-config-on-click-right.png"
     pnmtopng "${middle_action_screenshot}" \
         >"${repo_dir}/evidence/custom-config-on-click-middle.png"
+    pnmtopng "${scroll_up_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-scroll-up.png"
+    pnmtopng "${scroll_down_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-scroll-down.png"
 fi
 
 set +e

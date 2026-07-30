@@ -64,6 +64,8 @@ pub struct BarModuleConfig<'a> {
     pub on_click: Option<&'a str>,
     pub on_click_right: Option<&'a str>,
     pub on_click_middle: Option<&'a str>,
+    pub on_scroll_up: Option<&'a str>,
+    pub on_scroll_down: Option<&'a str>,
 }
 
 impl<'a> BarModuleConfig<'a> {
@@ -80,6 +82,8 @@ impl<'a> BarModuleConfig<'a> {
             on_click: None,
             on_click_right: None,
             on_click_middle: None,
+            on_scroll_up: None,
+            on_scroll_down: None,
         }
     }
 }
@@ -606,6 +610,16 @@ impl<'a> JsonParser<'a> {
                             module.on_click_middle = Some(self.module_action_value()?);
                             supported = true;
                         }
+                        "on-scroll-up" => {
+                            mark_once(&mut fields, 1 << 10)?;
+                            module.on_scroll_up = Some(self.module_action_value()?);
+                            supported = true;
+                        }
+                        "on-scroll-down" => {
+                            mark_once(&mut fields, 1 << 11)?;
+                            module.on_scroll_down = Some(self.module_action_value()?);
+                            supported = true;
+                        }
                         _ => self.skip_value()?,
                     }
                     match self.next() {
@@ -796,6 +810,8 @@ mod tests {
                     "on-click": "status",
                     "on-click-right": "about",
                     "on-click-middle": "swww query",
+                    "on-scroll-up": "clear",
+                    "on-scroll-down": "reload",
                     "calendar": { "mode": "month" }
                 },
             }
@@ -828,6 +844,8 @@ mod tests {
         assert_eq!(clock.on_click, Some("status"));
         assert_eq!(clock.on_click_right, Some("about"));
         assert_eq!(clock.on_click_middle, Some("swww query"));
+        assert_eq!(clock.on_scroll_up, Some("clear"));
+        assert_eq!(clock.on_scroll_down, Some("reload"));
     }
 
     #[test]

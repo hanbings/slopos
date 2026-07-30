@@ -252,7 +252,8 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     let input = ps2::Controller::initialize();
     if input.mouse_present() {
         serialln(format_args!(
-            "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
+            "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed wheel={}",
+            input.mouse_wheel_present()
         ));
     } else {
         serialln(format_args!(

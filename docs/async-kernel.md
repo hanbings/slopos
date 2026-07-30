@@ -10,7 +10,7 @@
 - 100 Hz PIT interrupt 唤醒 timer future；
 - 同一 PIT tick 在 CPL3 且另有可运行 PID 时保存完整用户 interrupt frame并抢占到 block-task scheduler；两个方向都已由无 syscall TSC 窗口验证；
 - PS/2 IRQ 上半部读取/确认设备并写入固定容量 SPSC ring；
-- input future 在下半部解析扫描码和鼠标 packet；
+- input future 在下半部解析扫描码及标准三字节/IntelliMouse 四字节 packet；
 - virtio INTx top half 读取 ISR 并 wake block future；future 在下半部消费 used ring；
 - executor 空闲时以 `sti; hlt` 等待，避免忙轮询；
 - ring 满时统计 drop，提供最早期 backpressure 可观察性。

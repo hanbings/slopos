@@ -832,6 +832,9 @@ impl Desktop {
         if middle && !middle_was_down {
             animate |= self.pointer_middle_pressed();
         }
+        if event.wheel != 0 {
+            animate |= self.pointer_scrolled(event.wheel);
+        }
 
         if left && self.scrolling_view && event.dx != 0 {
             self.workspaces.scroll_by(-i32::from(event.dx));
@@ -952,6 +955,21 @@ impl Desktop {
             return false;
         };
         self.execute_bar_action(module, action, "middle")
+    }
+
+    fn pointer_scrolled(&mut self, wheel: i8) -> bool {
+        let Some(module) = self.bar_module_at(self.pointer_x, self.pointer_y) else {
+            return false;
+        };
+        let Some(config) = self.bar.module_configs.get(module) else {
+            return false;
+        };
+        let (action, direction) = if wheel > 0 {
+            (config.on_scroll_up, "scroll-up")
+        } else {
+            (config.on_scroll_down, "scroll-down")
+        };
+        action.is_some_and(|action| self.execute_bar_action(module, action, direction))
     }
 
     fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {
