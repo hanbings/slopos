@@ -16,7 +16,10 @@ use slopos_ext4::{
     set_journal_superblock_state, set_superblock_free_block_count, set_superblock_free_inode_count,
     set_superblock_recovery, validate_path_component,
 };
-use slopos_vfs::{AbsolutePath, AccessMode, FileDescriptorTable, FileNode, MountTable};
+use slopos_vfs::{
+    AbsolutePath, AccessMode, FIRST_FILE_DESCRIPTOR, FileDescriptorTable, FileNode, MountTable,
+    ReadWindow,
+};
 
 use crate::virtio::BlockDevice;
 
@@ -51,6 +54,11 @@ const VFS_TEST_PATH: &[u8] = b"/etc/./slopos/../slopos/system.conf";
 const INIT_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-init"];
 const INIT_EXECUTABLE_DISPLAY: &str = "/sbin/slop-init";
 const INIT_EXECUTABLE_CAPACITY: usize = 8192;
+const PROCESS_FILE_CAPACITY: usize = 8;
+const LINUX_ENOENT: i64 = -2;
+const LINUX_EBADF: i64 = -9;
+const LINUX_EINVAL: i64 = -22;
+const LINUX_EMFILE: i64 = -24;
 const NIRI_USER_PATH: [&[u8]; 5] = [b"home", b"slop", b".config", b"niri", b"config.kdl"];
 const NIRI_SYSTEM_PATH: [&[u8]; 3] = [b"etc", b"niri", b"config.kdl"];
 const NIRI_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"niri.kdl"];
@@ -649,8 +657,9 @@ async fn load_and_run_init(
     if executable_size == 0 || executable_size > INIT_EXECUTABLE_CAPACITY {
         device.fail("root VFS init executable has an invalid size");
     }
-    // SAFETY: the block task is the only writer and process execution below is
-    // synchronous; no filesystem operation overlaps the borrowed bytes.
+    // SAFETY: the block task is the only writer. PID 1 may suspend for async
+    // filesystem syscalls below, but the executable backing storage is not
+    // mutated again.
     let storage = unsafe { &mut *INIT_EXECUTABLE.0.get() };
     storage.fill(0);
     let mut copied = 0usize;
@@ -672,7 +681,174 @@ async fn load_and_run_init(
         "SLOPOS-VFS: executable loaded path={INIT_EXECUTABLE_DISPLAY} inode={} bytes={executable_size} blocks={logical_block} matches_boot=true",
         executable.inode.number
     ));
-    crate::process::run_probe(image, "vfs", INIT_EXECUTABLE_DISPLAY);
+    let root_path =
+        AbsolutePath::parse(b"/").unwrap_or_else(|_| device.fail("process VFS root is invalid"));
+    let mut namespace = MountTable::<4>::new();
+    namespace
+        .mount(&root_path, ROOT_FILESYSTEM_ID)
+        .unwrap_or_else(|_| device.fail("process VFS root mount failed"));
+    let mut open_files: [Option<Ext4File>; PROCESS_FILE_CAPACITY] =
+        [const { None }; PROCESS_FILE_CAPACITY];
+    let mut event = crate::process::start_probe(image, "vfs", INIT_EXECUTABLE_DISPLAY);
+    loop {
+        event = match event {
+            crate::process::ProcessEvent::OpenAt(request) => {
+                complete_process_openat(mount, device, &namespace, &mut open_files, request).await
+            }
+            crate::process::ProcessEvent::Read(request) => {
+                complete_process_read(mount, device, &open_files, request).await
+            }
+            crate::process::ProcessEvent::Close(request) => {
+                complete_process_close(&mut open_files, request)
+            }
+            crate::process::ProcessEvent::Exited => break,
+        };
+    }
+}
+
+async fn complete_process_openat(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    namespace: &MountTable<4>,
+    open_files: &mut [Option<Ext4File>; PROCESS_FILE_CAPACITY],
+    request: crate::process::OpenAtRequest,
+) -> crate::process::ProcessEvent {
+    let path = match AbsolutePath::parse(request.path()) {
+        Ok(path) => path,
+        Err(_) => return crate::process::resume_probe(LINUX_EINVAL, None),
+    };
+    let resolution = match namespace.resolve(&path) {
+        Ok(resolution) => resolution,
+        Err(_) => return crate::process::resume_probe(LINUX_ENOENT, None),
+    };
+    let Some(file) = mount
+        .try_open_file(device, &path.components()[resolution.matched_components..])
+        .await
+    else {
+        return crate::process::resume_probe(LINUX_ENOENT, None);
+    };
+    let inode = file.inode.number;
+    let size = file.inode.size;
+    let fd = match crate::process::open_file(FileNode {
+        filesystem_id: resolution.filesystem_id,
+        node_id: u64::from(inode),
+        size,
+    }) {
+        Ok(fd) => fd,
+        Err(_) => return crate::process::resume_probe(LINUX_EMFILE, None),
+    };
+    let slot = process_file_slot(fd)
+        .unwrap_or_else(|| device.fail("process VFS descriptor is outside backing table"));
+    if open_files[slot].is_some() {
+        device.fail("process VFS backing slot was already occupied");
+    }
+    open_files[slot] = Some(file);
+    let display = core::str::from_utf8(request.path()).unwrap_or("<non-utf8>");
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VFS: process open complete pid=1 fd={fd} inode={inode} bytes={size} access=readonly async=true path={display}"
+    ));
+    crate::process::resume_probe(i64::from(fd), None)
+}
+
+async fn complete_process_read(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    open_files: &[Option<Ext4File>; PROCESS_FILE_CAPACITY],
+    request: crate::process::ReadRequest,
+) -> crate::process::ProcessEvent {
+    let window = match crate::process::read_window(request.fd, request.requested) {
+        Ok(window) => window,
+        Err(_) => return crate::process::resume_probe(LINUX_EBADF, None),
+    };
+    let Some(slot) = process_file_slot(request.fd) else {
+        return crate::process::resume_probe(LINUX_EBADF, None);
+    };
+    let Some(file) = open_files[slot].as_ref() else {
+        return crate::process::resume_probe(LINUX_EBADF, None);
+    };
+    if window.node.filesystem_id != ROOT_FILESYSTEM_ID
+        || window.node.node_id != u64::from(file.inode.number)
+    {
+        device.fail("process VFS read vnode does not match backing file");
+    }
+    let mut output = [0u8; crate::process::PROCESS_SYSCALL_IO_CAPACITY];
+    let bytes = read_process_file_range(
+        mount,
+        device,
+        file,
+        window,
+        &mut output[..request.requested],
+    )
+    .await;
+    crate::process::advance_fd(request.fd, bytes)
+        .unwrap_or_else(|_| device.fail("process VFS read offset advance failed"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VFS: process read complete pid=1 fd={} inode={} offset={} requested={} bytes={bytes} async=true",
+        request.fd, file.inode.number, window.offset, request.requested
+    ));
+    crate::process::resume_probe(bytes as i64, Some(&output[..bytes]))
+}
+
+fn complete_process_close(
+    open_files: &mut [Option<Ext4File>; PROCESS_FILE_CAPACITY],
+    request: crate::process::CloseRequest,
+) -> crate::process::ProcessEvent {
+    let Some(slot) = process_file_slot(request.fd) else {
+        return crate::process::resume_probe(LINUX_EBADF, None);
+    };
+    let Some(file) = open_files[slot].as_ref() else {
+        return crate::process::resume_probe(LINUX_EBADF, None);
+    };
+    let inode = file.inode.number;
+    if crate::process::close_fd(request.fd).is_err() {
+        return crate::process::resume_probe(LINUX_EBADF, None);
+    }
+    open_files[slot] = None;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VFS: process close complete pid=1 fd={} inode={inode} async=false",
+        request.fd
+    ));
+    crate::process::resume_probe(0, None)
+}
+
+async fn read_process_file_range(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    file: &Ext4File,
+    window: ReadWindow,
+    output: &mut [u8],
+) -> usize {
+    if output.len() < window.length {
+        device.fail("process VFS output buffer is shorter than read window");
+    }
+    let block_size = u64::try_from(BLOCK_SIZE)
+        .unwrap_or_else(|_| device.fail("process VFS block size conversion failed"));
+    let mut copied = 0usize;
+    while copied < window.length {
+        let absolute_offset = window
+            .offset
+            .checked_add(
+                u64::try_from(copied)
+                    .unwrap_or_else(|_| device.fail("process VFS read offset conversion failed")),
+            )
+            .unwrap_or_else(|| device.fail("process VFS read offset overflow"));
+        let logical_block = u32::try_from(absolute_offset / block_size)
+            .unwrap_or_else(|_| device.fail("process VFS logical block overflow"));
+        let block_offset = usize::try_from(absolute_offset % block_size)
+            .unwrap_or_else(|_| device.fail("process VFS block offset conversion failed"));
+        let block = mount.read_file_block(device, file, logical_block).await;
+        let length = (window.length - copied).min(block.len() - block_offset);
+        output[copied..copied + length]
+            .copy_from_slice(&block[block_offset..block_offset + length]);
+        copied += length;
+    }
+    copied
+}
+
+fn process_file_slot(fd: u32) -> Option<usize> {
+    let descriptor = fd.checked_sub(FIRST_FILE_DESCRIPTOR)?;
+    let slot = usize::try_from(descriptor).ok()?;
+    (slot < PROCESS_FILE_CAPACITY).then_some(slot)
 }
 
 async fn load_and_publish_desktop_config(
