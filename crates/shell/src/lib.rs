@@ -43,6 +43,12 @@ pub enum CenterFocusedColumn {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ColumnDisplay {
+    Normal,
+    Tabbed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ColumnWidth {
     Proportion(u16),
     Fixed(u16),
@@ -170,6 +176,7 @@ pub struct LayoutConfig {
     pub gaps: u16,
     pub center_focused_column: CenterFocusedColumn,
     pub always_center_single_column: bool,
+    pub default_column_display: ColumnDisplay,
     pub default_column_width: ColumnWidth,
     pub preset_column_widths: PresetSizes,
     pub preset_window_heights: PresetSizes,
@@ -183,6 +190,7 @@ impl Default for LayoutConfig {
             gaps: DEFAULT_GAPS,
             center_focused_column: CenterFocusedColumn::Never,
             always_center_single_column: false,
+            default_column_display: ColumnDisplay::Normal,
             default_column_width: ColumnWidth::Proportion(500),
             preset_column_widths: PresetSizes::defaults(),
             preset_window_heights: PresetSizes::defaults(),
@@ -204,6 +212,7 @@ pub enum ConfigError {
     InvalidNumber,
     InvalidColor,
     InvalidCenterPolicy,
+    InvalidColumnDisplay,
     InvalidColumnWidth,
     InvalidFocusRing,
 }
@@ -218,6 +227,12 @@ pub struct Rect {
     pub y: i32,
     pub width: u16,
     pub height: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TabbedColumnInfo {
+    pub active_tab: usize,
+    pub tab_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -238,6 +253,8 @@ struct Column<const WINDOWS: usize> {
     width: u16,
     maximized: bool,
     maximized_to_edges: bool,
+    display: ColumnDisplay,
+    tabbed_height: u16,
 }
 
 impl<const WINDOWS: usize> Column<WINDOWS> {
@@ -250,11 +267,14 @@ impl<const WINDOWS: usize> Column<WINDOWS> {
             width: 0,
             maximized: false,
             maximized_to_edges: false,
+            display: ColumnDisplay::Normal,
+            tabbed_height: 0,
         }
     }
 
     fn reset_window_heights(&mut self) {
         self.window_heights = [0; WINDOWS];
+        self.tabbed_height = 0;
     }
 }
 
@@ -317,6 +337,22 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         }
     }
 
+    pub fn window_is_visible(&self, window: u32) -> bool {
+        self.find_window(window).is_some_and(|(column, row)| {
+            self.columns[column].display == ColumnDisplay::Normal
+                || self.columns[column].focused_window == row
+        })
+    }
+
+    pub fn tabbed_column_info(&self, window: u32) -> Option<TabbedColumnInfo> {
+        let (column, _) = self.find_window(window)?;
+        let column = self.columns[column];
+        (column.display == ColumnDisplay::Tabbed).then_some(TabbedColumnInfo {
+            active_tab: column.focused_window,
+            tab_count: column.window_count,
+        })
+    }
+
     pub fn focus_window(&mut self, window: u32) -> Result<(), LayoutError> {
         let (column, row) = self.find_window(window).ok_or(LayoutError::UnknownWindow)?;
         self.focused_column = column;
@@ -345,6 +381,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let mut column = Column::empty();
         column.windows[0] = window;
         column.window_count = 1;
+        column.display = self.config.default_column_display;
         column.width = self
             .config
             .default_column_width
@@ -437,6 +474,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let mut column = Column::empty();
         column.windows[0] = window;
         column.window_count = 1;
+        column.display = self.config.default_column_display;
         column.width = width;
         self.columns[destination] = column;
         self.column_count += 1;
@@ -468,6 +506,18 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             return false;
         }
         self.consume_focused_singleton_into_adjacent(false)
+    }
+
+    pub fn toggle_focused_column_tabbed_display(&mut self) -> bool {
+        if self.column_count == 0 {
+            return false;
+        }
+        let column = &mut self.columns[self.focused_column];
+        column.display = match column.display {
+            ColumnDisplay::Normal => ColumnDisplay::Tabbed,
+            ColumnDisplay::Tabbed => ColumnDisplay::Normal,
+        };
+        true
     }
 
     pub fn close_window(&mut self, window: u32) -> Result<(), LayoutError> {
@@ -611,8 +661,13 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             ),
             ColumnWidthChange::AdjustFixed(pixels) => previous.saturating_add(pixels),
         };
+        let maximum = available_height.saturating_sub(self.config.gaps.saturating_mul(2));
+        if self.columns[column_index].display == ColumnDisplay::Tabbed {
+            let target = requested.clamp(1, i32::from(maximum.max(1))) as u16;
+            self.columns[column_index].tabbed_height = target;
+            return Ok(was_maximized_to_edges || target != previous as u16);
+        }
         if window_count == 1 {
-            let maximum = available_height.saturating_sub(self.config.gaps.saturating_mul(2));
             let target = requested.clamp(1, i32::from(maximum.max(1))) as u16;
             self.columns[column_index].window_heights[0] = target;
             return Ok(was_maximized_to_edges || target != previous as u16);
@@ -660,9 +715,10 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let column = &mut self.columns[self.focused_column];
         let was_maximized_to_edges = column.maximized_to_edges;
         column.maximized_to_edges = false;
-        let changed = column.window_heights[..column.window_count]
-            .iter()
-            .any(|height| *height != 0);
+        let changed = column.tabbed_height != 0
+            || column.window_heights[..column.window_count]
+                .iter()
+                .any(|height| *height != 0);
         column.reset_window_heights();
         was_maximized_to_edges || changed
     }
@@ -947,6 +1003,14 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let gaps = i32::from(self.config.gaps);
         let x = self.column_start(column_index) - self.view_offset;
         let heights = self.resolved_window_heights(column_index);
+        if self.columns[column_index].display == ColumnDisplay::Tabbed {
+            return Ok(Rect {
+                x,
+                y: i32::from(self.reserved_top) + gaps,
+                width: self.effective_column_width(column_index),
+                height: heights[window_index],
+            });
+        }
         let y = i32::from(self.reserved_top)
             + gaps
             + heights[..window_index]
@@ -963,6 +1027,21 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
 
     fn resolved_window_heights(&self, column_index: usize) -> [u16; WINDOWS] {
         let column = self.columns[column_index];
+        if column.display == ColumnDisplay::Tabbed {
+            let maximum = self
+                .output_height
+                .saturating_sub(self.reserved_top)
+                .saturating_sub(self.config.gaps.saturating_mul(2))
+                .max(1);
+            let height = if column.tabbed_height == 0 {
+                maximum
+            } else {
+                column.tabbed_height.min(maximum)
+            };
+            let mut heights = [0; WINDOWS];
+            heights[..column.window_count].fill(height);
+            return heights;
+        }
         if column.window_count == 0 || column.window_heights[0] != 0 {
             return column.window_heights;
         }
@@ -1048,6 +1127,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let mut column = Column::empty();
         column.windows[0] = window;
         column.window_count = 1;
+        column.display = self.config.default_column_display;
         column.width = width;
         self.columns[destination] = column;
         self.column_count += 1;
@@ -1269,6 +1349,14 @@ impl<'a> ConfigParser<'a> {
                 }
                 Token::Identifier("always-center-single-column") => {
                     config.always_center_single_column = true;
+                    self.finish_node()?;
+                }
+                Token::Identifier("default-column-display") => {
+                    config.default_column_display = match self.value_string()? {
+                        "normal" => ColumnDisplay::Normal,
+                        "tabbed" => ColumnDisplay::Tabbed,
+                        _ => return Err(ConfigError::InvalidColumnDisplay),
+                    };
                     self.finish_node()?;
                 }
                 Token::Identifier("default-column-width") => {
@@ -1579,6 +1667,7 @@ mod tests {
                 gaps 12.4
                 center-focused-column "on-overflow"
                 always-center-single-column
+                default-column-display "tabbed"
                 default-column-width { proportion 0.625; }
                 preset-column-widths {
                     proportion 0.333
@@ -1609,6 +1698,7 @@ mod tests {
             CenterFocusedColumn::OnOverflow
         );
         assert!(config.always_center_single_column);
+        assert_eq!(config.default_column_display, ColumnDisplay::Tabbed);
         assert_eq!(config.default_column_width, ColumnWidth::Proportion(625));
         assert_eq!(config.preset_column_widths.len(), 3);
         assert_eq!(
@@ -1662,6 +1752,10 @@ mod tests {
         assert_eq!(
             parse_niri_layout(r#"layout { center-focused-column "sometimes"; }"#),
             Err(ConfigError::InvalidCenterPolicy)
+        );
+        assert_eq!(
+            parse_niri_layout(r#"layout { default-column-display "stacked"; }"#),
+            Err(ConfigError::InvalidColumnDisplay)
         );
         assert_eq!(
             parse_niri_layout("layout { default-column-width { proportion 1.5; } }"),
@@ -1773,6 +1867,72 @@ mod tests {
         assert!(layout.expel_window_from_column());
         assert_eq!(layout.focused_window(), Some(1));
         assert!(layout.tile_rect(2).unwrap().x > layout.tile_rect(1).unwrap().x);
+    }
+
+    #[test]
+    fn toggles_a_column_between_vertical_tiles_and_tabs() {
+        let config = LayoutConfig {
+            always_center_single_column: true,
+            ..LayoutConfig::default()
+        };
+        let mut layout = ScrollLayout::<2, 3>::new(1000, 700, 30, config);
+        layout.open_window(1).unwrap();
+        layout.open_window(2).unwrap();
+        assert!(layout.focus_column_left());
+        assert!(layout.consume_window_into_column());
+
+        assert!(layout.toggle_focused_column_tabbed_display());
+        assert!(!layout.window_is_visible(1));
+        assert!(layout.window_is_visible(2));
+        assert_eq!(
+            layout.tabbed_column_info(2),
+            Some(TabbedColumnInfo {
+                active_tab: 1,
+                tab_count: 2,
+            })
+        );
+        assert_eq!(
+            layout.tile_rect(1).unwrap(),
+            Rect {
+                x: 262,
+                y: 46,
+                width: 476,
+                height: 638,
+            }
+        );
+        assert_eq!(layout.tile_rect(1).unwrap(), layout.tile_rect(2).unwrap());
+
+        assert!(layout.focus_window_up());
+        assert_eq!(layout.focused_window(), Some(1));
+        assert!(layout.window_is_visible(1));
+        assert!(!layout.window_is_visible(2));
+        assert_eq!(layout.tabbed_column_info(1).unwrap().active_tab, 0);
+        assert!(
+            layout
+                .change_focused_window_height(ColumnWidthChange::Set(ColumnWidth::Fixed(240)))
+                .unwrap()
+        );
+        assert_eq!(layout.tile_rect(1).unwrap().height, 240);
+        assert_eq!(layout.tile_rect(2).unwrap().height, 240);
+        assert!(layout.switch_preset_window_height());
+        assert_eq!(layout.tile_rect(1).unwrap().height, 311);
+        assert!(layout.reset_focused_window_height());
+        assert_eq!(layout.tile_rect(1).unwrap().height, 638);
+
+        assert!(layout.toggle_focused_column_tabbed_display());
+        assert!(layout.window_is_visible(1));
+        assert!(layout.window_is_visible(2));
+        assert_eq!(layout.tabbed_column_info(1), None);
+        assert_eq!(layout.tile_rect(1).unwrap().y, 46);
+        assert_eq!(layout.tile_rect(2).unwrap().y, 373);
+
+        let default_tabbed = LayoutConfig {
+            default_column_display: ColumnDisplay::Tabbed,
+            ..LayoutConfig::default()
+        };
+        let mut layout = ScrollLayout::<1, 1>::new(1000, 700, 30, default_tabbed);
+        layout.open_window(3).unwrap();
+        assert_eq!(layout.tabbed_column_info(3).unwrap().tab_count, 1);
     }
 
     #[test]

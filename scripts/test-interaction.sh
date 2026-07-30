@@ -72,6 +72,16 @@ monitor_type() {
     echo "sendkey meta_l-comma 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-column-stacked.ppm"
+    echo "sendkey meta_l-w 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-column-tabbed-system.ppm"
+    echo "sendkey meta_l-k 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-column-tabbed-terminal.ppm"
+    echo "sendkey meta_l-j 50"
+    sleep 1
+    echo "sendkey meta_l-w 50"
+    sleep 1
     echo "sendkey meta_l-shift-equal 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-window-height-increased.ppm"
@@ -340,6 +350,14 @@ grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30
 grep -Fq "SLOPOS-SWWW: clear color=1A2B3C output=*" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1" "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=toggle-column-tabbed-display changed=true workspace=1 name=main focused=1" "${serial_log}")" -ne 2 ]]; then
+    echo "niri tabbed column display did not toggle and restore" >&2
+    exit 1
+fi
+grep -Fq "SLOPOS-DESKTOP: column display toggled mode=tabbed kind=SYSTEM tab=2/2 x=268 y=56 width=488 height=696 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: tab focused kind=TERMINAL tab=1/2 direction=focus-window-up layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: tab focused kind=SYSTEM tab=2/2 direction=focus-window-down layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: column display toggled mode=normal kind=SYSTEM x=268 y=412 width=488 height=340 layout=scrolling" "${serial_log}"
 if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=set-window-height changed=true workspace=1 name=main focused=1" "${serial_log}")" -ne 3 ]]; then
     echo "niri set-window-height bindings did not cover grow, shrink, and restore" >&2
     exit 1
@@ -433,6 +451,8 @@ test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
 test -s "${repo_dir}/evidence/niri-column-stacked.ppm"
+test -s "${repo_dir}/evidence/niri-column-tabbed-system.ppm"
+test -s "${repo_dir}/evidence/niri-column-tabbed-terminal.ppm"
 test -s "${repo_dir}/evidence/niri-window-height-increased.ppm"
 test -s "${repo_dir}/evidence/niri-preset-window-height.ppm"
 test -s "${repo_dir}/evidence/niri-window-moved-up.ppm"
@@ -473,6 +493,10 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-cleared.png"
     pnmtopng "${repo_dir}/evidence/niri-column-stacked.ppm" \
         >"${repo_dir}/evidence/niri-column-stacked.png"
+    pnmtopng "${repo_dir}/evidence/niri-column-tabbed-system.ppm" \
+        >"${repo_dir}/evidence/niri-column-tabbed-system.png"
+    pnmtopng "${repo_dir}/evidence/niri-column-tabbed-terminal.ppm" \
+        >"${repo_dir}/evidence/niri-column-tabbed-terminal.png"
     pnmtopng "${repo_dir}/evidence/niri-window-height-increased.ppm" \
         >"${repo_dir}/evidence/niri-window-height-increased.png"
     pnmtopng "${repo_dir}/evidence/niri-preset-window-height.ppm" \

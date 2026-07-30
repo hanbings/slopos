@@ -712,6 +712,31 @@ impl Desktop {
                 },
             );
         }
+        if let Some(info) = self.workspaces.tabbed_column_info(index as u32) {
+            let tab_count = i32::try_from(info.tab_count).unwrap_or(i32::MAX).max(1);
+            let indicator_gap = 3;
+            let segment_height = window
+                .height
+                .saturating_sub(indicator_gap * (tab_count - 1))
+                .checked_div(tab_count)
+                .unwrap_or(1)
+                .max(1);
+            let mut y = window.y;
+            for tab in 0..info.tab_count {
+                framebuffer.rect(
+                    window.x - 8,
+                    y,
+                    5,
+                    segment_height,
+                    if tab == info.active_tab {
+                        self.accent()
+                    } else {
+                        self.workspaces.config().focus_ring.inactive_color
+                    },
+                );
+                y += segment_height + indicator_gap;
+            }
+        }
         framebuffer.text(window.x + 12, window.y + 9, title(window.kind), WHITE, 1);
         framebuffer.rect(window.x + window.width - 26, window.y + 5, 20, 20, RED);
         framebuffer.text(window.x + window.width - 20, window.y + 11, "X", WHITE, 1);
@@ -1333,6 +1358,9 @@ impl Desktop {
             NiriAction::ConsumeOrExpelWindowRight => {
                 self.workspaces.consume_or_expel_focused_window_right()
             }
+            NiriAction::ToggleColumnTabbedDisplay => {
+                self.workspaces.toggle_focused_column_tabbed_display()
+            }
             NiriAction::SwitchPresetColumnWidth => self.workspaces.switch_preset_column_width(),
             NiriAction::SwitchPresetColumnWidthBack => {
                 self.workspaces.switch_preset_column_width_back()
@@ -1480,6 +1508,50 @@ impl Desktop {
                 window.height
             ));
         }
+        if changed
+            && matches!(action, NiriAction::ToggleColumnTabbedDisplay)
+            && let Some(window) = self.positioned_window(self.active)
+            && let Some(info) = self.workspaces.tabbed_column_info(self.active as u32)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: column display toggled mode=tabbed kind={} tab={}/{} x={} y={} width={} height={} layout=scrolling",
+                title(window.kind),
+                info.active_tab + 1,
+                info.tab_count,
+                window.x,
+                window.y,
+                window.width,
+                window.height
+            ));
+        } else if changed
+            && matches!(action, NiriAction::ToggleColumnTabbedDisplay)
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: column display toggled mode=normal kind={} x={} y={} width={} height={} layout=scrolling",
+                title(window.kind),
+                window.x,
+                window.y,
+                window.width,
+                window.height
+            ));
+        }
+        if changed
+            && matches!(
+                action,
+                NiriAction::FocusWindowUp | NiriAction::FocusWindowDown
+            )
+            && let Some(window) = self.positioned_window(self.active)
+            && let Some(info) = self.workspaces.tabbed_column_info(self.active as u32)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: tab focused kind={} tab={}/{} direction={} layout=scrolling",
+                title(window.kind),
+                info.active_tab + 1,
+                info.tab_count,
+                action_name(action)
+            ));
+        }
         serialln(format_args!(
             "SLOPOS-NIRI: binding action={} changed={} workspace={} name={} focused={}",
             action_name(action),
@@ -1595,7 +1667,7 @@ impl Desktop {
     }
 
     fn positioned_window(&self, index: usize) -> Option<Window> {
-        if !self.windows[index].open {
+        if !self.windows[index].open || !self.workspaces.window_is_visible(index as u32) {
             return None;
         }
         let rect = self.workspaces.tile_rect(index as u32).ok()?;
@@ -1694,6 +1766,7 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::ExpelWindowFromColumn => "expel-window-from-column",
         NiriAction::ConsumeOrExpelWindowLeft => "consume-or-expel-window-left",
         NiriAction::ConsumeOrExpelWindowRight => "consume-or-expel-window-right",
+        NiriAction::ToggleColumnTabbedDisplay => "toggle-column-tabbed-display",
         NiriAction::SwitchPresetColumnWidth => "switch-preset-column-width",
         NiriAction::SwitchPresetColumnWidthBack => "switch-preset-column-width-back",
         NiriAction::SwitchPresetWindowHeight => "switch-preset-window-height",

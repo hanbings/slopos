@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 
-use crate::{ColumnWidth, ColumnWidthChange, LayoutConfig, LayoutError, Rect, ScrollLayout};
+use crate::{
+    ColumnWidth, ColumnWidthChange, LayoutConfig, LayoutError, Rect, ScrollLayout, TabbedColumnInfo,
+};
 
 pub const MAX_NIRI_WORKSPACES: usize = 8;
 pub const MAX_NIRI_BINDINGS: usize = 64;
@@ -72,6 +74,7 @@ pub enum NiriAction<'a> {
     ExpelWindowFromColumn,
     ConsumeOrExpelWindowLeft,
     ConsumeOrExpelWindowRight,
+    ToggleColumnTabbedDisplay,
     SwitchPresetColumnWidth,
     SwitchPresetColumnWidthBack,
     SwitchPresetWindowHeight,
@@ -492,6 +495,7 @@ impl<'a> ShellConfigParser<'a> {
             "expel-window-from-column" => NiriAction::ExpelWindowFromColumn,
             "consume-or-expel-window-left" => NiriAction::ConsumeOrExpelWindowLeft,
             "consume-or-expel-window-right" => NiriAction::ConsumeOrExpelWindowRight,
+            "toggle-column-tabbed-display" => NiriAction::ToggleColumnTabbedDisplay,
             "switch-preset-column-width" => NiriAction::SwitchPresetColumnWidth,
             "switch-preset-column-width-back" => NiriAction::SwitchPresetColumnWidthBack,
             "switch-preset-window-height" => NiriAction::SwitchPresetWindowHeight,
@@ -894,6 +898,14 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             .map_err(WorkspaceError::Layout)
     }
 
+    pub fn window_is_visible(&self, window: u32) -> bool {
+        self.layouts[self.active].window_is_visible(window)
+    }
+
+    pub fn tabbed_column_info(&self, window: u32) -> Option<TabbedColumnInfo> {
+        self.layouts[self.active].tabbed_column_info(window)
+    }
+
     pub fn focused_window(&self) -> Option<u32> {
         self.layouts[self.active].focused_window()
     }
@@ -944,6 +956,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
 
     pub fn consume_or_expel_focused_window_right(&mut self) -> bool {
         self.layouts[self.active].consume_or_expel_focused_window_right()
+    }
+
+    pub fn toggle_focused_column_tabbed_display(&mut self) -> bool {
+        self.layouts[self.active].toggle_focused_column_tabbed_display()
     }
 
     pub fn scroll_by(&mut self, delta: i32) {
@@ -1131,6 +1147,7 @@ mod tests {
                 Mod+Period { expel-window-from-column; }
                 Mod+BracketLeft { consume-or-expel-window-left; }
                 Mod+BracketRight { consume-or-expel-window-right; }
+                Mod+W { toggle-column-tabbed-display; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
                 Mod+Shift+Minus { set-window-height "-10%"; }
@@ -1164,7 +1181,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 32);
+        assert_eq!(config.bindings.len(), 33);
         assert_eq!(
             config
                 .bindings
@@ -1352,6 +1369,12 @@ mod tests {
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Character(b']')),
             Some(NiriAction::ConsumeOrExpelWindowRight)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'W')),
+            Some(NiriAction::ToggleColumnTabbedDisplay)
         );
         assert_eq!(
             config

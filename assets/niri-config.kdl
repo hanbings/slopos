@@ -32,6 +32,7 @@ binds {
     Mod+Period { expel-window-from-column; }
     Mod+BracketLeft { consume-or-expel-window-left; }
     Mod+BracketRight { consume-or-expel-window-right; }
+    Mod+W { toggle-column-tabbed-display; }
     Mod+Minus { set-column-width "-10%"; }
     Mod+Equal { set-column-width "+10%"; }
     Mod+Shift+Minus { set-window-height "-10%"; }
