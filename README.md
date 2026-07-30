@@ -2,9 +2,9 @@
 
 SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEMU 的独立操作系统项目。
 
-当前仓库已经有一个可重复启动的早期系统，而不是完成版操作系统：0BSD Rust UEFI 加载器会从 FAT ESP 读取并解析独立的 ELF64 内核，取得 ACPI RSDP 与 GOP，加载 bootstrap image，取得最终 memory map，调用 `ExitBootServices`，再把控制权交给 SlopOS 内核。内核接管串口、GOP framebuffer 与 PS/2 键鼠，先运行一个有独立 CR3 的 CPL3 PID 1 probe，再进入早期交互桌面。
+当前仓库已经有一个可重复启动的早期系统，而不是完成版操作系统：0BSD Rust UEFI 加载器会从 FAT ESP 读取并解析独立的 ELF64 内核，取得 ACPI RSDP 与 GOP，加载 bootstrap image 和独立 Rust PID 1 ELF，取得最终 memory map，调用 `ExitBootServices`，再把控制权交给 SlopOS 内核。内核接管串口、GOP framebuffer 与 PS/2 键鼠，先运行一个有独立 CR3 的 CPL3 PID 1 probe，再进入早期交互桌面。
 
-PID 1 使用独立 user code/stack page、GDT user segments、TSS `RSP0` privilege stack 与 DPL3 trap gate。独立 `no_std` ELF crate 严格校验 ELF64/x86-64/`ET_EXEC` 和 `PT_LOAD`，按 `p_filesz` 复制内嵌 executable 并保留零填充的 `p_memsz` tail，再从 ELF entry 进入。程序按 Linux x86-64 的寄存器和编号约定发出 `write(1, ..., 18)` 与 `exit(0)`，内核验证 CPL、参数、payload、返回值和调用顺序后恢复 kernel CR3/stack。trap 暂用 `int 0x80`；尚无外部用户二进制、`SYSCALL/SYSRET`、调度或通用 syscall 层。
+PID 1 由 `userspace/init` 独立构建为 `/slopos/init.elf`，UEFI loader 通过 BootInfo v2 传给 kernel。它使用独立 user code/stack page、GDT user segments、TSS `RSP0` privilege stack 与 DPL3 trap gate。`no_std` ELF crate 严格校验 ELF64/x86-64/`ET_EXEC` 和 `PT_LOAD`，按 `p_filesz` 复制 executable 并从 ELF entry 进入。程序按 Linux x86-64 的寄存器和编号约定发出 `write(1, ..., 18)` 与 `exit(0)`；kernel 对用户 pointer 先做已验证 `PT_LOAD` 范围检查，再核对 payload、返回值和调用顺序，最后恢复 kernel CR3/stack。trap 暂用 `int 0x80`；尚无 `SYSCALL/SYSRET`、调度或通用 syscall 层。
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 

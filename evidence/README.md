@@ -33,7 +33,7 @@ qemu-system-x86_64
   -no-reboot
 ```
 
-用户进程证据位于所有串口启动日志的中断初始化之后、桌面 marker 之前。`SLOPOS-PROCESS` 记录 `format=elf64`、entry `0x40000000`、1 个 segment、4242 file bytes、146 load bytes、4096 memory bytes，以及独立 CR3、user code/stack、不同 physical frame 与 `code=user-readonly stack=user-writable kernel=supervisor`；两个 `SLOPOS-SYSCALL` marker 分别证明 write 返回 18、exit status 0，且 CPU trap frame 的 CPL 为 3；最终 marker 证明两次 syscall 后恢复 kernel continuation。交互、page-fault 和 journal 两阶段测试都重复经过这条路径。它只证明严格解析后装入的同步内嵌单页 ELF、TSS privilege stack 与临时 `int 0x80` gate，不证明外部 ELF、多 segment mapping、`SYSCALL/SYSRET`、调度、多进程或通用 user-pointer handling。
+用户进程证据从 UEFI 日志开始：loader 从 ESP 读取 4848-byte `/slopos/init.elf`，BootInfo v2 令 kernel 在 `LOADER_DATA` allocation 找到同一大小的 image。中断初始化之后、桌面 marker 之前的 `SLOPOS-PROCESS` 记录 `source=boot format=elf64`、entry `0x40000000`、1 个 segment、66 load/memory bytes，以及独立 CR3、user code/stack、不同 physical frame 与 `code=user-readonly stack=user-writable kernel=supervisor`；两个 `SLOPOS-SYSCALL` marker 分别证明 write 返回 18、exit status 0，且 CPU trap frame 的 CPL 为 3；最终 marker 证明两次 syscall 后恢复 kernel continuation。交互、page-fault 和 journal 两阶段测试都重复经过这条路径。它只证明外部单页静态 ELF、TSS privilege stack、受限 user-range check 与临时 `int 0x80` gate，不证明 VFS exec、多 segment mapping、`SYSCALL/SYSRET`、调度或多进程。
 
 ELF parser 的宿主测试由 `make test-elf` 执行。10 项测试验证 ELF64 little-endian/x86-64/`ET_EXEC` header、program-header table、`PT_LOAD` data/BSS view，并拒绝 truncation、越界、`p_filesz > p_memsz`、非法 alignment/congruence、重叠 segment、W+X 与不属于 executable segment 的 entry。parser 无分配且 `no_std`；section header 与 dynamic linking 不参与当前装载。
 
