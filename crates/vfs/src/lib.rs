@@ -320,6 +320,38 @@ impl<const N: usize> FileDescriptorTable<N> {
         })
     }
 
+    pub fn append_window(&self, fd: u32, requested: usize) -> Result<WriteWindow, VfsError> {
+        let descriptor = self.descriptor(fd)?;
+        if !descriptor.access_mode.writable() {
+            return Err(VfsError::NotWritable);
+        }
+        if descriptor.offset != descriptor.node.size
+            || descriptor
+                .offset
+                .checked_add(u64::try_from(requested).map_err(|_| VfsError::InvalidOffset)?)
+                .is_none()
+        {
+            return Err(VfsError::InvalidOffset);
+        }
+        Ok(WriteWindow {
+            node: descriptor.node,
+            offset: descriptor.offset,
+            length: requested,
+        })
+    }
+
+    pub fn set_size(&mut self, fd: u32, size: u64) -> Result<(), VfsError> {
+        let descriptor = self.descriptor_mut(fd)?;
+        if !descriptor.access_mode.writable() {
+            return Err(VfsError::NotWritable);
+        }
+        if descriptor.offset > size {
+            return Err(VfsError::InvalidOffset);
+        }
+        descriptor.node.size = size;
+        Ok(())
+    }
+
     pub fn advance(&mut self, fd: u32, length: usize) -> Result<(), VfsError> {
         let descriptor = self.descriptor_mut(fd)?;
         let length = u64::try_from(length).map_err(|_| VfsError::InvalidOffset)?;
@@ -487,5 +519,38 @@ mod tests {
             .unwrap();
         assert_eq!(descriptors.read_window(fd, 1).unwrap().length, 1);
         assert_eq!(descriptors.write_window(fd, 1).unwrap().length, 1);
+    }
+
+    #[test]
+    fn extends_a_writable_descriptor_at_eof() {
+        let mut descriptors = FileDescriptorTable::<1>::new();
+        let node = FileNode {
+            filesystem_id: 1,
+            node_id: 42,
+            size: 10,
+        };
+        let fd = descriptors
+            .open_with_mode(node, AccessMode::ReadWrite)
+            .unwrap();
+        assert_eq!(
+            descriptors.append_window(fd, 1),
+            Err(VfsError::InvalidOffset)
+        );
+        descriptors.seek(fd, 10).unwrap();
+        assert_eq!(
+            descriptors.append_window(fd, 6),
+            Ok(WriteWindow {
+                node,
+                offset: 10,
+                length: 6,
+            })
+        );
+        descriptors.set_size(fd, 16).unwrap();
+        descriptors.advance(fd, 6).unwrap();
+        assert_eq!(descriptors.read_window(fd, 1).unwrap().length, 0);
+        assert_eq!(descriptors.set_size(fd, 10), Err(VfsError::InvalidOffset));
+        descriptors.seek(fd, 10).unwrap();
+        descriptors.set_size(fd, 10).unwrap();
+        assert_eq!(descriptors.read_window(fd, 1).unwrap().node.size, 10);
     }
 }
