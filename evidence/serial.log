@@ -4,16 +4,21 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=58184
-SLOPOS-UEFI: kernel mapped 0x4000000..0x4005000 entry=0x4000000
-SLOPOS-UEFI: initrd loaded bytes=187 base=0xdf6d000
+SLOPOS-UEFI: kernel file loaded bytes=64496
+SLOPOS-UEFI: kernel mapped 0x4000000..0x4008000 entry=0x4000000
+SLOPOS-UEFI: initrd loaded bytes=186 base=0xdf6d000
 SLOPOS-UEFI: Boot Services exited descriptors=113
 SLOPOS-UEFI: transferring control to kernel
 SLOPOS-KERNEL: entry reached
 SLOPOS-KERNEL: boot info valid memory_descriptors=113
 SLOPOS-KERNEL: ACPI RSDP validated at 0xf77e014
-SLOPOS-KERNEL: initrd available base=0xdf6d000 bytes=187
+SLOPOS-KERNEL: initrd available base=0xdf6d000 bytes=186
+SLOPOS-MM: frame allocator initialized regions=7 free_frames=53038 probe=0x100000
 SLOPOS-KERNEL: framebuffer ownership accepted 1024x768
-SLOPOS-INPUT: PS/2 keyboard and mouse enabled
+SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed
+SLOPOS-INTERRUPT: GDT IDT PIC PIT initialized timer_hz=100
 SLOPOS-DESKTOP: interactive compositor loop entered windows=3
 SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
+SLOPOS-ASYNC: executor entered tasks=2
+SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0
+SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0

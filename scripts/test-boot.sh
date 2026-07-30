@@ -41,8 +41,13 @@ required_markers=(
     "SLOPOS-KERNEL: entry reached"
     "SLOPOS-KERNEL: boot info valid"
     "SLOPOS-KERNEL: ACPI RSDP validated"
+    "SLOPOS-MM: frame allocator initialized"
     "SLOPOS-KERNEL: framebuffer ownership accepted"
+    "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
+    "SLOPOS-INTERRUPT: GDT IDT PIC PIT initialized"
     "SLOPOS-DESKTOP: interactive compositor loop entered"
+    "SLOPOS-ASYNC: executor entered tasks=2"
+    "SLOPOS-ASYNC: timer future completed"
 )
 
 for marker in "${required_markers[@]}"; do
