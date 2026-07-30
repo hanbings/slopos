@@ -5,6 +5,7 @@ use crate::framebuffer::{
 };
 use crate::ps2::{Controller, DesktopEvent, InputEvent, Key, KeyEvent, KeyModifiers, MouseEvent};
 use crate::serial::serialln;
+use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
     BarFormatValue, BarPosition, BarText, BindingKey, BindingModifiers, NiriAction,
     NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle, SwwwCommand, SwwwDaemonError,
@@ -63,6 +64,9 @@ pub struct Desktop {
     response_length: usize,
     alternate_theme: bool,
     config_generation: u64,
+    service_generation: u64,
+    provider_cpu_usage: u8,
+    provider_memory_percentage: u8,
 }
 
 impl Desktop {
@@ -119,16 +123,6 @@ impl Desktop {
         wallpaper
             .start()
             .unwrap_or_else(|_| crate::fatal("swww daemon failed to start"));
-        let SwwwCommand::Img(initial_wallpaper) = parse_swww_command(
-            "swww img /usr/share/backgrounds/slopos-aurora.ppm",
-            swww_defaults,
-        )
-        .unwrap_or_else(|_| crate::fatal("swww wallpaper boot command failed validation")) else {
-            crate::fatal("swww wallpaper boot command changed kind");
-        };
-        wallpaper
-            .apply(initial_wallpaper)
-            .unwrap_or_else(|_| crate::fatal("swww initial wallpaper failed"));
         let desktop = Self {
             screen_width: width,
             screen_height: height,
@@ -175,6 +169,9 @@ impl Desktop {
             response_length: 0,
             alternate_theme: false,
             config_generation: 0,
+            service_generation: 0,
+            provider_cpu_usage: 0,
+            provider_memory_percentage: 0,
         };
         serialln(format_args!(
             "SLOPOS-SHELL: config loaded niri_workspaces={} named={} binds={} rules={} active_columns=2 gaps={} default_width=50% center=never waybar_position=top height={} spacing={} modules={}/{}/{} module_configs={} css_rules={}",
@@ -198,16 +195,10 @@ impl Desktop {
             desktop.module_interval("memory"),
             desktop.module_interval("clock")
         ));
-        let wallpaper = desktop
-            .wallpaper
-            .query()
-            .unwrap_or_else(|_| crate::fatal("swww initial query failed"));
         serialln(format_args!(
-            "SLOPOS-SWWW: daemon=running output={} geometry={}x{} image={} transition={} step={} fps={}",
-            wallpaper.output,
-            wallpaper.width,
-            wallpaper.height,
-            wallpaper.image,
+            "SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry={}x{} image=awaiting-user-policy transition={} step={} fps={} policy_owner=user-service",
+            width,
+            height,
             desktop.wallpaper.transition().kind.name(),
             desktop.wallpaper.transition().step,
             desktop.wallpaper.transition().fps
@@ -217,9 +208,15 @@ impl Desktop {
 
     pub async fn run(&mut self, framebuffer: &mut Framebuffer, mut input: Controller) -> ! {
         loop {
-            match crate::ps2::next_desktop_event(self.config_generation).await {
+            match crate::ps2::next_desktop_event(self.config_generation, self.service_generation)
+                .await
+            {
                 DesktopEvent::ConfigUpdate(sources) => {
                     self.apply_config_update(sources);
+                    self.render(framebuffer);
+                }
+                DesktopEvent::ServiceUpdate(snapshot) => {
+                    self.apply_service_update(snapshot);
                     self.render(framebuffer);
                 }
                 DesktopEvent::Input(byte) => {
@@ -453,6 +450,47 @@ impl Desktop {
             .unwrap_or(0)
     }
 
+    fn apply_service_update(&mut self, snapshot: crate::desktop_service::DesktopServiceSnapshot) {
+        if !crate::desktop_service::snapshot_is_valid(snapshot)
+            || snapshot.generation <= self.service_generation
+        {
+            crate::fatal("desktop service snapshot failed validation");
+        }
+        self.provider_cpu_usage = snapshot.cpu_usage;
+        self.provider_memory_percentage = snapshot.memory_percentage;
+        if snapshot.wallpaper == WALLPAPER_AURORA
+            && self.wallpaper.current_image() != Some(AURORA_PATH)
+        {
+            let SwwwCommand::Img(request) = parse_swww_command(
+                "swww img /usr/share/backgrounds/slopos-aurora.ppm",
+                self.swww_defaults,
+            )
+            .unwrap_or_else(|_| crate::fatal("desktop service wallpaper command is invalid")) else {
+                crate::fatal("desktop service wallpaper command changed kind");
+            };
+            self.wallpaper
+                .apply(request)
+                .unwrap_or_else(|_| crate::fatal("desktop service wallpaper policy failed"));
+            serialln(format_args!(
+                "SLOPOS-SWWW: policy applied owner_pid={} image={} output=SLOPOS-1 transition={} step={} fps={}",
+                snapshot.owner_pid,
+                AURORA_PATH,
+                self.wallpaper.transition().kind.name(),
+                self.wallpaper.transition().step,
+                self.wallpaper.transition().fps
+            ));
+        }
+        self.service_generation = snapshot.generation;
+        serialln(format_args!(
+            "SLOPOS-DESKTOP-SERVICE: policy applied generation={} owner_pid={} capabilities=waybar-provider/swww-policy cpu={} memory={} wallpaper={} renderer=kernel-mechanism",
+            snapshot.generation,
+            snapshot.owner_pid,
+            snapshot.cpu_usage,
+            snapshot.memory_percentage,
+            AURORA_PATH
+        ));
+    }
+
     fn apply_config_update(&mut self, sources: crate::desktop_config::DesktopConfigSources) {
         let layout = parse_niri_layout(sources.niri)
             .unwrap_or_else(|_| crate::fatal("published niri layout became invalid"));
@@ -548,6 +586,8 @@ impl Desktop {
             value: "",
         };
         let mut values = [blank; 4];
+        let cpu_usage = DecimalU8::new(self.provider_cpu_usage);
+        let memory_percentage = DecimalU8::new(self.provider_memory_percentage);
         let (default, value_count) = match module {
             "niri/workspaces" => {
                 let label = workspace_label(self.workspaces.active(), self.workspaces.len());
@@ -592,14 +632,14 @@ impl Desktop {
             "cpu" => {
                 values[0] = BarFormatValue {
                     name: "usage",
-                    value: "0",
+                    value: cpu_usage.as_str(),
                 };
                 ("CPU OK", 1)
             }
             "memory" => {
                 values[0] = BarFormatValue {
                     name: "percentage",
-                    value: "36",
+                    value: memory_percentage.as_str(),
                 };
                 ("MEM 36%", 1)
             }
@@ -1178,6 +1218,36 @@ const fn small_number(value: usize) -> &'static str {
         7 => "7",
         8 => "8",
         _ => "?",
+    }
+}
+
+struct DecimalU8 {
+    bytes: [u8; 3],
+    start: usize,
+}
+
+impl DecimalU8 {
+    fn new(value: u8) -> Self {
+        let mut bytes = [b'0'; 3];
+        let start = if value >= 100 {
+            bytes[0] += value / 100;
+            bytes[1] += (value / 10) % 10;
+            bytes[2] += value % 10;
+            0
+        } else if value >= 10 {
+            bytes[1] += value / 10;
+            bytes[2] += value % 10;
+            1
+        } else {
+            bytes[2] += value;
+            2
+        };
+        Self { bytes, start }
+    }
+
+    fn as_str(&self) -> &str {
+        // SAFETY: the constructor emits only ASCII decimal digits.
+        unsafe { core::str::from_utf8_unchecked(&self.bytes[self.start..]) }
     }
 }
 

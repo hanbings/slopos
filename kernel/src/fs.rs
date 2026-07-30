@@ -53,8 +53,8 @@ const ROOT_FILESYSTEM_ID: u16 = 1;
 const VFS_TEST_PATH: &[u8] = b"/etc/./slopos/../slopos/system.conf";
 const INIT_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-init"];
 const INIT_EXECUTABLE_DISPLAY: &str = "/sbin/slop-init";
-const WORKER_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-worker"];
-const WORKER_EXECUTABLE_DISPLAY: &str = "/sbin/slop-worker";
+const DESKTOP_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-shell"];
+const DESKTOP_EXECUTABLE_DISPLAY: &str = "/sbin/slop-shell";
 const INIT_EXECUTABLE_CAPACITY: usize = 32 * 1024;
 const PROCESS_FILE_CAPACITY: usize = 8;
 const LINUX_ENOENT: i64 = -2;
@@ -80,17 +80,17 @@ const SWWW_SYSTEM_ENV_PATH: [&[u8]; 3] = [b"etc", b"swww", b"env"];
 const SWWW_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"swww.env"];
 
 struct InitExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
-struct WorkerExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
+struct DesktopExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
 
 // The block task is the sole writer and invokes PID 1 synchronously before it
 // resumes filesystem work, so the executable bytes cannot be mutated in use.
 unsafe impl Sync for InitExecutableStorage {}
-unsafe impl Sync for WorkerExecutableStorage {}
+unsafe impl Sync for DesktopExecutableStorage {}
 
 static INIT_EXECUTABLE: InitExecutableStorage =
     InitExecutableStorage(UnsafeCell::new([0; INIT_EXECUTABLE_CAPACITY]));
-static WORKER_EXECUTABLE: WorkerExecutableStorage =
-    WorkerExecutableStorage(UnsafeCell::new([0; INIT_EXECUTABLE_CAPACITY]));
+static DESKTOP_EXECUTABLE: DesktopExecutableStorage =
+    DesktopExecutableStorage(UnsafeCell::new([0; INIT_EXECUTABLE_CAPACITY]));
 
 #[derive(Clone, Copy)]
 struct ConfigCandidate {
@@ -689,33 +689,33 @@ async fn load_and_run_init(
         init_executable.inode.number
     ));
 
-    let worker_executable = mount
-        .try_open_file(device, &WORKER_EXECUTABLE_PATH)
+    let desktop_executable = mount
+        .try_open_file(device, &DESKTOP_EXECUTABLE_PATH)
         .await
-        .unwrap_or_else(|| device.fail("root VFS worker executable was not found"));
-    let worker_size = usize::try_from(worker_executable.inode.size)
-        .unwrap_or_else(|_| device.fail("root VFS worker executable exceeds address space"));
-    if worker_size == 0 || worker_size > INIT_EXECUTABLE_CAPACITY {
-        device.fail("root VFS worker executable has an invalid size");
+        .unwrap_or_else(|| device.fail("root VFS desktop executable was not found"));
+    let desktop_size = usize::try_from(desktop_executable.inode.size)
+        .unwrap_or_else(|_| device.fail("root VFS desktop executable exceeds address space"));
+    if desktop_size == 0 || desktop_size > INIT_EXECUTABLE_CAPACITY {
+        device.fail("root VFS desktop executable has an invalid size");
     }
     // SAFETY: same single-writer lifetime as INIT_EXECUTABLE above.
-    let worker_storage = unsafe { &mut *WORKER_EXECUTABLE.0.get() };
-    worker_storage.fill(0);
+    let desktop_storage = unsafe { &mut *DESKTOP_EXECUTABLE.0.get() };
+    desktop_storage.fill(0);
     copied = 0;
     logical_block = 0;
-    while copied < worker_size {
+    while copied < desktop_size {
         let bytes = mount
-            .read_file_block(device, &worker_executable, logical_block)
+            .read_file_block(device, &desktop_executable, logical_block)
             .await;
-        let length = bytes.len().min(worker_size - copied);
-        worker_storage[copied..copied + length].copy_from_slice(&bytes[..length]);
+        let length = bytes.len().min(desktop_size - copied);
+        desktop_storage[copied..copied + length].copy_from_slice(&bytes[..length]);
         copied += length;
         logical_block += 1;
     }
-    let worker_image = &worker_storage[..worker_size];
+    let desktop_image = &desktop_storage[..desktop_size];
     crate::serial::serialln(format_args!(
-        "SLOPOS-VFS: executable loaded path={WORKER_EXECUTABLE_DISPLAY} inode={} bytes={worker_size} blocks={logical_block} matches_boot=not-required",
-        worker_executable.inode.number
+        "SLOPOS-VFS: executable loaded path={DESKTOP_EXECUTABLE_DISPLAY} inode={} bytes={desktop_size} blocks={logical_block} matches_boot=not-required role=desktop-service",
+        desktop_executable.inode.number
     ));
 
     let root_path =
@@ -732,9 +732,9 @@ async fn load_and_run_init(
         init_image,
         "vfs",
         INIT_EXECUTABLE_DISPLAY,
-        worker_image,
+        desktop_image,
         "vfs",
-        WORKER_EXECUTABLE_DISPLAY,
+        DESKTOP_EXECUTABLE_DISPLAY,
     );
     loop {
         event = match event {

@@ -4,6 +4,7 @@ members = [
     "boot",
     "crates/acpi",
     "crates/boot-protocol",
+    "crates/desktop-protocol",
     "crates/elf",
     "crates/ext4",
     "crates/pci",
@@ -14,7 +15,7 @@ members = [
     "ebpf",
     "kernel",
     "userspace/init",
-    "userspace/worker",
+    "userspace/desktop",
 ]
 
 [workspace.package]

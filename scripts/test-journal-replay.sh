@@ -47,7 +47,7 @@ mkdir -p "${repo_dir}/evidence"
 "${cargo_bin}" build --locked --release \
     -p slopos-init --target x86_64-unknown-none
 "${cargo_bin}" build --locked --release \
-    -p slopos-worker --target x86_64-unknown-none
+    -p slopos-desktop --target x86_64-unknown-none
 "${cargo_bin}" build --locked --release \
     -p slopos-kernel --target x86_64-unknown-none \
     --features journal-replay-injection
@@ -131,7 +131,10 @@ grep -Fq \
     "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-worker argv1=--probe format=elf64" \
+    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-shell argv1=--session format=elf64" \
+    "${replay_serial}"
+grep -Fq \
+    "SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2 capabilities=waybar-provider/swww-policy" \
     "${replay_serial}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=1 to=2" "${replay_serial}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=2 to=1" "${replay_serial}"
@@ -216,7 +219,7 @@ sed -i 's/\r$//' \
 restore_clean_artifacts
 trap - EXIT
 clean_hash="$(sha256sum "${root_image}" | awk '{print $1}')"
-if [[ "${clean_hash}" != "c2f5c180d64f1ef45883c47258bfb794e344bbab2bd9c9d4e6623f007a1d1125" ]]; then
+if [[ "${clean_hash}" != "f2325b414d20f77d123c8deaf208e06901bf5eb5a1218fdc12cf351198a75cde" ]]; then
     echo "journal replay cleanup did not restore the reproducible root image" >&2
     exit 1
 fi

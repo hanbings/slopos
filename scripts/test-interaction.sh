@@ -103,7 +103,10 @@ grep -Fq \
     "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-worker argv1=--probe format=elf64" \
+    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-shell argv1=--session format=elf64" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2 capabilities=waybar-provider/swww-policy" \
     "${serial_log}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=1 to=2" "${serial_log}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=2 to=1" "${serial_log}"

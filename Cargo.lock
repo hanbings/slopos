@@ -25,6 +25,17 @@ name = "slopos-boot-protocol"
 version = "0.1.0"
 
 [[package]]
+name = "slopos-desktop"
+version = "0.1.0"
+dependencies = [
+ "slopos-desktop-protocol",
+]
+
+[[package]]
+name = "slopos-desktop-protocol"
+version = "0.1.0"
+
+[[package]]
 name = "slopos-ebpf"
 version = "0.1.0"
 
@@ -46,6 +57,7 @@ version = "0.1.0"
 dependencies = [
  "slopos-acpi",
  "slopos-boot-protocol",
+ "slopos-desktop-protocol",
  "slopos-ebpf",
  "slopos-elf",
  "slopos-ext4",
@@ -77,10 +89,6 @@ version = "0.1.0"
 
 [[package]]
 name = "slopos-virtio"
-version = "0.1.0"
-
-[[package]]
-name = "slopos-worker"
 version = "0.1.0"
 
 [[package]]

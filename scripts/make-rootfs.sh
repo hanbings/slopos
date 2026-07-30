@@ -7,7 +7,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${repo_dir}/target/slopos-root.ext4"
 source_dir="${repo_dir}/rootfs"
 user_binary="${repo_dir}/target/x86_64-unknown-none/release/slopos-init"
-worker_binary="${repo_dir}/target/x86_64-unknown-none/release/slopos-worker"
+desktop_binary="${repo_dir}/target/x86_64-unknown-none/release/slopos-desktop"
 mke2fs=/usr/sbin/mke2fs
 debugfs=/usr/sbin/debugfs
 export E2FSPROGS_FAKE_TIME=1785369600
@@ -23,7 +23,7 @@ if [[ ! -d "${source_dir}" ]]; then
     echo "missing root filesystem source: ${source_dir}" >&2
     exit 1
 fi
-for executable in "${user_binary}" "${worker_binary}"; do
+for executable in "${user_binary}" "${desktop_binary}"; do
     if [[ ! -f "${executable}" ]]; then
         echo "missing root executable: ${executable}" >&2
         exit 1
@@ -34,7 +34,7 @@ mkdir -p "${repo_dir}/target"
 cp -a "${source_dir}/." "${staging_dir}/"
 mkdir -p "${staging_dir}/sbin"
 cp "${user_binary}" "${staging_dir}/sbin/slop-init"
-cp "${worker_binary}" "${staging_dir}/sbin/slop-worker"
+cp "${desktop_binary}" "${staging_dir}/sbin/slop-shell"
 ln -s slopos-release "${staging_dir}/etc/current-release"
 cp "${repo_dir}/assets/niri-config.kdl" "${staging_dir}/etc/slopos/niri.kdl"
 cp "${repo_dir}/assets/waybar-config.jsonc" "${staging_dir}/etc/slopos/waybar.jsonc"

@@ -7,13 +7,13 @@ all: build
 
 build:
 	$(CARGO) build --locked --release -p slopos-init --target x86_64-unknown-none
-	$(CARGO) build --locked --release -p slopos-worker --target x86_64-unknown-none
+	$(CARGO) build --locked --release -p slopos-desktop --target x86_64-unknown-none
 	$(CARGO) build --locked --release -p slopos-kernel --target x86_64-unknown-none
 	$(CARGO) build --locked --release -p slopos-boot --target x86_64-unknown-uefi
 
 rootfs:
 	$(CARGO) build --locked --release -p slopos-init --target x86_64-unknown-none
-	$(CARGO) build --locked --release -p slopos-worker --target x86_64-unknown-none
+	$(CARGO) build --locked --release -p slopos-desktop --target x86_64-unknown-none
 	./scripts/make-rootfs.sh
 
 image: build rootfs
@@ -36,6 +36,7 @@ test-process:
 
 test-shell:
 	$(CARGO) test --locked -p slopos-shell
+	$(CARGO) test --locked -p slopos-desktop-protocol
 
 test-pci:
 	$(CARGO) test --locked -p slopos-pci

@@ -4,17 +4,18 @@ use core::arch::x86_64::__cpuid;
 use core::arch::{asm, global_asm};
 use core::cell::UnsafeCell;
 use core::ptr;
+use slopos_desktop_protocol::{COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DesktopCommit};
 use slopos_process::{
     ProcessError, ProcessImage, ProcessState, ProcessTable, build_linux_initial_stack,
 };
 use slopos_vfs::{AccessMode, FileNode, ReadWindow, VfsError, WriteWindow};
 
 const INIT_PID: u32 = 1;
-const WORKER_PID: u32 = 2;
+const DESKTOP_PID: u32 = 2;
 pub const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
 const INIT_EXPECTED_SYSCALLS: u64 = 17;
-const WORKER_EXPECTED_SYSCALLS: u64 = 7;
+const DESKTOP_EXPECTED_SYSCALLS: u64 = 16;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
 const LINUX_AT_FDCWD: u64 = (-100i64) as u64;
@@ -36,16 +37,16 @@ const LINUX_EFAULT: i64 = -14;
 const LINUX_EINVAL: i64 = -22;
 const LINUX_ENAMETOOLONG: i64 = -36;
 const INIT_MESSAGE: &[u8] = b"SLOPOS user write\n";
-const WORKER_MESSAGE: &[u8] = b"SLOPOS worker done\n";
+const DESKTOP_MESSAGE: &[u8] = b"SLOPOS desktop policy ready\n";
 const INIT_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-init", b"--system"];
-const WORKER_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-worker", b"--probe"];
+const DESKTOP_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-shell", b"--session"];
 const INIT_ENVIRONMENT: &[&[u8]] = &[
     b"SLOPOS_SESSION=desktop",
     b"XDG_CURRENT_DESKTOP=SlopOS",
     b"WAYLAND_DISPLAY=wayland-0",
 ];
-const WORKER_ENVIRONMENT: &[&[u8]] = &[
-    b"SLOPOS_ROLE=worker",
+const DESKTOP_ENVIRONMENT: &[&[u8]] = &[
+    b"SLOPOS_ROLE=desktop-shell",
     b"XDG_CURRENT_DESKTOP=SlopOS",
     b"WAYLAND_DISPLAY=wayland-0",
 ];
@@ -313,9 +314,9 @@ pub fn start_processes(
     init_image: &[u8],
     init_source: &str,
     init_path: &str,
-    worker_image: &[u8],
-    worker_source: &str,
-    worker_path: &str,
+    desktop_image: &[u8],
+    desktop_source: &str,
+    desktop_path: &str,
 ) -> ProcessEvent {
     reset_process_state();
     let init_pid = spawn_user_process(
@@ -329,19 +330,19 @@ pub fn start_processes(
     if init_pid != INIT_PID {
         crate::fatal("bootstrap process did not receive PID 1");
     }
-    let worker_pid = spawn_user_process(
-        worker_image,
-        worker_source,
-        worker_path,
+    let desktop_pid = spawn_user_process(
+        desktop_image,
+        desktop_source,
+        desktop_path,
         Some(init_pid),
-        WORKER_ARGUMENTS,
-        WORKER_ENVIRONMENT,
+        DESKTOP_ARGUMENTS,
+        DESKTOP_ENVIRONMENT,
     );
-    if worker_pid != WORKER_PID {
-        crate::fatal("worker process did not receive PID 2");
+    if desktop_pid != DESKTOP_PID {
+        crate::fatal("desktop service process did not receive PID 2");
     }
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: table initialized capacity={PROCESS_CAPACITY} processes=2 pids={INIT_PID}/{WORKER_PID} states=ready/ready fd_capacity={PROCESS_FD_CAPACITY} per_process_fds=true"
+        "SLOPOS-PROCESS: table initialized capacity={PROCESS_CAPACITY} processes=2 pids={INIT_PID}/{DESKTOP_PID} roles=init/desktop-service states=ready/ready fd_capacity={PROCESS_FD_CAPACITY} per_process_fds=true"
     ));
     configure_fast_syscall();
     run_process(init_pid)
@@ -471,7 +472,7 @@ fn run_process(pid: u32) -> ProcessEvent {
     set_current_process(Some(pid));
     // SAFETY: the process owns a validated address space. Ready processes use
     // their ELF entry/initial stack; Runnable processes use a frame captured
-    // by the IF-masked syscall entry.
+    // by the IF-masked syscall or timer entry.
     unsafe {
         if process.state == ProcessState::Ready {
             slopos_enter_user(
@@ -829,14 +830,14 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             if frame.rdi == USER_STDOUT {
                 let expected = match pid {
                     INIT_PID => INIT_MESSAGE,
-                    WORKER_PID => WORKER_MESSAGE,
+                    DESKTOP_PID => DESKTOP_MESSAGE,
                     _ => crate::fatal("stdout write came from an unknown process"),
                 };
                 if frame.rdx != expected.len() as u64 {
                     frame.rax = LINUX_EINVAL as u64;
                     return 0;
                 }
-                let mut message = [0u8; WORKER_MESSAGE.len()];
+                let mut message = [0u8; DESKTOP_MESSAGE.len()];
                 if copy_from_user(pid, frame.rsi, &mut message[..expected.len()]).is_none() {
                     frame.rax = LINUX_EFAULT as u64;
                     return 0;
@@ -972,6 +973,33 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             ));
             1
         }
+        DESKTOP_COMMIT_SYSCALL => {
+            if frame.rsi != COMMIT_SIZE as u64 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let mut bytes = [0u8; COMMIT_SIZE];
+            if copy_from_user(pid, frame.rdi, &mut bytes).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let Ok(commit) = DesktopCommit::decode(&bytes) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            match crate::desktop_service::submit(pid, commit) {
+                Ok(generation) => {
+                    frame.rax = 0;
+                    crate::serial::serialln(format_args!(
+                        "SLOPOS-SYSCALL: pid={pid} abi=slopos-desktop-v1 entry=syscall return=sysretq nr={DESKTOP_COMMIT_SYSCALL} commit_bytes={COMMIT_SIZE} generation={generation} origin=cpl3 result=0"
+                    ));
+                }
+                Err(_) => {
+                    frame.rax = LINUX_EINVAL as u64;
+                }
+            }
+            0
+        }
         LINUX_SYS_EXIT => {
             if frame.rdi > u64::from(u8::MAX) {
                 crate::fatal("user exit syscall status is invalid");
@@ -999,7 +1027,7 @@ fn process_event_after_user(pid: u32) -> ProcessEvent {
     if process.state == ProcessState::Exited {
         let expected_syscalls = match pid {
             INIT_PID => INIT_EXPECTED_SYSCALLS,
-            WORKER_PID => WORKER_EXPECTED_SYSCALLS,
+            DESKTOP_PID => DESKTOP_EXPECTED_SYSCALLS,
             _ => crate::fatal("unknown process exited"),
         };
         let preemptions = preemption_count(pid);

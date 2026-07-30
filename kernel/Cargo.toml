@@ -16,6 +16,7 @@ journal-replay-injection = []
 [dependencies]
 slopos-acpi = { path = "../crates/acpi" }
 slopos-boot-protocol = { path = "../crates/boot-protocol" }
+slopos-desktop-protocol = { path = "../crates/desktop-protocol" }
 slopos-ebpf = { path = "../ebpf" }
 slopos-elf = { path = "../crates/elf" }
 slopos-ext4 = { path = "../crates/ext4" }

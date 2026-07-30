@@ -7,6 +7,7 @@ use core::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use core::task::{Context, Poll};
 
 use crate::desktop_config::DesktopConfigSources;
+use crate::desktop_service::DesktopServiceSnapshot;
 
 const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64;
@@ -70,6 +71,7 @@ pub enum InputEvent {
 pub enum DesktopEvent {
     Input(RawInputByte),
     ConfigUpdate(DesktopConfigSources),
+    ServiceUpdate(DesktopServiceSnapshot),
 }
 
 pub struct Controller {
@@ -220,8 +222,12 @@ pub fn enqueue_interrupt_byte(mouse: bool, value: u8) {
     crate::executor::wake_task(crate::executor::INPUT_TASK);
 }
 
-pub async fn next_desktop_event(config_generation: u64) -> DesktopEvent {
-    NextDesktopEvent { config_generation }.await
+pub async fn next_desktop_event(config_generation: u64, service_generation: u64) -> DesktopEvent {
+    NextDesktopEvent {
+        config_generation,
+        service_generation,
+    }
+    .await
 }
 
 pub fn dropped_bytes() -> u64 {
@@ -230,6 +236,7 @@ pub fn dropped_bytes() -> u64 {
 
 struct NextDesktopEvent {
     config_generation: u64,
+    service_generation: u64,
 }
 
 impl Future for NextDesktopEvent {
@@ -238,6 +245,9 @@ impl Future for NextDesktopEvent {
     fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
         if let Some(sources) = crate::desktop_config::latest_after(self.config_generation) {
             return Poll::Ready(DesktopEvent::ConfigUpdate(sources));
+        }
+        if let Some(snapshot) = crate::desktop_service::latest_after(self.service_generation) {
+            return Poll::Ready(DesktopEvent::ServiceUpdate(snapshot));
         }
         let tail = QUEUE_TAIL.load(Ordering::Relaxed);
         if tail == QUEUE_HEAD.load(Ordering::Acquire) {
