@@ -3,6 +3,8 @@
 #![no_main]
 #![no_std]
 
+mod acpi;
+mod apic;
 mod desktop;
 mod executor;
 mod font;
@@ -20,6 +22,7 @@ use core::panic::PanicInfo;
 use desktop::Desktop;
 use framebuffer::Framebuffer;
 use serial::serialln;
+use slopos_acpi::{MAX_IO_APICS, RootKind};
 use slopos_boot_protocol::{BOOT_INFO_MAGIC, BOOT_INFO_VERSION, BootInfo};
 use slopos_ebpf::{Instruction, NoHelpers};
 
@@ -57,9 +60,8 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     {
         fatal("UEFI memory map is missing");
     }
-    if boot_info.acpi_rsdp == 0 || !valid_rsdp(boot_info.acpi_rsdp) {
-        fatal("ACPI RSDP is missing or invalid");
-    }
+    let platform =
+        acpi::discover(boot_info.acpi_rsdp).unwrap_or_else(|| fatal("ACPI MADT is unavailable"));
     if boot_info.initrd.base == 0 || boot_info.initrd.size < 17 {
         fatal("bootstrap image is missing");
     }
@@ -68,9 +70,16 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         "SLOPOS-KERNEL: boot info valid memory_descriptors={}",
         boot_info.memory_map.descriptor_count
     ));
+    let root_name = match platform.root_kind {
+        RootKind::Rsdt => "RSDT",
+        RootKind::Xsdt => "XSDT",
+    };
     serialln(format_args!(
-        "SLOPOS-KERNEL: ACPI RSDP validated at {:#x}",
-        boot_info.acpi_rsdp
+        "SLOPOS-ACPI: {root_name} MADT validated cpus={} lapic={:#x} ioapics={} overrides={}",
+        platform.madt.enabled_processors,
+        platform.madt.local_apic_address,
+        platform.madt.io_apics().len(),
+        platform.madt.interrupt_overrides().len()
     ));
     serialln(format_args!(
         "SLOPOS-KERNEL: initrd available base={:#x} bytes={}",
@@ -95,7 +104,15 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         memory_stats.conventional_regions, memory_stats.free_frames, probe_frame
     ));
 
-    let paging_stats = paging::install(boot_info.framebuffer);
+    let mut interrupt_mmio = [0u64; MAX_IO_APICS + 1];
+    interrupt_mmio[0] = platform.madt.local_apic_address;
+    for (index, io_apic) in platform.madt.io_apics().iter().enumerate() {
+        interrupt_mmio[index + 1] = u64::from(io_apic.address);
+    }
+    let paging_stats = paging::install(
+        boot_info.framebuffer,
+        &interrupt_mmio[..platform.madt.io_apics().len() + 1],
+    );
     serialln(format_args!(
         "SLOPOS-MM: CR3 switched root={:#x} table_frames={} huge_pages={}",
         paging_stats.pml4, paging_stats.page_table_frames, paging_stats.huge_pages
@@ -142,7 +159,7 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
             "SLOPOS-INPUT: keyboard enabled; mouse handshake incomplete"
         ));
     }
-    interrupts::initialize();
+    interrupts::initialize(&platform.madt);
 
     let mut desktop = Desktop::new(framebuffer.width(), framebuffer.height());
     desktop.render(&mut framebuffer);
@@ -183,12 +200,6 @@ fn verify_ebpf_runtime() {
         "SLOPOS-EBPF: verifier accepted instructions={} interpreter_result={result}",
         verified.len()
     ));
-}
-
-fn valid_rsdp(address: u64) -> bool {
-    // SAFETY: UEFI identified this address as an ACPI RSDP configuration table.
-    let bytes = unsafe { core::slice::from_raw_parts(address as *const u8, 20) };
-    bytes[0..8] == *b"RSD PTR " && bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) == 0
 }
 
 fn fatal(message: &str) -> ! {

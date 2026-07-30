@@ -11,5 +11,6 @@ name = "slopos-kernel"
 path = "src/main.rs"
 
 [dependencies]
+slopos-acpi = { path = "../crates/acpi" }
 slopos-boot-protocol = { path = "../crates/boot-protocol" }
 slopos-ebpf = { path = "../ebpf" }

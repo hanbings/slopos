@@ -3,6 +3,7 @@
 use core::arch::{asm, global_asm};
 use core::cell::UnsafeCell;
 use core::mem::size_of;
+use slopos_acpi::MadtInfo;
 
 const KERNEL_CODE_SELECTOR: u16 = 0x08;
 const DIVIDE_ERROR_VECTOR: usize = 0;
@@ -13,6 +14,7 @@ const PAGE_FAULT_VECTOR: usize = 14;
 const TIMER_VECTOR: usize = 0x20;
 const KEYBOARD_VECTOR: usize = 0x21;
 const MOUSE_VECTOR: usize = 0x2c;
+const SPURIOUS_VECTOR: usize = 0xff;
 
 #[repr(C, packed)]
 struct DescriptorTablePointer {
@@ -64,16 +66,22 @@ unsafe impl Sync for IdtStorage {}
 static IDT: IdtStorage = IdtStorage(UnsafeCell::new([IdtEntry::MISSING; 256]));
 static GDT: [u64; 3] = [0, 0x00af_9a00_0000_ffff, 0x00cf_9200_0000_ffff];
 
-pub fn initialize() {
+pub fn initialize(madt: &MadtInfo) {
     // SAFETY: early kernel initialization runs once with interrupts disabled.
     unsafe {
         load_gdt();
         install_idt();
-        remap_pic();
         configure_pit();
     }
+    let stats = crate::apic::initialize(madt);
     crate::serial::serialln(format_args!(
-        "SLOPOS-INTERRUPT: GDT IDT exception gates PIC PIT initialized timer_hz=100"
+        "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized timer_hz=100 lapic_id={} ioapic_id={} redirections={} routes={}/{}/{}",
+        stats.local_id,
+        stats.io_id,
+        stats.redirection_entries,
+        stats.timer_gsi,
+        stats.keyboard_gsi,
+        stats.mouse_gsi
     ));
 }
 
@@ -139,6 +147,8 @@ unsafe fn install_idt() {
         (*entries)[KEYBOARD_VECTOR] =
             IdtEntry::interrupt_gate(slopos_keyboard_interrupt as usize as u64);
         (*entries)[MOUSE_VECTOR] = IdtEntry::interrupt_gate(slopos_mouse_interrupt as usize as u64);
+        (*entries)[SPURIOUS_VECTOR] =
+            IdtEntry::interrupt_gate(slopos_spurious_interrupt as usize as u64);
     }
     let pointer = DescriptorTablePointer {
         limit: (size_of::<[IdtEntry; 256]>() - 1) as u16,
@@ -146,32 +156,6 @@ unsafe fn install_idt() {
     };
     // SAFETY: pointer covers the static IDT for the lifetime of the kernel.
     unsafe { asm!("lidt [{pointer}]", pointer = in(reg) &pointer, options(readonly, nostack)) };
-}
-
-unsafe fn remap_pic() {
-    // ICW1: initialize both 8259s, followed by vector offsets and cascade wiring.
-    unsafe {
-        outb(0x20, 0x11);
-        io_wait();
-        outb(0xa0, 0x11);
-        io_wait();
-        outb(0x21, 0x20);
-        io_wait();
-        outb(0xa1, 0x28);
-        io_wait();
-        outb(0x21, 0x04);
-        io_wait();
-        outb(0xa1, 0x02);
-        io_wait();
-        outb(0x21, 0x01);
-        io_wait();
-        outb(0xa1, 0x01);
-        io_wait();
-
-        // Master IRQ0 timer, IRQ1 keyboard, IRQ2 cascade; slave IRQ4 mouse.
-        outb(0x21, 0xf8);
-        outb(0xa1, 0xef);
-    }
 }
 
 unsafe fn configure_pit() {
@@ -184,32 +168,22 @@ unsafe fn configure_pit() {
     }
 }
 
-fn end_of_interrupt(irq: u8) {
-    // SAFETY: fixed PIC command ports; slave must be acknowledged before master.
-    unsafe {
-        if irq >= 8 {
-            outb(0xa0, 0x20);
-        }
-        outb(0x20, 0x20);
-    }
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn slopos_timer_handler() {
     crate::timer::interrupt_tick();
-    end_of_interrupt(0);
+    crate::apic::end_of_interrupt();
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn slopos_keyboard_handler() {
     consume_ps2_irq();
-    end_of_interrupt(1);
+    crate::apic::end_of_interrupt();
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn slopos_mouse_handler() {
     consume_ps2_irq();
-    end_of_interrupt(12);
+    crate::apic::end_of_interrupt();
 }
 
 fn consume_ps2_irq() {
@@ -263,11 +237,6 @@ unsafe fn inb(port: u16) -> u8 {
     value
 }
 
-unsafe fn io_wait() {
-    // SAFETY: port 0x80 is the conventional x86 delay port.
-    unsafe { outb(0x80, 0) };
-}
-
 unsafe extern "C" {
     fn slopos_divide_error();
     fn slopos_invalid_opcode();
@@ -277,6 +246,7 @@ unsafe extern "C" {
     fn slopos_timer_interrupt();
     fn slopos_keyboard_interrupt();
     fn slopos_mouse_interrupt();
+    fn slopos_spurious_interrupt();
 }
 
 // Each stub saves all SysV caller-clobbered integer registers, realigns an
@@ -321,6 +291,12 @@ global_asm!(
     SLOPOS_IRQ_STUB slopos_timer_interrupt, slopos_timer_handler
     SLOPOS_IRQ_STUB slopos_keyboard_interrupt, slopos_keyboard_handler
     SLOPOS_IRQ_STUB slopos_mouse_interrupt, slopos_mouse_handler
+
+    .global slopos_spurious_interrupt
+    .type slopos_spurious_interrupt, @function
+slopos_spurious_interrupt:
+    iretq
+    .size slopos_spurious_interrupt, .-slopos_spurious_interrupt
 "#
 );
 

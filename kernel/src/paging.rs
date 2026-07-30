@@ -9,6 +9,8 @@ const PAGE_SIZE: u64 = 4096;
 const HUGE_PAGE_SIZE: u64 = 2 * 1024 * 1024;
 const PRESENT: u64 = 1 << 0;
 const WRITABLE: u64 = 1 << 1;
+const WRITE_THROUGH: u64 = 1 << 3;
+const CACHE_DISABLE: u64 = 1 << 4;
 const HUGE: u64 = 1 << 7;
 
 pub struct PagingStats {
@@ -17,7 +19,7 @@ pub struct PagingStats {
     pub huge_pages: usize,
 }
 
-pub fn install(framebuffer: FramebufferInfo) -> PagingStats {
+pub fn install(framebuffer: FramebufferInfo, mmio_pages: &[u64]) -> PagingStats {
     let pml4 = table_frame();
     let pdpt = table_frame();
     set_entry(pml4, 0, pdpt | PRESENT | WRITABLE);
@@ -39,31 +41,21 @@ pub fn install(framebuffer: FramebufferInfo) -> PagingStats {
         huge_pages += 1;
     }
 
-    let framebuffer_start = framebuffer.base & !(HUGE_PAGE_SIZE - 1);
-    let framebuffer_end = framebuffer
-        .base
-        .saturating_add(framebuffer.size)
-        .next_multiple_of(HUGE_PAGE_SIZE);
-    let first_gib_index = (framebuffer_start >> 30) as usize;
-    let last_gib_index = ((framebuffer_end.saturating_sub(1)) >> 30) as usize;
-    for gib_index in first_gib_index..=last_gib_index {
-        if gib_index == 0 {
-            continue;
-        }
-        if gib_index >= ENTRY_COUNT {
-            crate::fatal("framebuffer lies outside lower PML4 slot");
-        }
-        let directory = table_frame();
-        page_table_frames += 1;
-        set_entry(pdpt, gib_index, directory | PRESENT | WRITABLE);
-        let region_start = gib_index as u64 * 1024 * 1024 * 1024;
-        for index in 0..ENTRY_COUNT {
-            let physical = region_start + index as u64 * HUGE_PAGE_SIZE;
-            if physical >= framebuffer_start && physical < framebuffer_end {
-                set_entry(directory, index, physical | PRESENT | WRITABLE | HUGE);
-                huge_pages += 1;
-            }
-        }
+    map_mmio_range(
+        pdpt,
+        framebuffer.base,
+        framebuffer.size,
+        &mut page_table_frames,
+        &mut huge_pages,
+    );
+    for &address in mmio_pages {
+        map_mmio_range(
+            pdpt,
+            address,
+            PAGE_SIZE,
+            &mut page_table_frames,
+            &mut huge_pages,
+        );
     }
 
     // SAFETY: every active kernel, stack, boot-data and framebuffer address is
@@ -87,6 +79,45 @@ pub fn install(framebuffer: FramebufferInfo) -> PagingStats {
     }
 }
 
+fn map_mmio_range(
+    pdpt: u64,
+    base: u64,
+    size: u64,
+    page_table_frames: &mut usize,
+    huge_pages: &mut usize,
+) {
+    let start = base & !(HUGE_PAGE_SIZE - 1);
+    let end = base.saturating_add(size).next_multiple_of(HUGE_PAGE_SIZE);
+    let mut physical = start;
+    while physical < end {
+        let gib_index = (physical >> 30) as usize;
+        if gib_index >= ENTRY_COUNT {
+            crate::fatal("MMIO range lies outside lower PML4 slot");
+        }
+        let mut directory_entry = get_entry(pdpt, gib_index);
+        if directory_entry & PRESENT == 0 {
+            let directory = table_frame();
+            *page_table_frames += 1;
+            directory_entry = directory | PRESENT | WRITABLE;
+            set_entry(pdpt, gib_index, directory_entry);
+        }
+        let directory = directory_entry & !(PAGE_SIZE - 1);
+        let index = ((physical >> 21) & 0x1ff) as usize;
+        let mapping = get_entry(directory, index);
+        if mapping & PRESENT == 0 {
+            *huge_pages += 1;
+        }
+        if mapping & (WRITE_THROUGH | CACHE_DISABLE) != (WRITE_THROUGH | CACHE_DISABLE) {
+            set_entry(
+                directory,
+                index,
+                physical | PRESENT | WRITABLE | WRITE_THROUGH | CACHE_DISABLE | HUGE,
+            );
+        }
+        physical = physical.saturating_add(HUGE_PAGE_SIZE);
+    }
+}
+
 fn table_frame() -> u64 {
     let frame = crate::memory::allocate_frame()
         .unwrap_or_else(|| crate::fatal("physical memory exhausted while building page tables"));
@@ -101,4 +132,12 @@ fn set_entry(table: u64, index: usize, value: u64) {
     }
     // SAFETY: table is an exclusive, page-aligned 512-entry frame.
     unsafe { ptr::write_volatile((table as *mut u64).add(index), value) };
+}
+
+fn get_entry(table: u64, index: usize) -> u64 {
+    if index >= ENTRY_COUNT {
+        crate::fatal("page-table index overflow");
+    }
+    // SAFETY: table is an initialized, page-aligned 512-entry frame.
+    unsafe { ptr::read_volatile((table as *const u64).add(index)) }
 }

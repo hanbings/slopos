@@ -9,6 +9,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
+name = "slopos-acpi"
+version = "0.1.0"
+
+[[package]]
 name = "slopos-boot"
 version = "0.1.0"
 dependencies = [
@@ -28,6 +32,7 @@ version = "0.1.0"
 name = "slopos-kernel"
 version = "0.1.0"
 dependencies = [
+ "slopos-acpi",
  "slopos-boot-protocol",
  "slopos-ebpf",
 ]
