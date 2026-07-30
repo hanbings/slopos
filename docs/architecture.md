@@ -55,7 +55,7 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `interrupts.rs` 安装包含 kernel/user code/data 与 64-bit TSS 的 GDT、加载 task register、安装 IDT、配置 100 Hz PIT，并为 timer、keyboard、mouse、APIC spurious 及关键 CPU exception 安装 gate。TSS 的 `RSP0` 指向专用 16 KiB privilege stack；vector `0x80` 是临时 DPL3 interrupt gate。汇编 stub 保存上下文、对齐栈并调用有界 Rust top half；syscall stub 则保存 15 个 GPR，在 Rust handler 核验 CPL3/参数后 `IRETQ` 返回用户态，或在 exit 路径恢复 kernel CR3/stack。PS/2 top half 读取一个字节、确认 local APIC 并写入固定 SPSC ring；`desktop` future 负责扫描码和 mouse packet 的复杂解析。独立测试会在 PID 1 退出后访问 kernel CR3 中未映射的 1 GiB 地址，实际验证 page-fault vector、error、RIP 和 CR2。
 
-`process.rs` 构造单页 PID 1 image，在独立 CR3 下以 `CS=0x23`、`SS=0x1b` 和 `IRETQ` 进入 CPL3。程序按 Linux x86-64 寄存器/编号约定执行 `write(1, ..., 18)` 和 `exit(0)`，但入口目前是 DPL3 `int 0x80`，不是 `SYSCALL/SYSRET`；image 也不是 ELF。完整边界见 [processes.md](processes.md)。
+`crates/elf` 是无分配 `no_std` ELF64 parser。它只接受 little-endian x86-64 `ET_EXEC`，有界解析 program-header table；对每个 `PT_LOAD` 校验 `p_filesz <= p_memsz`、file/address overflow、canonical address、2 次幂 alignment 与 offset/vaddr congruence，拒绝空、重叠和 W+X segment，并要求 entry 位于 executable segment。`process.rs` 解析一个内嵌 4242-byte ELF，从 file offset `0x1000` 复制 146-byte segment、把 `p_memsz=4096` 尾部保持为零，再在独立 CR3 下以 `CS=0x23`、`SS=0x1b` 和 `IRETQ` 从 ELF entry 进入 CPL3。程序按 Linux x86-64 寄存器/编号约定执行 `write(1, ..., 18)` 和 `exit(0)`，但入口目前是 DPL3 `int 0x80`，不是 `SYSCALL/SYSRET`。完整边界见 [processes.md](processes.md)。
 
 `crates/pci` 通过 `ConfigAccess` trait 把枚举逻辑与硬件访问分离，扫描完整 bus/device/function 空间，识别 multifunction header，以 visited mask 避免 capability 链环，并解码 BAR 与 virtio vendor capability region。内核后端使用 PCI configuration mechanism 1 的 `0xcf8/0xcfc` port，并以 16-bit command write 启用 memory space/bus master 而不误清 status。
 

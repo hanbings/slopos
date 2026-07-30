@@ -33,7 +33,9 @@ qemu-system-x86_64
   -no-reboot
 ```
 
-用户进程证据位于所有串口启动日志的中断初始化之后、桌面 marker 之前。`SLOPOS-PROCESS` 记录独立 CR3、`0x40000000` code、`0x40002000` stack、不同 physical frame 与 `code=user-readonly stack=user-writable kernel=supervisor`；两个 `SLOPOS-SYSCALL` marker 分别证明 write 返回 18、exit status 0，且 CPU trap frame 的 CPL 为 3；最终 marker 证明两次 syscall 后恢复 kernel continuation。交互、page-fault 和 journal 两阶段测试都重复经过这条路径。它只证明同步内嵌单页程序、TSS privilege stack 与临时 `int 0x80` gate，不证明 ELF、`SYSCALL/SYSRET`、调度、多进程或通用 user-pointer handling。
+用户进程证据位于所有串口启动日志的中断初始化之后、桌面 marker 之前。`SLOPOS-PROCESS` 记录 `format=elf64`、entry `0x40000000`、1 个 segment、4242 file bytes、146 load bytes、4096 memory bytes，以及独立 CR3、user code/stack、不同 physical frame 与 `code=user-readonly stack=user-writable kernel=supervisor`；两个 `SLOPOS-SYSCALL` marker 分别证明 write 返回 18、exit status 0，且 CPU trap frame 的 CPL 为 3；最终 marker 证明两次 syscall 后恢复 kernel continuation。交互、page-fault 和 journal 两阶段测试都重复经过这条路径。它只证明严格解析后装入的同步内嵌单页 ELF、TSS privilege stack 与临时 `int 0x80` gate，不证明外部 ELF、多 segment mapping、`SYSCALL/SYSRET`、调度、多进程或通用 user-pointer handling。
+
+ELF parser 的宿主测试由 `make test-elf` 执行。10 项测试验证 ELF64 little-endian/x86-64/`ET_EXEC` header、program-header table、`PT_LOAD` data/BSS view，并拒绝 truncation、越界、`p_filesz > p_memsz`、非法 alignment/congruence、重叠 segment、W+X 与不属于 executable segment 的 entry。parser 无分配且 `no_std`；section header 与 dynamic linking 不参与当前装载。
 
 eBPF 的宿主边界测试由 `make test-ebpf` 执行；裸机证据是 `serial.log` 中的 `SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42`。它只证明文档所列子集，不证明 map、attach point 或 Linux eBPF 兼容性。
 
