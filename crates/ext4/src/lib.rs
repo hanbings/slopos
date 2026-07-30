@@ -10,6 +10,7 @@ pub const FEATURE_INCOMPAT_CHECKSUM_SEED: u32 = 0x2000;
 pub const FEATURE_READ_ONLY_COMPAT_METADATA_CHECKSUM: u32 = 0x0400;
 pub const INODE_FLAG_EXTENTS: u32 = 0x0008_0000;
 pub const INODE_FLAG_DIRECTORY_INDEX: u32 = 0x0000_1000;
+const INODE_FLAG_HUGE_FILE: u32 = 0x0004_0000;
 pub const ROOT_INODE: u32 = 2;
 pub const JOURNAL_INODE: u32 = 8;
 pub const JOURNAL_SUPERBLOCK_SIZE: usize = 1024;
@@ -22,6 +23,7 @@ pub const DIRECTORY_ENTRY_SYMLINK: u8 = 7;
 const FEATURE_INCOMPAT_FILETYPE: u32 = 0x0002;
 const FEATURE_INCOMPAT_EXTENTS: u32 = 0x0040;
 const FEATURE_INCOMPAT_FLEX_BG: u32 = 0x0200;
+const FEATURE_READ_ONLY_COMPAT_BIGALLOC: u32 = 0x0200;
 const SUPPORTED_INCOMPAT_FEATURES: u32 = FEATURE_INCOMPAT_FILETYPE
     | FEATURE_INCOMPAT_RECOVER
     | FEATURE_INCOMPAT_EXTENTS
@@ -39,6 +41,7 @@ const EXTENT_ENTRY_SIZE: usize = 12;
 const EXTENT_TAIL_SIZE: usize = 4;
 const MAX_EXTENT_DEPTH: u16 = 5;
 const DIRECTORY_CHECKSUM_FILE_TYPE: u8 = 0xde;
+const GROUP_FLAG_BLOCK_UNINITIALIZED: u16 = 0x0002;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseError {
@@ -320,6 +323,31 @@ pub fn set_superblock_recovery(bytes: &mut [u8], required: bool) -> Result<(), P
         write_u32(bytes, 1020, checksum)?;
     }
     Superblock::parse_internal(bytes, true)?;
+    Ok(())
+}
+
+pub fn set_superblock_free_block_count(
+    bytes: &mut [u8],
+    free_block_count: u64,
+) -> Result<(), ParseError> {
+    let superblock = Superblock::parse(bytes)?;
+    if free_block_count > superblock.block_count
+        || (superblock.feature_incompat & FEATURE_INCOMPAT_64BIT == 0
+            && free_block_count >> 32 != 0)
+    {
+        return Err(ParseError::InvalidGeometry);
+    }
+    write_u32(bytes, 12, free_block_count as u32)?;
+    if superblock.feature_incompat & FEATURE_INCOMPAT_64BIT != 0 {
+        write_u32(bytes, 344, (free_block_count >> 32) as u32)?;
+    }
+    if superblock.has_metadata_checksums() {
+        let checksum = crc32c(u32::MAX, &bytes[..1020]);
+        write_u32(bytes, 1020, checksum)?;
+    }
+    if Superblock::parse(bytes)?.free_block_count != free_block_count {
+        return Err(ParseError::InvalidGeometry);
+    }
     Ok(())
 }
 
@@ -976,15 +1004,184 @@ pub fn set_inode_size(
     let inode = &mut bytes[..inode_size];
     write_u32(inode, 4, size as u32)?;
     write_u32(inode, 108, (size >> 32) as u32)?;
+    refresh_inode_checksum(inode, inode_number, superblock)?;
+    Inode::parse(inode, inode_number, superblock)?;
+    Ok(())
+}
+
+pub fn resize_regular_file_by_one_block(
+    bytes: &mut [u8],
+    inode_number: u32,
+    superblock: &Superblock,
+    physical_block: u64,
+    grow: bool,
+) -> Result<(), ParseError> {
+    let inode_size = usize::from(superblock.inode_size);
+    let parsed = Inode::parse(bytes, inode_number, superblock)?;
+    if bytes.len() < inode_size
+        || !parsed.is_regular_file()
+        || parsed.flags & INODE_FLAG_HUGE_FILE != 0
+        || parsed.extent_depth()? != 0
+        || read_u16(bytes, 42)? != 1
+        || parsed.size == 0
+        || parsed.size % u64::from(superblock.block_size) != 0
+    {
+        return Err(ParseError::InvalidInode);
+    }
+    let extent = parsed.first_extent()?;
+    let logical_blocks = parsed.size / u64::from(superblock.block_size);
+    let extent_end = u64::from(extent.logical_block) + u64::from(extent.block_count);
+    if extent.unwritten || logical_blocks != extent_end {
+        return Err(ParseError::InvalidExtent);
+    }
+
+    let (new_size, new_block_count_512, new_extent_length) = if grow {
+        if physical_block != extent.physical_block + u64::from(extent.block_count)
+            || extent.block_count >= 32_768
+        {
+            return Err(ParseError::InvalidExtent);
+        }
+        (
+            parsed
+                .size
+                .checked_add(u64::from(superblock.block_size))
+                .ok_or(ParseError::InvalidInode)?,
+            parsed
+                .block_count_512
+                .checked_add(u64::from(superblock.block_size / 512))
+                .ok_or(ParseError::InvalidInode)?,
+            extent.block_count + 1,
+        )
+    } else {
+        if extent.block_count <= 1
+            || physical_block != extent.physical_block + u64::from(extent.block_count) - 1
+        {
+            return Err(ParseError::InvalidExtent);
+        }
+        (
+            parsed.size - u64::from(superblock.block_size),
+            parsed
+                .block_count_512
+                .checked_sub(u64::from(superblock.block_size / 512))
+                .ok_or(ParseError::InvalidInode)?,
+            extent.block_count - 1,
+        )
+    };
+    if new_block_count_512 >> 48 != 0 {
+        return Err(ParseError::InvalidInode);
+    }
+
+    let inode = &mut bytes[..inode_size];
+    write_u32(inode, 4, new_size as u32)?;
+    write_u32(inode, 108, (new_size >> 32) as u32)?;
+    write_u32(inode, 28, new_block_count_512 as u32)?;
+    write_u16(inode, 116, (new_block_count_512 >> 32) as u16)?;
+    write_u16(inode, 56, new_extent_length)?;
+    refresh_inode_checksum(inode, inode_number, superblock)?;
+    let updated = Inode::parse(inode, inode_number, superblock)?;
+    if updated.size != new_size
+        || updated.block_count_512 != new_block_count_512
+        || updated.extent_for_logical_block((logical_blocks - u64::from(!grow)) as u32)?
+            != if grow {
+                Some(Extent {
+                    logical_block: extent.logical_block,
+                    physical_block: extent.physical_block,
+                    block_count: new_extent_length,
+                    unwritten: false,
+                })
+            } else {
+                None
+            }
+    {
+        return Err(ParseError::InvalidInode);
+    }
+    Ok(())
+}
+
+pub fn set_block_allocation(
+    block_bitmap: &mut [u8],
+    group_descriptor_bytes: &mut [u8],
+    group_index: u32,
+    physical_block: u64,
+    allocated: bool,
+    superblock: &Superblock,
+) -> Result<(), ParseError> {
+    if superblock.feature_read_only_compat & FEATURE_READ_ONLY_COMPAT_BIGALLOC != 0
+        || superblock.blocks_per_group % 8 != 0
+    {
+        return Err(ParseError::UnsupportedFeature);
+    }
+    let descriptor_size = usize::from(superblock.descriptor_size);
+    let bitmap_size = usize::try_from(superblock.blocks_per_group / 8)
+        .map_err(|_| ParseError::InvalidGeometry)?;
+    if group_descriptor_bytes.len() < descriptor_size || block_bitmap.len() < bitmap_size {
+        return Err(ParseError::Truncated);
+    }
+    let descriptor = GroupDescriptor::parse(group_descriptor_bytes, group_index, superblock)?;
+    let descriptor_bytes = &mut group_descriptor_bytes[..descriptor_size];
+    if read_u16(descriptor_bytes, 18)? & GROUP_FLAG_BLOCK_UNINITIALIZED != 0 {
+        return Err(ParseError::UnsupportedFeature);
+    }
     if superblock.has_metadata_checksums() {
-        let generation = read_u32(inode, 100)?;
-        let checksum = inode_checksum(inode, inode_number, generation, superblock)?;
-        inode[124..126].copy_from_slice(&(checksum as u16).to_le_bytes());
-        if inode.len() > 131 && read_u16(inode, 128)? >= 4 {
-            inode[130..132].copy_from_slice(&((checksum >> 16) as u16).to_le_bytes());
+        let stored = u32::from(read_u16(descriptor_bytes, 24)?)
+            | (u32::from(read_u16(descriptor_bytes, 56)?) << 16);
+        let computed = crc32c(superblock.checksum_seed, &block_bitmap[..bitmap_size]);
+        if stored != computed {
+            return Err(ParseError::InvalidChecksum);
         }
     }
-    Inode::parse(inode, inode_number, superblock)?;
+
+    let group_first = u64::from(superblock.first_data_block)
+        .checked_add(
+            u64::from(group_index)
+                .checked_mul(u64::from(superblock.blocks_per_group))
+                .ok_or(ParseError::InvalidGeometry)?,
+        )
+        .ok_or(ParseError::InvalidGeometry)?;
+    let group_blocks = superblock
+        .block_count
+        .saturating_sub(group_first)
+        .min(u64::from(superblock.blocks_per_group));
+    let bit = physical_block
+        .checked_sub(group_first)
+        .filter(|bit| *bit < group_blocks)
+        .ok_or(ParseError::InvalidGeometry)?;
+    let byte_index = usize::try_from(bit / 8).map_err(|_| ParseError::InvalidGeometry)?;
+    let mask = 1u8 << (bit % 8);
+    let currently_allocated = block_bitmap[byte_index] & mask != 0;
+    if currently_allocated == allocated {
+        return Err(ParseError::InvalidGeometry);
+    }
+
+    let free_blocks = if allocated {
+        descriptor
+            .free_block_count
+            .checked_sub(1)
+            .ok_or(ParseError::InvalidGeometry)?
+    } else {
+        descriptor
+            .free_block_count
+            .checked_add(1)
+            .filter(|count| u64::from(*count) <= group_blocks)
+            .ok_or(ParseError::InvalidGeometry)?
+    };
+    if allocated {
+        block_bitmap[byte_index] |= mask;
+    } else {
+        block_bitmap[byte_index] &= !mask;
+    }
+    write_u16(descriptor_bytes, 12, free_blocks as u16)?;
+    write_u16(descriptor_bytes, 44, (free_blocks >> 16) as u16)?;
+    if superblock.has_metadata_checksums() {
+        let checksum = crc32c(superblock.checksum_seed, &block_bitmap[..bitmap_size]);
+        write_u16(descriptor_bytes, 24, checksum as u16)?;
+        write_u16(descriptor_bytes, 56, (checksum >> 16) as u16)?;
+    }
+    refresh_group_descriptor_checksum(descriptor_bytes, group_index, superblock)?;
+    let updated = GroupDescriptor::parse(descriptor_bytes, group_index, superblock)?;
+    if updated.free_block_count != free_blocks {
+        return Err(ParseError::InvalidGeometry);
+    }
     Ok(())
 }
 
@@ -1364,6 +1561,39 @@ fn inode_checksum(
     Ok(checksum)
 }
 
+fn refresh_inode_checksum(
+    inode: &mut [u8],
+    inode_number: u32,
+    superblock: &Superblock,
+) -> Result<(), ParseError> {
+    if superblock.has_metadata_checksums() {
+        let generation = read_u32(inode, 100)?;
+        let checksum = inode_checksum(inode, inode_number, generation, superblock)?;
+        write_u16(inode, 124, checksum as u16)?;
+        if inode.len() > 131 && read_u16(inode, 128)? >= 4 {
+            write_u16(inode, 130, (checksum >> 16) as u16)?;
+        }
+    }
+    Ok(())
+}
+
+fn refresh_group_descriptor_checksum(
+    descriptor: &mut [u8],
+    group_index: u32,
+    superblock: &Superblock,
+) -> Result<(), ParseError> {
+    if superblock.has_metadata_checksums() {
+        if descriptor.len() < 32 {
+            return Err(ParseError::Truncated);
+        }
+        write_u16(descriptor, 30, 0)?;
+        let mut checksum = crc32c(superblock.checksum_seed, &group_index.to_le_bytes());
+        checksum = crc32c(checksum, descriptor);
+        write_u16(descriptor, 30, checksum as u16)?;
+    }
+    Ok(())
+}
+
 fn crc32c(seed: u32, bytes: &[u8]) -> u32 {
     let mut checksum = seed;
     for byte in bytes {
@@ -1387,6 +1617,14 @@ fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ParseError> {
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ParseError> {
     let value = bytes.get(offset..offset + 4).ok_or(ParseError::Truncated)?;
     Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+}
+
+fn write_u16(bytes: &mut [u8], offset: usize, value: u16) -> Result<(), ParseError> {
+    let output = bytes
+        .get_mut(offset..offset + 2)
+        .ok_or(ParseError::Truncated)?;
+    output.copy_from_slice(&value.to_le_bytes());
+    Ok(())
 }
 
 fn write_u32(bytes: &mut [u8], offset: usize, value: u32) -> Result<(), ParseError> {
@@ -1879,6 +2117,26 @@ mod tests {
     }
 
     #[test]
+    fn updates_and_restores_superblock_free_blocks() {
+        let mut bytes = valid_superblock();
+        let original = bytes;
+        let free_blocks = Superblock::parse(&bytes).unwrap().free_block_count;
+        set_superblock_free_block_count(&mut bytes, free_blocks - 1).unwrap();
+        assert_eq!(
+            Superblock::parse(&bytes).unwrap().free_block_count,
+            free_blocks - 1
+        );
+        assert_ne!(bytes, original);
+        set_superblock_free_block_count(&mut bytes, free_blocks).unwrap();
+        assert_eq!(bytes, original);
+        let block_count = Superblock::parse(&bytes).unwrap().block_count;
+        assert_eq!(
+            set_superblock_free_block_count(&mut bytes, block_count + 1),
+            Err(ParseError::InvalidGeometry)
+        );
+    }
+
+    #[test]
     fn updates_big_endian_journal_state() {
         let mut bytes = [0u8; JOURNAL_SUPERBLOCK_SIZE];
         bytes[0..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
@@ -2021,6 +2279,71 @@ mod tests {
         assert_eq!(
             set_inode_size(&mut inode[..125], ROOT_INODE, &superblock, 2048),
             Err(ParseError::Truncated)
+        );
+    }
+
+    #[test]
+    fn grows_and_shrinks_a_contiguous_inline_extent() {
+        let superblock = Superblock::parse(&valid_superblock()).unwrap();
+        let mut inode = valid_root_inode(&superblock);
+        inode[0..2].copy_from_slice(&0x81a4u16.to_le_bytes());
+        inode[26..28].copy_from_slice(&1u16.to_le_bytes());
+        refresh_inode_checksum(&mut inode, ROOT_INODE, &superblock).unwrap();
+        let original = inode;
+
+        resize_regular_file_by_one_block(&mut inode, ROOT_INODE, &superblock, 19, true).unwrap();
+        let grown = Inode::parse(&inode, ROOT_INODE, &superblock).unwrap();
+        assert_eq!(grown.size, 8192);
+        assert_eq!(grown.block_count_512, 16);
+        assert_eq!(
+            grown
+                .extent_for_logical_block(1)
+                .unwrap()
+                .unwrap()
+                .block_count,
+            2
+        );
+        let mut noncontiguous = original;
+        assert_eq!(
+            resize_regular_file_by_one_block(&mut noncontiguous, ROOT_INODE, &superblock, 20, true,),
+            Err(ParseError::InvalidExtent)
+        );
+
+        resize_regular_file_by_one_block(&mut inode, ROOT_INODE, &superblock, 19, false).unwrap();
+        assert_eq!(inode, original);
+    }
+
+    #[test]
+    fn allocates_and_frees_a_checksummed_bitmap_block() {
+        let superblock = Superblock::parse(&valid_superblock()).unwrap();
+        let mut bitmap = [0u8; 4096];
+        let mut descriptor = valid_group_descriptor(&superblock);
+        let bitmap_checksum = crc32c(superblock.checksum_seed, &bitmap);
+        descriptor[24..26].copy_from_slice(&(bitmap_checksum as u16).to_le_bytes());
+        descriptor[56..58].copy_from_slice(&((bitmap_checksum >> 16) as u16).to_le_bytes());
+        refresh_group_descriptor_checksum(&mut descriptor, 0, &superblock).unwrap();
+        let original_bitmap = bitmap;
+        let original_descriptor = descriptor;
+
+        set_block_allocation(&mut bitmap, &mut descriptor, 0, 19, true, &superblock).unwrap();
+        assert_ne!(bitmap, original_bitmap);
+        assert_ne!(descriptor, original_descriptor);
+        assert_eq!(bitmap[2] & 0x08, 0x08);
+        assert_eq!(
+            GroupDescriptor::parse(&descriptor, 0, &superblock)
+                .unwrap()
+                .free_block_count,
+            26_562
+        );
+
+        set_block_allocation(&mut bitmap, &mut descriptor, 0, 19, false, &superblock).unwrap();
+        assert_eq!(bitmap, original_bitmap);
+        assert_eq!(descriptor, original_descriptor);
+
+        bitmap[0] ^= 1;
+        assert_eq!(
+            set_block_allocation(&mut bitmap, &mut descriptor, 0, 19, true, &superblock),
+            Err(ParseError::InvalidChecksum)
         );
     }
 
