@@ -4,8 +4,8 @@
 - IDT 已有关键 exception diagnostic gate，但 double fault 仍没有独立 IST，page fault 只能诊断并停止，不能 demand-page。
 - executor 固定为三个 task，没有 spawn、task ownership、cancellation 或 timer wheel。
 - framebuffer 渲染是全屏重绘，没有 damage tracking、double buffering 或 virtio-gpu。
-- 所有窗口和工具都在 ring 0，共享同一地址空间。
-- 配置窗口只修改内存主题，不解析或持久化声明式配置。
+- 三个 surface 已使用 niri 式滚动 column layout，但仍全部在 ring 0；没有 Wayland client、workspace/multi-output、floating/tabbed layout、window rule、bind、animation、overview 或 IPC。
+- niri KDL layout 子集来自编译时 asset，尚未按 XDG/VFS 路径 live reload。顶部栏仍是固定 Waybar 式骨架，没有 JSONC/CSS/module backend；swww daemon、图片 decode 和 transition 尚未实现。
 - `initrd.slp` 仍不是文件系统；独立 ext4 disk 已有 fd 原位写与严格单块 EOF append/truncate、最多八 tag 的 active JBD2 transaction、block/inode allocation、线性目录 create→fd open→unlink 和启动时 replay。scanner 当前只接受零 feature、单个非 wrap transaction；mutation 仍是启动回归流程，尚无可复用 namespace API/syscall、多块或非连续 growth、revoke、多 transaction、通用权限或 btrfs。
 - 已有 frame allocator、自有 early page table、bump heap 和一个同步 PID 1 user address space，但没有回收、process table、thread、scheduler、preemption 或通用 syscall/VFS 接口。
 - kernel 仍使用 2 MiB RWX identity huge page；PID 1 的 private page table 已隔离 supervisor kernel map，并区分 user read-only code 与 user-writable stack，但尚未施加 NX、完整 W^X 或细粒度 kernel section 权限。

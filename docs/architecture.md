@@ -47,7 +47,9 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `kernel/src/framebuffer.rs` 直接使用 volatile 32-bit framebuffer store，尊重 GOP stride 和 RGB/BGR 格式。`font.rs` 是项目内原创的 5×7 bitmap glyph 集。
 
-`desktop.rs` 当前是内核态的早期合成 async task。窗口拥有几何、开关状态、类型和 z-order；输入路径提供焦点、标题栏拖动、右下角缩放、关闭、任务栏恢复和键盘命令处理。它没有声称实现 surface IPC、Wayland object、用户态 client 或进程隔离。
+`crates/shell` 是无分配、无标准库的滚动平铺状态机与 niri KDL layout 子集 parser。column 位于向右延伸的 strip，新窗口不会改变既有 column width；viewport 按 focus edge reveal 或 `never`/`always`/`on-overflow` policy 移动，一个 column 也可纵向 stack 多个 window。配置支持 gap、default fixed/proportional/client width、single-column centering、focus-ring width/color 和 background color。8 项宿主测试覆盖 parse/reject/open/focus/scroll/stack/close。
+
+`desktop.rs` 当前仍是内核态的早期合成 async task，但三个 surface 已由 `ScrollLayout` 放入 50% 宽 column。Tab 沿 column focus，标题栏横拖滚动 strip，红色按钮关闭 tile；顶部 bar 按 Waybar 习惯分为 workspace left、focused-title center、system-status right。配置来自编译时 `assets/niri-config.kdl`，并非 VFS live reload。它没有声称实现 Wayland object/surface IPC、用户态 client、完整 niri workspace/window rule/bind/animation、Waybar JSONC/CSS/module backend 或 swww daemon。兼容边界见 [desktop-shell.md](desktop-shell.md)。
 
 `memory.rs` 按 firmware 报告的 descriptor stride 解析 UEFI map，只收集 conventional memory，并提供并发保护的物理 frame/contiguous bump allocator。启动时实际分配一个 frame、volatile 写入、读回并清零。
 

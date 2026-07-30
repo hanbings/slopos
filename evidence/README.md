@@ -6,13 +6,13 @@
 |---|---|---|
 | `serial.log` | `make test-boot` | OVMF/UEFI、ELF、`ExitBootServices`、XSDT/MADT、memory、CPL3 PID 1、eBPF、PCI/virtio INTx、ext4、async 与桌面循环 |
 | `uefi-debugcon.log` | `make test-boot` | loader 独立 debugcon 日志 |
-| `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`，鼠标拖动终端 |
+| `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`，鼠标横拖 tiled titlebar 并滚动 viewport |
 | `page-fault-serial.log` | `make test-page-fault` | 自有页表的未映射访问、vector 14、error、RIP、CR2 与 fatal boundary |
 | `journal-injection-serial.log` | `make test-journal-replay` phase 1 | commit 已 flush、home 尚未 checkpoint 的 dirty disk |
 | `journal-replay-serial.log` | `make test-journal-replay` phase 2 | 普通 kernel mount-time replay、清理、继续完整启动 |
-| `desktop.png` | `scripts/capture-desktop.sh` | 当前三窗口图形桌面 |
+| `desktop.png` | `scripts/capture-desktop.sh` | niri 式 column strip 与 Waybar 式顶部三区域 |
 | `terminal-status.png` | `make test-interaction` | 图形终端对键盘命令的实际响应 |
-| `window-moved.png` | `make test-interaction` | 鼠标拖动后的窗口位置 |
+| `window-moved.png` | `make test-interaction` | titlebar drag 后 terminal 离屏、后续 column 进入 viewport |
 | `qemu-test.log` | `make test-boot` | QEMU stderr/stdout；正常测试通常为空 |
 
 核心启动命令由 `scripts/test-boot.sh` 固定，等价参数为：
@@ -36,6 +36,8 @@ qemu-system-x86_64
 用户进程证据从 UEFI 日志开始：loader 从 ESP 读取 4848-byte `/slopos/init.elf`，BootInfo v2 令 kernel 在 `LOADER_DATA` allocation 找到同一大小的 image。中断初始化之后、桌面 marker 之前的 `SLOPOS-PROCESS` 记录 `source=boot format=elf64`、entry `0x40000000`、1 个 segment、66 load/memory bytes，以及独立 CR3、user code/stack、不同 physical frame 与 `code=user-readonly stack=user-writable kernel=supervisor`；两个 `SLOPOS-SYSCALL` marker 分别证明 write 返回 18、exit status 0，且 CPU trap frame 的 CPL 为 3；最终 marker 证明两次 syscall 后恢复 kernel continuation。交互、page-fault 和 journal 两阶段测试都重复经过这条路径。它只证明外部单页静态 ELF、TSS privilege stack、受限 user-range check 与临时 `int 0x80` gate，不证明 VFS exec、多 segment mapping、`SYSCALL/SYSRET`、调度或多进程。
 
 ELF parser 的宿主测试由 `make test-elf` 执行。10 项测试验证 ELF64 little-endian/x86-64/`ET_EXEC` header、program-header table、`PT_LOAD` data/BSS view，并拒绝 truncation、越界、`p_filesz > p_memsz`、非法 alignment/congruence、重叠 segment、W+X 与不属于 executable segment 的 entry。parser 无分配且 `no_std`；section header 与 dynamic linking 不参与当前装载。
+
+shell 状态机由 `make test-shell` 验证。8 项宿主测试覆盖 niri KDL layout 子集、无效 policy/width/color、column open 时既有 width/strip coordinate 不变、edge focus scroll、同列 vertical stack、close 与手动 scroll clamp。所有正常/interaction/page-fault/replay 日志在桌面前包含 `SLOPOS-SHELL: niri layout config loaded columns=3 gaps=16 default_width=50% center=never bar=top`；交互日志另有 titlebar drag 后的 view offset。`desktop.png` 显示初始 terminal/System 两列与右侧继续延伸的 strip，`window-moved.png` 显示 viewport 横移后的列。它不证明完整 niri、Waybar 或 swww 兼容性。
 
 eBPF 的宿主边界测试由 `make test-ebpf` 执行；裸机证据是 `serial.log` 中的 `SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42`。它只证明文档所列子集，不证明 map、attach point 或 Linux eBPF 兼容性。
 

@@ -4,7 +4,7 @@
 
 | 规格范围 | 状态 | 当前证据与边界 |
 |---|---|---|
-| 原生图形桌面 | 部分实现 | QEMU 中直接进入三个窗口的交互桌面；键盘命令和鼠标拖动已自动验证。仍是内核态 early desktop，不是最终用户态桌面。 |
+| 原生图形桌面 | 部分实现 | QEMU 中三个 surface 已进入 niri 式 horizontal column strip；列宽稳定、edge scroll、Tab focus、titlebar drag viewport 与顶部 bar 已自动验证。仍是内核态 early desktop，不是用户态 compositor。 |
 | Rust 实现语言 | 已实现并验证（当前代码范围） | loader、kernel、UI、输入和脚本所对应的 SlopOS 源码均为 Rust；x86 汇编限于 port/interrupt/CR3/CPL transition 边界。 |
 | UEFI 引导 | 已实现并验证 | 独立 loader 加载 ELF kernel、独立 Rust userspace ELF、ACPI、GOP、bootstrap image、memory map，调用 `ExitBootServices` 并跳入内核。 |
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
@@ -13,8 +13,8 @@
 | ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 fd 原位 write、五 tag block allocation/extent growth 和 inode 26/directory create→fd open→unlink transaction；两阶段重启验证 mount-time replay。mutation 仍是固定启动回归流程，btrfs 未实现。 |
 | VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 5 项宿主测试；QEMU 把 ext4 挂到 `/`，fd 3 可读/seek/原位覆写、EOF 单块 append/truncate，并以读写模式打开刚创建的空文件。仍是 block task 局部、root-only 状态，不是可复用或每进程 POSIX VFS。 |
 | 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，clean boot 的 447 个请求由 446 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
-| 图形系统与 Wayland | 部分实现 | framebuffer renderer 和早期 window manager 可用；所有 Wayland wire/object/global/xdg 功能尚未实现。 |
-| 声明式配置 | 部分实现 | UI 中可原子切换一个内存主题预览；没有 parser、types、schema、module、diff、持久化或 rollback。 |
+| 图形系统与 Wayland | 部分实现 | framebuffer renderer、`no_std` niri 式滚动平铺状态机和 Waybar 式顶部三区域可用；8 项 layout/config 测试通过。所有 Wayland wire/object/global/xdg、Waybar module protocol 与 swww daemon 尚未实现。 |
+| 声明式配置 | 部分实现 | niri KDL `layout` 子集可解析 gaps、centering、default width、focus ring 和 background color，并驱动真实 QEMU layout。仍是编译时 asset；没有 VFS lookup/live reload、Waybar JSONC/CSS、schema/diff/rollback。 |
 | 文本编辑器 | 尚未实现 | kernel monitor 只编辑当前命令行，不是普通文本或配置文件编辑器。 |
 | `slopd` | 尚未实现 | 没有用户态 init、unit、dependency graph 或 supervision。 |
 | eBPF | 部分实现 | 独立 `no_std` crate 提供 8-byte instruction decode、无分配 verifier、ALU64/前向 branch/512-byte stack/helper 子集解释器；10 项宿主测试与内核返回 42 均已验证。没有 ELF loader、map、program type、attach point、权限模型或 JIT。 |
@@ -33,6 +33,7 @@
 - 最后成功 journal recovery 测试：2026-07-30，`make test-journal-replay`。
 - 最后成功 eBPF 单元测试：2026-07-30，`make test-ebpf`，10 项。
 - 最后成功 ELF 单元测试：2026-07-30，`make test-elf`，10 项。
+- 最后成功 shell 单元测试：2026-07-30，`make test-shell`，8 项。
 - 最后成功 ACPI 单元测试：2026-07-30，`make test-acpi`，3 项。
 - 最后成功 PCI 单元测试：2026-07-30，`make test-pci`，3 项。
 - 最后成功 virtio 单元测试：2026-07-30，`make test-virtio`，4 项。
@@ -44,4 +45,4 @@
 
 ## 下一项最高价值工作
 
-下一阶段按产品方向优先建立 niri 式滚动平铺 layout/config、Waybar 式顶部模块栏和 swww 式壁纸控制/过渡的可测试核心，再接入当前 framebuffer desktop。进程主线随后需要多 `PT_LOAD`/VFS exec、`SYSCALL/SYSRET`、process table 与可恢复的 per-process context，并把 VFS fd 接入用户 syscall。存储边界仍包括通用 grow/truncate、JBD2 多 transaction/revoke/ring wrap 与 virtio descriptor allocator。
+下一阶段继续桌面兼容主线：实现 Waybar JSONC `modules-left/center/right` parser 与 module registry，让顶部栏由配置生成；随后实现 swww 式 wallpaper state、`img/query/kill` command parser 和首批 CPU transition。niri 侧还需 workspace/bind/window-rule/animation 与 VFS/XDG live reload。进程主线随后需要多 `PT_LOAD`/VFS exec、`SYSCALL/SYSRET`、process table 与可恢复的 per-process context，并把 VFS fd 接入用户 syscall。
