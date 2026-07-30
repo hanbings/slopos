@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 CARGO := $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
 
-.PHONY: all build image run test-boot test-interaction test-page-fault clean
+.PHONY: all build image run test-ebpf test-boot test-interaction test-page-fault clean
 
 all: build
 
@@ -14,6 +14,9 @@ image: build
 
 run: image
 	./scripts/run-qemu.sh
+
+test-ebpf:
+	$(CARGO) test --locked -p slopos-ebpf
 
 test-boot: image
 	./scripts/test-boot.sh
