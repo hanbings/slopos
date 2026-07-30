@@ -23,7 +23,7 @@ OVMF
       -> initialize GDT/IDT/TSS and APIC interrupt routing
       -> mount ext4 root and load /sbin/slop-init
       -> enter PID 1 through a private CR3 at CPL3
-      -> suspend openat/read/close onto the async block task
+      -> suspend openat/read/write/close onto the async block task
       -> restore user CR3/frame after virtio completion
       -> handle write/exit and restore kernel CR3/stack
       -> interactive early desktop loop
@@ -101,4 +101,4 @@ VFS create probe 复用相同 engine，把 blocks 0/1/36/38/95 作为一个原�
 - `BootInfo` 指针放在 SysV 第一个整数参数寄存器。
 - 汇编到 Rust interrupt/syscall handler 使用 SysV64；stub 在调用前保证栈对齐。
 
-每个 I/O port wrapper 都是局部 `unsafe`，调用点说明目标平台假设。framebuffer 和 BootInfo 的 raw pointer 在转为引用或写入前均检查范围或依赖加载器独占分配不变量。用户指针当前不是通用接口：handler 对地址加法做 overflow check，要求整段完全位于单一已知 code/stack mapping，再在 kernel CR3 下通过保存的 physical frame 执行有界复制；路径上限 128 bytes，单次 read 上限 256 bytes。单个 PID 1 通过静态保存点与 block-task syscall broker 恢复 kernel/user CR3 和完整 frame，因此尚不能支持嵌套用户入口、并发进程或抢占。
+每个 I/O port wrapper 都是局部 `unsafe`，调用点说明目标平台假设。framebuffer 和 BootInfo 的 raw pointer 在转为引用或写入前均检查范围或依赖加载器独占分配不变量。用户指针当前不是通用接口：handler 对地址加法做 overflow check，要求整段完全位于单一已知 code/stack mapping，再在 kernel CR3 下通过保存的 physical frame 执行有界复制；路径上限 128 bytes，单次 read/write 上限 256 bytes。单个 PID 1 通过静态保存点与 block-task syscall broker 恢复 kernel/user CR3 和完整 frame，因此尚不能支持嵌套用户入口、并发进程或抢占。
