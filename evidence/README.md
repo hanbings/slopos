@@ -8,6 +8,8 @@
 | `uefi-debugcon.log` | `make test-boot` | loader 独立 debugcon 日志 |
 | `interaction-serial.log` | `make test-interaction` | PS/2 键盘执行 `STATUS`，鼠标拖动终端 |
 | `page-fault-serial.log` | `make test-page-fault` | 自有页表的未映射访问、vector 14、error、RIP、CR2 与 fatal boundary |
+| `journal-injection-serial.log` | `make test-journal-replay` phase 1 | commit 已 flush、home 尚未 checkpoint 的 dirty disk |
+| `journal-replay-serial.log` | `make test-journal-replay` phase 2 | 普通 kernel mount-time replay、清理、继续完整启动 |
 | `desktop.png` | `scripts/capture-desktop.sh` | 当前三窗口图形桌面 |
 | `terminal-status.png` | `make test-interaction` | 图形终端对键盘命令的实际响应 |
 | `window-moved.png` | `make test-interaction` | 鼠标拖动后的窗口位置 |
@@ -49,8 +51,10 @@ JBD2 宿主测试解析 big-endian v2 superblock，并拒绝 truncation、非法
 
 第三个 marker 独立证明 ext4 recovery bit/checksum 与 JBD2 sequence 1/start 1 被持久化并读回；普通 ext4 parser 在 active 状态拒绝 mount。清理先归零 journal start，再清 recovery bit，最终宿主 hash/fsck 证明恢复。`transactions=0` 表示它尚未与上一组 records 组合。
 
-第四个 marker 证明真正组合的单块 active data transaction：recovery/start 和 descriptor/data/commit 均跨 flush 持久化，DMA readback 验证此时可 replay；home block 98 checkpoint 后推进 sequence 2/start 0 并清 recovery。测试收尾清 records、恢复全 `P` home block并将 sequence 回卷到 1，因此启动后的 image SHA-256 仍为固定值且 `e2fsck -fn` 通过。该证据尚不覆盖故意断电后的启动 replay 或任何 ext4 metadata mutation。
+第四个 marker 证明真正组合的单块 active data transaction：recovery/start 和 descriptor/data/commit 均跨 flush 持久化，DMA readback 验证此时可 replay；home block 98 checkpoint 后推进 sequence 2/start 0 并清 recovery。测试收尾清 records、恢复全 `P` home block并将 sequence 回卷到 1，因此启动后的 image SHA-256 仍为固定值且 `e2fsck -fn` 通过。
 
-第五个 marker 证明 inode 25 所在 inode-table block 38 也作为 JBD2 home target：sequence 1 transaction 把 size/checksum 更新为 4095/valid，sequence 2 transaction 恢复 4096/valid，最终 journal sequence 为 3。两次 cache 失效后的 inode parser 均接受整块 metadata；测试回卷 sequence 后，固定 image hash 与 `e2fsck -fn` 再次证明完整恢复。它仍不是 crash-injection replay，也尚未覆盖 bitmap、extent 或 directory mutation。
+第五个 marker 证明 inode 25 所在 inode-table block 38 也作为 JBD2 home target：sequence 1 transaction 把 size/checksum 更新为 4095/valid，sequence 2 transaction 恢复 4096/valid，最终 journal sequence 为 3。两次 cache 失效后的 inode parser 均接受整块 metadata；测试回卷 sequence 后，固定 image hash 与 `e2fsck -fn` 再次证明完整恢复。它尚未覆盖 bitmap、extent 或 directory mutation。
+
+两阶段 recovery 证据来自独立 injection/replay 日志。phase 1 marker 明确记录 sequence 1/start 1、target 98、old home `J`/new home `P` 与 `after_commit_before_home` 停止点；宿主同时读取 feature 与 physical block。phase 2 普通 kernel 在任何 ext4 path read 前报告 replay、home readback、next sequence 2、records cleared 和 recovery false，随后用 sequence 2 继续全部 probes并进入桌面；最终 marker 为 205 requests/204 queue interrupts。宿主读取全 `P` home、确认无 `needs_recovery` 并运行五阶段 fsck，脚本最后恢复固定-hash 标准镜像。
 
 VFS 宿主测试由 `make test-vfs` 执行。4 项测试覆盖 path/mount/fd offset 与 access mode。裸机 `SLOPOS-VFS` marker 证明 normalized absolute path 经 root mount 解析到 filesystem 1，为 inode 16 分配 fd 3，以 5 个 chunk 读取 76 bytes，并在 offset 7 再读取 11 bytes；关闭后复用 fd 3，以读写模式完成 inode 25 的 73-byte write/read/restore。mount/fd table 当前仍只是 block task 局部的固定容量状态。

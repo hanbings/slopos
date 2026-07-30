@@ -10,7 +10,7 @@
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
 | 进程/线程/调度 | 尚未实现 | 当前只有一个内核执行流；没有用户态、地址空间或 preemption。 |
 | 内存管理 | 部分实现 | kernel 解析 firmware descriptor stride，建立 frame allocator、自有四级页表并切换 CR3，建立 1 MiB kernel bump heap；frame/heap 读回与真实 vector-14 diagnostic 已验证。没有 user address space、细粒度页权限、COW 或 demand paging。 |
-| ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 fd 原位 write、active data transaction，并以两笔 active metadata transaction 修改/恢复 inode size 与 checksum。无启动时 crash replay、allocation/extent/directory update，btrfs 未实现。 |
+| ext4/btrfs 文件系统 | 部分实现 | QEMU 完成 fd 原位 write、active data/metadata transaction；两阶段测试在 commit 后/home 前停止，普通 kernel 重启后 mount-time replay 并继续进入桌面。replay 仅支持单块、零 feature、非 wrap transaction；无 allocation/extent/directory update，btrfs 未实现。 |
 | VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 4 项宿主测试；QEMU 把 ext4 挂到 `/`，以 fd 3 分块读/seek，再复用读写 fd 3 在 offset 123 覆写/读回/恢复 73 bytes。仍是 block task 局部、root-only、固定 file size 状态，不是每进程 POSIX VFS。 |
 | 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，193 个请求由 192 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
 | 图形系统与 Wayland | 部分实现 | framebuffer renderer 和早期 window manager 可用；所有 Wayland wire/object/global/xdg 功能尚未实现。 |
@@ -30,6 +30,7 @@
 - 最后成功启动：2026-07-30，QEMU 10.0.11 + OVMF 2025.02，`make test-boot`。
 - 最后成功交互测试：2026-07-30，`make test-interaction`。
 - 最后成功异常测试：2026-07-30，`make test-page-fault`。
+- 最后成功 journal recovery 测试：2026-07-30，`make test-journal-replay`。
 - 最后成功 eBPF 单元测试：2026-07-30，`make test-ebpf`，10 项。
 - 最后成功 ACPI 单元测试：2026-07-30，`make test-acpi`，3 项。
 - 最后成功 PCI 单元测试：2026-07-30，`make test-pci`，3 项。
@@ -42,4 +43,4 @@
 
 ## 下一项最高价值工作
 
-下一阶段应先实现启动时 JBD2 scan/replay 与 crash-injection，再增加 ext4 bitmap/extent/directory metadata transaction，把受限 inode-size probe 和原位整块 write 提升为可创建、增长、截断的 fd write；同时把局部 VFS 提升为内核全局对象，并把两个固定请求槽扩展为通用 descriptor allocator。之后需要可回收 heap、动态 task arena 和首个隔离用户地址空间；eBPF 仍需 map、program type、attach point 与 ELF relocation。
+下一阶段应扩展 JBD2 scan 到多 tag、多 transaction 与 ring wrap，再增加 ext4 bitmap/extent/directory metadata transaction，把受限 inode-size probe 和原位整块 write 提升为可创建、增长、截断的 fd write；同时把局部 VFS 提升为内核全局对象，并把两个固定请求槽扩展为通用 descriptor allocator。之后需要可回收 heap、动态 task arena 和首个隔离用户地址空间；eBPF 仍需 map、program type、attach point 与 ELF relocation。

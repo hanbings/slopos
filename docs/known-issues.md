@@ -6,7 +6,7 @@
 - framebuffer 渲染是全屏重绘，没有 damage tracking、double buffering 或 virtio-gpu。
 - 所有窗口和工具都在 ring 0，共享同一地址空间。
 - 配置窗口只修改内存主题，不解析或持久化声明式配置。
-- `initrd.slp` 仍不是文件系统；独立 ext4 disk 已有 fd 原位数据写、单块 active JBD2 data transaction，以及 inode size/checksum metadata transaction。内核尚无启动时 crash replay、多块/并发 transaction、文件增长、allocation/extent/directory write、通用权限或 btrfs。
+- `initrd.slp` 仍不是文件系统；独立 ext4 disk 已有 fd 原位数据写、单块 active JBD2 data/metadata transaction 和启动时 replay。scanner 当前只接受零 feature、一个 descriptor tag、连续 descriptor/data/commit 且不跨 journal 尾部；尚无 revoke、多 transaction、文件增长、allocation/extent/directory write、通用权限或 btrfs。
 - 已有 frame allocator、自有 early page table 与 bump heap，但没有回收、用户地址空间、进程、用户态或 syscall。
 - 当前页表为 early identity map，使用 2 MiB RWX huge page；尚未施加 W^X、NX、user/supervisor 或细粒度 kernel section 权限。
 - 当前内核固定加载到物理 64 MiB；切换自有页表前的最早期初始化仍依赖 OVMF 留下的 identity mapping。
