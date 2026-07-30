@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 
+#[cfg(feature = "journal-replay-injection")]
 use core::future::pending;
 use core::ptr;
 use slopos_ext4::{
@@ -25,9 +26,9 @@ const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
 const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
 const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
-const ALLOCATION_PROBE_BLOCK: u64 = 99;
+const ALLOCATION_PROBE_BLOCK: u64 = 103;
 const CREATE_TRANSACTION_BLOCKS: usize = 5;
-const CREATE_PROBE_INODE: u32 = 26;
+const CREATE_PROBE_INODE: u32 = 30;
 const CREATE_PROBE_NAME: &[u8] = b"create-probe";
 const CREATE_PROBE_TIMESTAMP: u32 = 0x6a6a_9400;
 static ZERO_BLOCK: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
@@ -46,6 +47,92 @@ const WRITE_PROBE_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"write-probe
 const CREATE_PROBE_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", CREATE_PROBE_NAME];
 const ROOT_FILESYSTEM_ID: u16 = 1;
 const VFS_TEST_PATH: &[u8] = b"/etc/./slopos/../slopos/system.conf";
+const NIRI_USER_PATH: [&[u8]; 5] = [b"home", b"slop", b".config", b"niri", b"config.kdl"];
+const NIRI_SYSTEM_PATH: [&[u8]; 3] = [b"etc", b"niri", b"config.kdl"];
+const NIRI_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"niri.kdl"];
+const WAYBAR_USER_JSONC_PATH: [&[u8]; 5] =
+    [b"home", b"slop", b".config", b"waybar", b"config.jsonc"];
+const WAYBAR_USER_CONFIG_PATH: [&[u8]; 5] = [b"home", b"slop", b".config", b"waybar", b"config"];
+const WAYBAR_SYSTEM_JSONC_PATH: [&[u8]; 4] = [b"etc", b"xdg", b"waybar", b"config.jsonc"];
+const WAYBAR_SYSTEM_CONFIG_PATH: [&[u8]; 4] = [b"etc", b"xdg", b"waybar", b"config"];
+const WAYBAR_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"waybar.jsonc"];
+const WAYBAR_USER_STYLE_PATH: [&[u8]; 5] = [b"home", b"slop", b".config", b"waybar", b"style.css"];
+const WAYBAR_SYSTEM_STYLE_PATH: [&[u8]; 4] = [b"etc", b"xdg", b"waybar", b"style.css"];
+const WAYBAR_STYLE_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"waybar.css"];
+const SWWW_USER_ENV_PATH: [&[u8]; 5] = [b"home", b"slop", b".config", b"swww", b"env"];
+const SWWW_SYSTEM_ENV_PATH: [&[u8]; 3] = [b"etc", b"swww", b"env"];
+const SWWW_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"swww.env"];
+
+#[derive(Clone, Copy)]
+struct ConfigCandidate {
+    components: &'static [&'static [u8]],
+    display: &'static str,
+}
+
+const NIRI_CONFIG_CANDIDATES: &[ConfigCandidate] = &[
+    ConfigCandidate {
+        components: &NIRI_USER_PATH,
+        display: "/home/slop/.config/niri/config.kdl",
+    },
+    ConfigCandidate {
+        components: &NIRI_SYSTEM_PATH,
+        display: "/etc/niri/config.kdl",
+    },
+    ConfigCandidate {
+        components: &NIRI_FALLBACK_PATH,
+        display: "/etc/slopos/niri.kdl",
+    },
+];
+const WAYBAR_CONFIG_CANDIDATES: &[ConfigCandidate] = &[
+    ConfigCandidate {
+        components: &WAYBAR_USER_JSONC_PATH,
+        display: "/home/slop/.config/waybar/config.jsonc",
+    },
+    ConfigCandidate {
+        components: &WAYBAR_USER_CONFIG_PATH,
+        display: "/home/slop/.config/waybar/config",
+    },
+    ConfigCandidate {
+        components: &WAYBAR_SYSTEM_JSONC_PATH,
+        display: "/etc/xdg/waybar/config.jsonc",
+    },
+    ConfigCandidate {
+        components: &WAYBAR_SYSTEM_CONFIG_PATH,
+        display: "/etc/xdg/waybar/config",
+    },
+    ConfigCandidate {
+        components: &WAYBAR_FALLBACK_PATH,
+        display: "/etc/slopos/waybar.jsonc",
+    },
+];
+const WAYBAR_STYLE_CANDIDATES: &[ConfigCandidate] = &[
+    ConfigCandidate {
+        components: &WAYBAR_USER_STYLE_PATH,
+        display: "/home/slop/.config/waybar/style.css",
+    },
+    ConfigCandidate {
+        components: &WAYBAR_SYSTEM_STYLE_PATH,
+        display: "/etc/xdg/waybar/style.css",
+    },
+    ConfigCandidate {
+        components: &WAYBAR_STYLE_FALLBACK_PATH,
+        display: "/etc/slopos/waybar.css",
+    },
+];
+const SWWW_CONFIG_CANDIDATES: &[ConfigCandidate] = &[
+    ConfigCandidate {
+        components: &SWWW_USER_ENV_PATH,
+        display: "/home/slop/.config/swww/env",
+    },
+    ConfigCandidate {
+        components: &SWWW_SYSTEM_ENV_PATH,
+        display: "/etc/swww/env",
+    },
+    ConfigCandidate {
+        components: &SWWW_FALLBACK_PATH,
+        display: "/etc/slopos/swww.env",
+    },
+];
 
 pub async fn mount_task(mut device: BlockDevice) -> ! {
     crate::serial::serialln(format_args!(
@@ -117,6 +204,8 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         root.etc_inode,
         root.lost_and_found_inode
     ));
+
+    load_and_publish_desktop_config(&mut mount, &mut device, true, false).await;
 
     let release = mount.open_file(&mut device, &RELEASE_PATH).await;
     let release_size = {
@@ -499,7 +588,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         )
         .await;
     crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: VFS create journal transactions valid fd={} inode={} parent_inode={} inode_bitmap_block={} group_descriptor_block={} inode_table_block={} directory_block={} free_inodes=7/6/7 size=0 access=readwrite checksums=superblock/group/bitmap/inode/directory transactions=2 sequences={}/{} final_sequence={} test_sequence_rewound=true restored=true path=/usr/share/slopos/create-probe",
+        "SLOPOS-EXT4: VFS create journal transactions valid fd={} inode={} parent_inode={} inode_bitmap_block={} group_descriptor_block={} inode_table_block={} directory_block={} free_inodes={}/{}/{} size=0 access=readwrite checksums=superblock/group/bitmap/inode/directory transactions=2 sequences={}/{} final_sequence={} test_sequence_rewound=true restored=true path=/usr/share/slopos/create-probe",
         create_transaction.fd,
         CREATE_PROBE_INODE,
         write_probe.parent_inode,
@@ -507,6 +596,9 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         create_transaction.group_descriptor_block,
         create_transaction.inode_table_block,
         create_transaction.directory_block,
+        create_transaction.free_inodes,
+        create_transaction.allocated_free_inodes,
+        create_transaction.free_inodes,
         create_transaction.first_sequence,
         create_transaction.second_sequence,
         create_transaction.final_sequence
@@ -522,8 +614,165 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         device.request_count(),
         device.max_in_flight()
     ));
-    pending::<()>().await;
-    unreachable!()
+    loop {
+        crate::desktop_config::next_reload_request().await;
+        let inject_invalid = crate::desktop_config::take_invalid_reload_request();
+        load_and_publish_desktop_config(&mut mount, &mut device, false, inject_invalid).await;
+    }
+}
+
+async fn load_and_publish_desktop_config(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    initial: bool,
+    inject_invalid: bool,
+) {
+    let mut writer = match crate::desktop_config::begin_write() {
+        Ok(writer) => writer,
+        Err(error) => {
+            crate::serial::serialln(format_args!(
+                "SLOPOS-CONFIG: VFS load deferred initial={initial} error={error:?} retained_generation={}",
+                crate::desktop_config::current_generation()
+            ));
+            return;
+        }
+    };
+
+    let Some((niri, niri_path)) =
+        open_config_candidate(mount, device, NIRI_CONFIG_CANDIDATES).await
+    else {
+        writer.cancel();
+        config_source_missing(initial, "niri");
+        return;
+    };
+    if niri.inode.size > 4096 {
+        writer.cancel();
+        config_source_invalid(initial, niri_path, "file-too-large");
+        return;
+    }
+    let niri_bytes = mount.read_file_block(device, &niri, 0).await;
+    if let Err(error) = writer.write_niri(niri_bytes, niri_path) {
+        writer.cancel();
+        config_source_invalid(initial, niri_path, config_error_name(error));
+        return;
+    }
+
+    let Some((waybar, waybar_path)) =
+        open_config_candidate(mount, device, WAYBAR_CONFIG_CANDIDATES).await
+    else {
+        writer.cancel();
+        config_source_missing(initial, "waybar");
+        return;
+    };
+    if waybar.inode.size > 4096 {
+        writer.cancel();
+        config_source_invalid(initial, waybar_path, "file-too-large");
+        return;
+    }
+    let waybar_bytes = mount.read_file_block(device, &waybar, 0).await;
+    if let Err(error) = writer.write_waybar(waybar_bytes, waybar_path) {
+        writer.cancel();
+        config_source_invalid(initial, waybar_path, config_error_name(error));
+        return;
+    }
+
+    let Some((style, style_path)) =
+        open_config_candidate(mount, device, WAYBAR_STYLE_CANDIDATES).await
+    else {
+        writer.cancel();
+        config_source_missing(initial, "waybar-style");
+        return;
+    };
+    if style.inode.size > 4096 {
+        writer.cancel();
+        config_source_invalid(initial, style_path, "file-too-large");
+        return;
+    }
+    let style_bytes = mount.read_file_block(device, &style, 0).await;
+    if let Err(error) = writer.write_waybar_style(style_bytes, style_path) {
+        writer.cancel();
+        config_source_invalid(initial, style_path, config_error_name(error));
+        return;
+    }
+    if inject_invalid
+        && let Err(error) =
+            writer.write_waybar_style(b"window#waybar { color: invalid; }", "<invalid-probe>")
+    {
+        writer.cancel();
+        config_source_invalid(initial, "<invalid-probe>", config_error_name(error));
+        return;
+    }
+
+    let Some((swww, swww_path)) =
+        open_config_candidate(mount, device, SWWW_CONFIG_CANDIDATES).await
+    else {
+        writer.cancel();
+        config_source_missing(initial, "swww");
+        return;
+    };
+    if swww.inode.size > 512 {
+        writer.cancel();
+        config_source_invalid(initial, swww_path, "file-too-large");
+        return;
+    }
+    let swww_bytes = mount.read_file_block(device, &swww, 0).await;
+    if let Err(error) = writer.write_swww(swww_bytes, swww_path) {
+        writer.cancel();
+        config_source_invalid(initial, swww_path, config_error_name(error));
+        return;
+    }
+
+    match writer.publish() {
+        Ok(generation) => crate::serial::serialln(format_args!(
+            "SLOPOS-CONFIG: VFS load published initial={initial} generation={generation} atomic=true paths={niri_path},{waybar_path},{style_path},{swww_path}"
+        )),
+        Err(error) => crate::serial::serialln(format_args!(
+            "SLOPOS-CONFIG: VFS load rejected initial={initial} error={} retained_generation={}",
+            config_error_name(error),
+            crate::desktop_config::current_generation()
+        )),
+    }
+}
+
+async fn open_config_candidate(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    candidates: &[ConfigCandidate],
+) -> Option<(Ext4File, &'static str)> {
+    for candidate in candidates {
+        if let Some(file) = mount.try_open_file(device, candidate.components).await {
+            return Some((file, candidate.display));
+        }
+    }
+    None
+}
+
+fn config_source_missing(initial: bool, kind: &str) {
+    crate::serial::serialln(format_args!(
+        "SLOPOS-CONFIG: VFS load rejected initial={initial} missing={kind} retained_generation={}",
+        crate::desktop_config::current_generation()
+    ));
+}
+
+fn config_source_invalid(initial: bool, path: &str, error: &str) {
+    crate::serial::serialln(format_args!(
+        "SLOPOS-CONFIG: VFS load rejected initial={initial} path={path} error={error} retained_generation={}",
+        crate::desktop_config::current_generation()
+    ));
+}
+
+const fn config_error_name(error: crate::desktop_config::ConfigPublishError) -> &'static str {
+    match error {
+        crate::desktop_config::ConfigPublishError::Busy => "busy",
+        crate::desktop_config::ConfigPublishError::InvalidFile => "invalid-file",
+        crate::desktop_config::ConfigPublishError::InvalidNiri => "invalid-niri",
+        crate::desktop_config::ConfigPublishError::InvalidWaybar => "invalid-waybar",
+        crate::desktop_config::ConfigPublishError::UnsupportedBarPosition => {
+            "unsupported-bar-position"
+        }
+        crate::desktop_config::ConfigPublishError::InvalidWaybarStyle => "invalid-waybar-style",
+        crate::desktop_config::ConfigPublishError::InvalidSwww => "invalid-swww",
+    }
 }
 
 struct Ext4Mount {
@@ -2307,6 +2556,8 @@ impl Ext4Mount {
             group_descriptor_block: group_descriptor_location.block,
             inode_table_block: inode_location.block,
             directory_block,
+            free_inodes,
+            allocated_free_inodes,
             first_sequence,
             second_sequence,
             final_sequence,
@@ -2831,24 +3082,34 @@ impl Ext4Mount {
     }
 
     async fn open_file(&mut self, device: &mut BlockDevice, components: &[&[u8]]) -> Ext4File {
+        self.try_open_file(device, components)
+            .await
+            .unwrap_or_else(|| device.fail("ext4 path component was not found"))
+    }
+
+    async fn try_open_file(
+        &mut self,
+        device: &mut BlockDevice,
+        components: &[&[u8]],
+    ) -> Option<Ext4File> {
         let (inode, parent_inode, directory_block, followed_symlink) =
-            self.resolve_path(device, components).await;
+            self.try_resolve_path(device, components).await?;
         if !inode.is_regular_file() {
             device.fail("ext4 open target is not a regular file");
         }
-        Ext4File {
+        Some(Ext4File {
             inode,
             parent_inode,
             directory_block,
             followed_symlink,
-        }
+        })
     }
 
-    async fn resolve_path(
+    async fn try_resolve_path(
         &mut self,
         device: &mut BlockDevice,
         components: &[&[u8]],
-    ) -> (Inode, u32, u32, u32) {
+    ) -> Option<(Inode, u32, u32, u32)> {
         if components.is_empty() {
             device.fail("ext4 path has no components");
         }
@@ -2864,8 +3125,7 @@ impl Ext4Mount {
             parent_inode = current.number;
             let (inode_number, file_type, entry_block) = self
                 .find_directory_entry(device, &current, component)
-                .await
-                .unwrap_or_else(|| device.fail("ext4 path component was not found"));
+                .await?;
             directory_block = entry_block;
             current = self.read_inode(device, inode_number).await;
             if file_type == DIRECTORY_ENTRY_SYMLINK {
@@ -2884,8 +3144,7 @@ impl Ext4Mount {
                 followed_symlink = current.number;
                 let (target_inode, target_type, target_block) = self
                     .find_directory_entry(device, &parent, &target_buffer[..target_length])
-                    .await
-                    .unwrap_or_else(|| device.fail("ext4 symbolic link target was not found"));
+                    .await?;
                 if target_type != DIRECTORY_ENTRY_REGULAR_FILE {
                     device.fail("ext4 symbolic link target is not a regular file");
                 }
@@ -2904,7 +3163,7 @@ impl Ext4Mount {
                 device.fail("ext4 directory entry type mismatch");
             }
         }
-        (current, parent_inode, directory_block, followed_symlink)
+        Some((current, parent_inode, directory_block, followed_symlink))
     }
 
     async fn find_directory_entry(
@@ -3197,6 +3456,8 @@ struct CreateJournalProbe {
     group_descriptor_block: u64,
     inode_table_block: u64,
     directory_block: u64,
+    free_inodes: u32,
+    allocated_free_inodes: u32,
     first_sequence: u32,
     second_sequence: u32,
     final_sequence: u32,

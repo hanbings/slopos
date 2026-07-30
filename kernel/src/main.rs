@@ -6,6 +6,7 @@
 mod acpi;
 mod apic;
 mod desktop;
+mod desktop_config;
 mod executor;
 mod font;
 mod framebuffer;

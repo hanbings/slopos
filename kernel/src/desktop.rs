@@ -3,7 +3,7 @@
 use crate::framebuffer::{
     BLACK, CYAN, Framebuffer, GREEN, INDIGO, MUTED, PANEL, RED, WHITE, WINDOW, WINDOW_ALT,
 };
-use crate::ps2::{Controller, InputEvent, Key, KeyEvent, KeyModifiers, MouseEvent};
+use crate::ps2::{Controller, DesktopEvent, InputEvent, Key, KeyEvent, KeyModifiers, MouseEvent};
 use crate::serial::serialln;
 use slopos_shell::{
     BarFormatValue, BarPosition, BarText, BindingKey, BindingModifiers, NiriAction,
@@ -62,6 +62,7 @@ pub struct Desktop {
     response: [u8; 128],
     response_length: usize,
     alternate_theme: bool,
+    config_generation: u64,
 }
 
 impl Desktop {
@@ -173,6 +174,7 @@ impl Desktop {
             response: [0; 128],
             response_length: 0,
             alternate_theme: false,
+            config_generation: 0,
         };
         serialln(format_args!(
             "SLOPOS-SHELL: config loaded niri_workspaces={} named={} binds={} rules={} active_columns=2 gaps={} default_width=50% center=never waybar_position=top height={} spacing={} modules={}/{}/{} module_configs={} css_rules={}",
@@ -215,19 +217,26 @@ impl Desktop {
 
     pub async fn run(&mut self, framebuffer: &mut Framebuffer, mut input: Controller) -> ! {
         loop {
-            let byte = crate::ps2::next_byte().await;
-            if let Some(event) = input.consume(byte) {
-                let animate = match event {
-                    InputEvent::Key(key) => self.keyboard(key),
-                    InputEvent::Mouse(mouse) => {
-                        self.mouse(mouse);
-                        false
-                    }
-                };
-                if animate {
-                    self.animate_wallpaper(framebuffer);
-                } else {
+            match crate::ps2::next_desktop_event(self.config_generation).await {
+                DesktopEvent::ConfigUpdate(sources) => {
+                    self.apply_config_update(sources);
                     self.render(framebuffer);
+                }
+                DesktopEvent::Input(byte) => {
+                    if let Some(event) = input.consume(byte) {
+                        let animate = match event {
+                            InputEvent::Key(key) => self.keyboard(key),
+                            InputEvent::Mouse(mouse) => {
+                                self.mouse(mouse);
+                                false
+                            }
+                        };
+                        if animate {
+                            self.animate_wallpaper(framebuffer);
+                        } else {
+                            self.render(framebuffer);
+                        }
+                    }
                 }
             }
         }
@@ -442,6 +451,95 @@ impl Desktop {
             .get(module)
             .and_then(|config| config.interval)
             .unwrap_or(0)
+    }
+
+    fn apply_config_update(&mut self, sources: crate::desktop_config::DesktopConfigSources) {
+        let layout = parse_niri_layout(sources.niri)
+            .unwrap_or_else(|_| crate::fatal("published niri layout became invalid"));
+        let niri = parse_niri_shell_config(sources.niri)
+            .unwrap_or_else(|_| crate::fatal("published niri shell config became invalid"));
+        let bar = parse_waybar_config(sources.waybar)
+            .unwrap_or_else(|_| crate::fatal("published Waybar config became invalid"));
+        let bar_style = parse_waybar_style(sources.waybar_style)
+            .unwrap_or_else(|_| crate::fatal("published Waybar style became invalid"));
+        let swww_defaults = parse_swww_environment(sources.swww)
+            .unwrap_or_else(|_| crate::fatal("published swww defaults became invalid"));
+        if bar.position != BarPosition::Top {
+            crate::fatal("published Waybar position is unsupported");
+        }
+
+        let old_workspace = self.workspaces.active();
+        let preferred_window = self.workspaces.focused_window();
+        let workspace_count = niri.workspaces.len() + 1;
+        let mut workspaces = WorkspaceSet::new(
+            workspace_count,
+            u16::try_from(self.screen_width).unwrap_or(u16::MAX),
+            u16::try_from(self.screen_height).unwrap_or(u16::MAX),
+            bar.height,
+            layout,
+        )
+        .unwrap_or_else(|_| crate::fatal("published niri workspace capacity mismatch"));
+        for window in 0..WINDOW_COUNT {
+            if !self.windows[window].open {
+                continue;
+            }
+            let workspace = niri
+                .window_rules
+                .workspace_for(app_id(window_kind(window)))
+                .and_then(|name| niri.workspaces.index_of(name))
+                .unwrap_or(0);
+            workspaces
+                .open_window(workspace, window as u32)
+                .unwrap_or_else(|_| crate::fatal("published niri layout seed failed"));
+        }
+        workspaces
+            .focus_workspace(old_workspace.min(workspace_count - 1))
+            .unwrap_or_else(|_| crate::fatal("published niri active workspace failed"));
+        if let Some(window) = preferred_window
+            && workspaces.tile_rect(window).is_ok()
+        {
+            workspaces
+                .focus_window(window)
+                .unwrap_or_else(|_| crate::fatal("published niri focus restore failed"));
+        }
+
+        self.workspaces = workspaces;
+        self.niri = niri;
+        self.bar = bar;
+        self.bar_style = bar_style;
+        self.swww_defaults = swww_defaults;
+        self.config_generation = sources.generation;
+        self.sync_focused_window();
+        crate::desktop_config::acknowledge(sources.generation);
+        serialln(format_args!(
+            "SLOPOS-CONFIG: reload applied generation={} atomic=true niri={} waybar={} style={} swww={} workspaces={} module_configs={} css_rules={}",
+            sources.generation,
+            sources.niri_path,
+            sources.waybar_path,
+            sources.waybar_style_path,
+            sources.swww_path,
+            self.workspaces.len(),
+            self.bar.module_configs.len(),
+            self.bar_style.len()
+        ));
+    }
+
+    fn request_config_reload(&self) {
+        let accepted = crate::desktop_config::request_reload();
+        serialln(format_args!(
+            "SLOPOS-CONFIG: reload requested generation={} accepted={}",
+            crate::desktop_config::current_generation(),
+            accepted
+        ));
+    }
+
+    fn request_invalid_config_reload(&self) {
+        let accepted = crate::desktop_config::request_invalid_reload();
+        serialln(format_args!(
+            "SLOPOS-CONFIG: invalid reload requested generation={} accepted={}",
+            crate::desktop_config::current_generation(),
+            accepted
+        ));
     }
 
     fn bar_module_text(&self, module: &str) -> BarText {
@@ -715,10 +813,7 @@ impl Desktop {
                     && self.pointer_y >= apply_y
                     && self.pointer_y < apply_y + 28
                 {
-                    self.alternate_theme = !self.alternate_theme;
-                    serialln(format_args!(
-                        "SLOPOS-CONFIG: in-memory desktop theme applied atomically"
-                    ));
+                    self.request_config_reload();
                 }
             }
             return;
@@ -732,11 +827,17 @@ impl Desktop {
             unsafe { core::str::from_utf8_unchecked(&command_bytes[..self.command_length]) };
         let mut animate = false;
         if command == "HELP" {
-            self.set_response("HELP STATUS ABOUT CLEAR FAULT / SWWW IMG|QUERY|KILL")
+            self.set_response("HELP STATUS ABOUT CLEAR RELOAD [BAD] FAULT / SWWW ...")
         } else if command == "STATUS" {
             self.set_response("KERNEL OK / 3 NIRI COLUMNS / PS2 READY")
         } else if command == "ABOUT" {
             self.set_response("SLOPOS SCROLLING-TILE RUST SHELL")
+        } else if command == "RELOAD BAD" {
+            self.request_invalid_config_reload();
+            self.set_response("INVALID CONFIG RELOAD REQUESTED")
+        } else if command == "RELOAD" {
+            self.request_config_reload();
+            self.set_response("DESKTOP CONFIG RELOAD REQUESTED")
         } else if command == "FAULT" {
             crate::interrupts::trigger_page_fault()
         } else if command == "CLEAR" || command.is_empty() {

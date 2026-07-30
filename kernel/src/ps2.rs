@@ -6,6 +6,8 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use core::task::{Context, Poll};
 
+use crate::desktop_config::DesktopConfigSources;
+
 const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64;
 const COMMAND: u16 = 0x64;
@@ -63,6 +65,11 @@ pub struct MouseEvent {
 pub enum InputEvent {
     Key(KeyEvent),
     Mouse(MouseEvent),
+}
+
+pub enum DesktopEvent {
+    Input(RawInputByte),
+    ConfigUpdate(DesktopConfigSources),
 }
 
 pub struct Controller {
@@ -213,30 +220,35 @@ pub fn enqueue_interrupt_byte(mouse: bool, value: u8) {
     crate::executor::wake_task(crate::executor::INPUT_TASK);
 }
 
-pub async fn next_byte() -> RawInputByte {
-    NextByte.await
+pub async fn next_desktop_event(config_generation: u64) -> DesktopEvent {
+    NextDesktopEvent { config_generation }.await
 }
 
 pub fn dropped_bytes() -> u64 {
     DROPPED_BYTES.load(Ordering::Relaxed)
 }
 
-struct NextByte;
+struct NextDesktopEvent {
+    config_generation: u64,
+}
 
-impl Future for NextByte {
-    type Output = RawInputByte;
+impl Future for NextDesktopEvent {
+    type Output = DesktopEvent;
 
     fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Some(sources) = crate::desktop_config::latest_after(self.config_generation) {
+            return Poll::Ready(DesktopEvent::ConfigUpdate(sources));
+        }
         let tail = QUEUE_TAIL.load(Ordering::Relaxed);
         if tail == QUEUE_HEAD.load(Ordering::Acquire) {
             return Poll::Pending;
         }
         let encoded = INPUT_QUEUE[tail].load(Ordering::Relaxed);
         QUEUE_TAIL.store((tail + 1) % QUEUE_CAPACITY, Ordering::Release);
-        Poll::Ready(RawInputByte {
+        Poll::Ready(DesktopEvent::Input(RawInputByte {
             mouse: encoded & (1 << 8) != 0,
             value: encoded as u8,
-        })
+        }))
     }
 }
 

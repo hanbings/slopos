@@ -47,6 +47,10 @@ monitor_type() {
     monitor_type "status"
     sleep 2
     echo "screendump ${repo_dir}/evidence/terminal-status.ppm"
+    monitor_type "reload"
+    sleep 3
+    monitor_type "reload bad"
+    sleep 3
     monitor_type "swww img sunset.ppm --transition-type center --transition-step 64"
     sleep 8
     echo "screendump ${repo_dir}/evidence/wallpaper-switched.ppm"
@@ -91,6 +95,15 @@ monitor_type() {
     -no-reboot >/dev/null
 
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
+grep -Fq "SLOPOS-CONFIG: reload requested generation=1 accepted=true" "${serial_log}"
+grep -Fq "SLOPOS-CONFIG: VFS load published initial=false generation=2 atomic=true" "${serial_log}"
+grep -Fq "SLOPOS-CONFIG: reload applied generation=2 atomic=true" "${serial_log}"
+grep -Fq "SLOPOS-CONFIG: invalid reload requested generation=2 accepted=true" "${serial_log}"
+grep -Fq "SLOPOS-CONFIG: VFS load rejected initial=false error=invalid-waybar-style retained_generation=2" "${serial_log}"
+if grep -Fq "SLOPOS-CONFIG: reload applied generation=3" "${serial_log}"; then
+    echo "invalid desktop configuration was published" >&2
+    exit 1
+fi
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=30" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: transition complete type=center step=64 fps=30 frames=5" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM" "${serial_log}"
@@ -121,4 +134,4 @@ if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${repo_dir}/evidence/wallpaper-only.ppm" \
         >"${repo_dir}/evidence/wallpaper-only.png"
 fi
-echo "SlopOS PS/2 command, swww, niri workspace/bind/rule, viewport, and tiled close verified"
+echo "SlopOS VFS config reload/rollback, swww, niri workspace/bind/rule, viewport, and close verified"

@@ -738,6 +738,15 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         true
     }
 
+    pub fn focus_workspace(&mut self, workspace: usize) -> Result<bool, WorkspaceError> {
+        if workspace >= self.count {
+            return Err(WorkspaceError::InvalidWorkspace);
+        }
+        let changed = workspace != self.active;
+        self.active = workspace;
+        Ok(changed)
+    }
+
     pub fn move_focused_to_workspace(&mut self, workspace: usize) -> Result<bool, WorkspaceError> {
         if workspace >= self.count {
             return Err(WorkspaceError::InvalidWorkspace);

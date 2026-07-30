@@ -25,6 +25,10 @@ fi
 mkdir -p "${repo_dir}/target"
 cp -a "${source_dir}/." "${staging_dir}/"
 ln -s slopos-release "${staging_dir}/etc/current-release"
+cp "${repo_dir}/assets/niri-config.kdl" "${staging_dir}/etc/slopos/niri.kdl"
+cp "${repo_dir}/assets/waybar-config.jsonc" "${staging_dir}/etc/slopos/waybar.jsonc"
+cp "${repo_dir}/assets/waybar-style.css" "${staging_dir}/etc/slopos/waybar.css"
+cp "${repo_dir}/assets/swww.env" "${staging_dir}/etc/slopos/swww.env"
 mkdir -p "${staging_dir}/usr/share/slopos"
 dd if=/dev/zero bs=1024 count=6 status=none \
     | tr '\000' 'Z' >"${staging_dir}/usr/share/slopos/multiblock.bin"
