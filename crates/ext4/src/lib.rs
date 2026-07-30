@@ -25,6 +25,10 @@ const DIRECTORY_MODE: u16 = 0x4000;
 const REGULAR_FILE_MODE: u16 = 0x8000;
 const MODE_TYPE_MASK: u16 = 0xf000;
 const EXTENT_HEADER_MAGIC: u16 = 0xf30a;
+const EXTENT_HEADER_SIZE: usize = 12;
+const EXTENT_ENTRY_SIZE: usize = 12;
+const EXTENT_TAIL_SIZE: usize = 4;
+const MAX_EXTENT_DEPTH: u16 = 5;
 const DIRECTORY_CHECKSUM_FILE_TYPE: u8 = 0xde;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -416,70 +420,45 @@ impl Inode {
         self.extent_at(0)
     }
 
+    pub fn extent_depth(&self) -> Result<u16, ParseError> {
+        Ok(self.extent_header()?.depth)
+    }
+
     pub fn extent_for_logical_block(
         &self,
         logical_block: u32,
     ) -> Result<Option<Extent>, ParseError> {
-        let count = self.extent_count()?;
-        let mut previous_end = 0u32;
-        for index in 0..count {
-            let extent = self.extent_at(index)?;
-            let end = extent
-                .logical_block
-                .checked_add(u32::from(extent.block_count))
-                .ok_or(ParseError::InvalidExtent)?;
-            if index != 0 && extent.logical_block < previous_end {
-                return Err(ParseError::InvalidExtent);
-            }
-            if logical_block >= extent.logical_block && logical_block < end {
-                return Ok(Some(extent));
-            }
-            previous_end = end;
+        let header = self.extent_header()?;
+        if header.depth != 0 {
+            return Err(ParseError::UnsupportedExtentDepth);
         }
-        Ok(None)
+        extent_for_logical_block(&self.extent_root, header, logical_block)
     }
 
-    fn extent_count(&self) -> Result<usize, ParseError> {
+    pub fn extent_index_for_logical_block(
+        &self,
+        logical_block: u32,
+    ) -> Result<Option<ExtentIndex>, ParseError> {
+        let header = self.extent_header()?;
+        if header.depth == 0 {
+            return Err(ParseError::InvalidExtent);
+        }
+        extent_index_for_logical_block(&self.extent_root, header, logical_block)
+    }
+
+    fn extent_header(&self) -> Result<ExtentHeader, ParseError> {
         if self.flags & INODE_FLAG_EXTENTS == 0 {
             return Err(ParseError::InvalidExtent);
         }
-        if read_u16(&self.extent_root, 0)? != EXTENT_HEADER_MAGIC {
-            return Err(ParseError::InvalidExtent);
-        }
-        let entries = read_u16(&self.extent_root, 2)?;
-        let maximum = read_u16(&self.extent_root, 4)?;
-        let depth = read_u16(&self.extent_root, 6)?;
-        if entries == 0 || entries > maximum || maximum > 4 {
-            return Err(ParseError::InvalidExtent);
-        }
-        if depth != 0 {
-            return Err(ParseError::UnsupportedExtentDepth);
-        }
-        Ok(usize::from(entries))
+        parse_extent_header(&self.extent_root, 4)
     }
 
     fn extent_at(&self, index: usize) -> Result<Extent, ParseError> {
-        let count = self.extent_count()?;
-        if index >= count {
+        let header = self.extent_header()?;
+        if header.depth != 0 || index >= header.entries {
             return Err(ParseError::InvalidExtent);
         }
-        let offset = 12 + index * 12;
-        let raw_length = read_u16(&self.extent_root, offset + 4)?;
-        let block_count = raw_length & 0x7fff;
-        if block_count == 0 {
-            return Err(ParseError::InvalidExtent);
-        }
-        let physical_block = u64::from(read_u32(&self.extent_root, offset + 8)?)
-            | (u64::from(read_u16(&self.extent_root, offset + 6)?) << 32);
-        if physical_block.checked_add(u64::from(block_count)).is_none() {
-            return Err(ParseError::InvalidExtent);
-        }
-        Ok(Extent {
-            logical_block: read_u32(&self.extent_root, offset)?,
-            physical_block,
-            block_count,
-            unwritten: raw_length & 0x8000 != 0,
-        })
+        parse_extent(&self.extent_root, index)
     }
 }
 
@@ -489,6 +468,231 @@ pub struct Extent {
     pub physical_block: u64,
     pub block_count: u16,
     pub unwritten: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExtentIndex {
+    pub logical_block: u32,
+    pub child_block: u64,
+}
+
+pub struct ExtentNode<'a> {
+    bytes: &'a [u8],
+    header: ExtentHeader,
+}
+
+impl<'a> ExtentNode<'a> {
+    pub fn parse(
+        bytes: &'a [u8],
+        expected_depth: u16,
+        inode: &Inode,
+        superblock: &Superblock,
+    ) -> Result<Self, ParseError> {
+        let block_size = superblock.block_size as usize;
+        if bytes.len() < block_size {
+            return Err(ParseError::Truncated);
+        }
+        if expected_depth >= MAX_EXTENT_DEPTH {
+            return Err(ParseError::UnsupportedExtentDepth);
+        }
+        let bytes = &bytes[..block_size];
+        let maximum = (block_size - EXTENT_HEADER_SIZE) / EXTENT_ENTRY_SIZE;
+        let header = parse_extent_header(bytes, maximum)?;
+        if header.depth != expected_depth {
+            return Err(ParseError::InvalidExtent);
+        }
+        let tail_offset = EXTENT_HEADER_SIZE + header.maximum * EXTENT_ENTRY_SIZE;
+        if tail_offset + EXTENT_TAIL_SIZE > block_size {
+            return Err(ParseError::InvalidExtent);
+        }
+        if superblock.has_metadata_checksums() {
+            let mut checksum = crc32c(superblock.checksum_seed, &inode.number.to_le_bytes());
+            checksum = crc32c(checksum, &inode.generation.to_le_bytes());
+            checksum = crc32c(checksum, &bytes[..tail_offset]);
+            if read_u32(bytes, tail_offset)? != checksum {
+                return Err(ParseError::InvalidChecksum);
+            }
+        }
+        let node = Self { bytes, header };
+        node.validate_entries(superblock)?;
+        Ok(node)
+    }
+
+    pub const fn depth(&self) -> u16 {
+        self.header.depth
+    }
+
+    pub fn extent_for_logical_block(
+        &self,
+        logical_block: u32,
+    ) -> Result<Option<Extent>, ParseError> {
+        if self.header.depth != 0 {
+            return Err(ParseError::InvalidExtent);
+        }
+        extent_for_logical_block(self.bytes, self.header, logical_block)
+    }
+
+    pub fn extent_index_for_logical_block(
+        &self,
+        logical_block: u32,
+    ) -> Result<Option<ExtentIndex>, ParseError> {
+        if self.header.depth == 0 {
+            return Err(ParseError::InvalidExtent);
+        }
+        extent_index_for_logical_block(self.bytes, self.header, logical_block)
+    }
+
+    fn validate_entries(&self, superblock: &Superblock) -> Result<(), ParseError> {
+        if self.header.depth == 0 {
+            validate_extents(self.bytes, self.header)?;
+            for index in 0..self.header.entries {
+                let extent = parse_extent(self.bytes, index)?;
+                let end = extent
+                    .physical_block
+                    .checked_add(u64::from(extent.block_count))
+                    .ok_or(ParseError::InvalidExtent)?;
+                if extent.physical_block == 0 || end > superblock.block_count {
+                    return Err(ParseError::InvalidExtent);
+                }
+            }
+        } else {
+            validate_extent_indexes(self.bytes, self.header)?;
+            for index in 0..self.header.entries {
+                let extent_index = parse_extent_index(self.bytes, index)?;
+                if extent_index.child_block == 0
+                    || extent_index.child_block >= superblock.block_count
+                {
+                    return Err(ParseError::InvalidExtent);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ExtentHeader {
+    entries: usize,
+    maximum: usize,
+    depth: u16,
+}
+
+fn parse_extent_header(bytes: &[u8], maximum_allowed: usize) -> Result<ExtentHeader, ParseError> {
+    if read_u16(bytes, 0)? != EXTENT_HEADER_MAGIC {
+        return Err(ParseError::InvalidExtent);
+    }
+    let entries = usize::from(read_u16(bytes, 2)?);
+    let maximum = usize::from(read_u16(bytes, 4)?);
+    let depth = read_u16(bytes, 6)?;
+    if maximum == 0 || maximum > maximum_allowed || entries > maximum || (depth > 0 && entries == 0)
+    {
+        return Err(ParseError::InvalidExtent);
+    }
+    if depth > MAX_EXTENT_DEPTH {
+        return Err(ParseError::UnsupportedExtentDepth);
+    }
+    Ok(ExtentHeader {
+        entries,
+        maximum,
+        depth,
+    })
+}
+
+fn extent_for_logical_block(
+    bytes: &[u8],
+    header: ExtentHeader,
+    logical_block: u32,
+) -> Result<Option<Extent>, ParseError> {
+    validate_extents(bytes, header)?;
+    for index in 0..header.entries {
+        let extent = parse_extent(bytes, index)?;
+        let end = extent
+            .logical_block
+            .checked_add(u32::from(extent.block_count))
+            .ok_or(ParseError::InvalidExtent)?;
+        if logical_block >= extent.logical_block && logical_block < end {
+            return Ok(Some(extent));
+        }
+    }
+    Ok(None)
+}
+
+fn validate_extents(bytes: &[u8], header: ExtentHeader) -> Result<(), ParseError> {
+    let mut previous_end = 0u32;
+    for index in 0..header.entries {
+        let extent = parse_extent(bytes, index)?;
+        let end = extent
+            .logical_block
+            .checked_add(u32::from(extent.block_count))
+            .ok_or(ParseError::InvalidExtent)?;
+        if index != 0 && extent.logical_block < previous_end {
+            return Err(ParseError::InvalidExtent);
+        }
+        previous_end = end;
+    }
+    Ok(())
+}
+
+fn parse_extent(bytes: &[u8], index: usize) -> Result<Extent, ParseError> {
+    let offset = EXTENT_HEADER_SIZE + index * EXTENT_ENTRY_SIZE;
+    let raw_length = read_u16(bytes, offset + 4)?;
+    if raw_length == 0 {
+        return Err(ParseError::InvalidExtent);
+    }
+    let (block_count, unwritten) = if raw_length <= 0x8000 {
+        (raw_length, false)
+    } else {
+        (raw_length - 0x8000, true)
+    };
+    let physical_block =
+        u64::from(read_u32(bytes, offset + 8)?) | (u64::from(read_u16(bytes, offset + 6)?) << 32);
+    if physical_block.checked_add(u64::from(block_count)).is_none() {
+        return Err(ParseError::InvalidExtent);
+    }
+    Ok(Extent {
+        logical_block: read_u32(bytes, offset)?,
+        physical_block,
+        block_count,
+        unwritten,
+    })
+}
+
+fn extent_index_for_logical_block(
+    bytes: &[u8],
+    header: ExtentHeader,
+    logical_block: u32,
+) -> Result<Option<ExtentIndex>, ParseError> {
+    validate_extent_indexes(bytes, header)?;
+    let mut selected = None;
+    for index in 0..header.entries {
+        let extent_index = parse_extent_index(bytes, index)?;
+        if extent_index.logical_block > logical_block {
+            break;
+        }
+        selected = Some(extent_index);
+    }
+    Ok(selected)
+}
+
+fn validate_extent_indexes(bytes: &[u8], header: ExtentHeader) -> Result<(), ParseError> {
+    let mut previous = 0u32;
+    for index in 0..header.entries {
+        let extent_index = parse_extent_index(bytes, index)?;
+        if index != 0 && extent_index.logical_block <= previous {
+            return Err(ParseError::InvalidExtent);
+        }
+        previous = extent_index.logical_block;
+    }
+    Ok(())
+}
+
+fn parse_extent_index(bytes: &[u8], index: usize) -> Result<ExtentIndex, ParseError> {
+    let offset = EXTENT_HEADER_SIZE + index * EXTENT_ENTRY_SIZE;
+    Ok(ExtentIndex {
+        logical_block: read_u32(bytes, offset)?,
+        child_block: u64::from(read_u32(bytes, offset + 4)?)
+            | (u64::from(read_u16(bytes, offset + 8)?) << 32),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -963,5 +1167,94 @@ mod tests {
                 unwritten: false
             })
         );
+    }
+
+    #[test]
+    fn decodes_initialized_and_unwritten_extent_lengths() {
+        let superblock = Superblock::parse(&valid_superblock()).unwrap();
+        let inode_bytes = valid_root_inode(&superblock);
+        let mut inode = Inode::parse(&inode_bytes, ROOT_INODE, &superblock).unwrap();
+        inode.extent_root[16..18].copy_from_slice(&0x8000u16.to_le_bytes());
+        assert_eq!(
+            inode.extent_for_logical_block(32_767).unwrap(),
+            Some(Extent {
+                logical_block: 0,
+                physical_block: 18,
+                block_count: 32_768,
+                unwritten: false,
+            })
+        );
+
+        inode.extent_root[16..18].copy_from_slice(&0x8001u16.to_le_bytes());
+        assert_eq!(
+            inode.extent_for_logical_block(0).unwrap(),
+            Some(Extent {
+                logical_block: 0,
+                physical_block: 18,
+                block_count: 1,
+                unwritten: true,
+            })
+        );
+    }
+
+    #[test]
+    fn traverses_checksummed_depth_one_extent_leaf() {
+        let superblock = Superblock::parse(&valid_superblock()).unwrap();
+        let inode_bytes = valid_root_inode(&superblock);
+        let mut inode = Inode::parse(&inode_bytes, ROOT_INODE, &superblock).unwrap();
+        inode.extent_root[2..4].copy_from_slice(&1u16.to_le_bytes());
+        inode.extent_root[6..8].copy_from_slice(&1u16.to_le_bytes());
+        inode.extent_root[12..16].copy_from_slice(&0u32.to_le_bytes());
+        inode.extent_root[16..20].copy_from_slice(&99u32.to_le_bytes());
+        inode.extent_root[20..22].copy_from_slice(&0u16.to_le_bytes());
+
+        assert_eq!(inode.extent_depth(), Ok(1));
+        assert_eq!(
+            inode.extent_index_for_logical_block(8),
+            Ok(Some(ExtentIndex {
+                logical_block: 0,
+                child_block: 99,
+            }))
+        );
+        assert_eq!(
+            inode.extent_for_logical_block(8),
+            Err(ParseError::UnsupportedExtentDepth)
+        );
+
+        let mut leaf = [0u8; 4096];
+        leaf[0..2].copy_from_slice(&EXTENT_HEADER_MAGIC.to_le_bytes());
+        leaf[2..4].copy_from_slice(&5u16.to_le_bytes());
+        leaf[4..6].copy_from_slice(&340u16.to_le_bytes());
+        for (index, logical_block) in [0u32, 2, 4, 6, 8].into_iter().enumerate() {
+            let offset = EXTENT_HEADER_SIZE + index * EXTENT_ENTRY_SIZE;
+            leaf[offset..offset + 4].copy_from_slice(&logical_block.to_le_bytes());
+            leaf[offset + 4..offset + 6].copy_from_slice(&1u16.to_le_bytes());
+            leaf[offset + 8..offset + 12]
+                .copy_from_slice(&(100 + u64::from(logical_block)).to_le_bytes()[..4]);
+        }
+        let tail_offset = EXTENT_HEADER_SIZE + 340 * EXTENT_ENTRY_SIZE;
+        let mut checksum = crc32c(superblock.checksum_seed, &inode.number.to_le_bytes());
+        checksum = crc32c(checksum, &inode.generation.to_le_bytes());
+        checksum = crc32c(checksum, &leaf[..tail_offset]);
+        leaf[tail_offset..tail_offset + 4].copy_from_slice(&checksum.to_le_bytes());
+
+        let node = ExtentNode::parse(&leaf, 0, &inode, &superblock).unwrap();
+        assert_eq!(node.depth(), 0);
+        assert_eq!(node.extent_for_logical_block(7), Ok(None));
+        assert_eq!(
+            node.extent_for_logical_block(8),
+            Ok(Some(Extent {
+                logical_block: 8,
+                physical_block: 108,
+                block_count: 1,
+                unwritten: false,
+            }))
+        );
+
+        leaf[tail_offset] ^= 1;
+        assert!(matches!(
+            ExtentNode::parse(&leaf, 0, &inode, &superblock),
+            Err(ParseError::InvalidChecksum)
+        ));
     }
 }

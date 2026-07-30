@@ -3,7 +3,7 @@
 use core::future::pending;
 use core::ptr;
 use slopos_ext4::{
-    DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DirectoryBlock, Extent,
+    DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DirectoryBlock, Extent, ExtentNode,
     GroupDescriptor, Inode, ROOT_INODE, SUPERBLOCK_SIZE, Superblock, validate_path_component,
 };
 
@@ -18,6 +18,7 @@ const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/sl
 const RELEASE_PATH: [&[u8]; 2] = [b"etc", b"slopos-release"];
 const CONFIGURATION_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"system.conf"];
 const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"multiblock.bin"];
+const DEEP_EXTENT_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"deep-extent.bin"];
 
 pub async fn mount_task(mut device: BlockDevice) -> ! {
     crate::serial::serialln(format_args!(
@@ -98,6 +99,27 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         "SLOPOS-EXT4: multiblock file valid inode={} inode_group={multiblock_group} bytes={multiblock_bytes} logical_blocks=2 path=/usr/share/slopos/multiblock.bin",
         multiblock.inode.number,
     ));
+
+    let deep_extent = mount.open_file(&mut device, &DEEP_EXTENT_PATH).await;
+    if deep_extent.inode.size != 36_864 || deep_extent.inode.extent_depth() != Ok(1) {
+        device.fail("ext4 depth-one extent inode is invalid");
+    }
+    let leaf_block = deep_extent
+        .inode
+        .extent_index_for_logical_block(8)
+        .unwrap_or_else(|_| device.fail("ext4 extent root index is invalid"))
+        .unwrap_or_else(|| device.fail("ext4 extent root index is missing"))
+        .child_block;
+    let deep_bytes = mount.read_file_block(&mut device, &deep_extent, 8).await;
+    if deep_bytes.len() != BLOCK_SIZE || deep_bytes.iter().any(|byte| *byte != b'D') {
+        device.fail("ext4 depth-one extent file content mismatch");
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: depth-one extent valid inode={} leaf_block={leaf_block} logical_block=8 bytes={} metadata_checksum=valid path=/usr/share/slopos/deep-extent.bin",
+        deep_extent.inode.number,
+        deep_bytes.len()
+    ));
+
     crate::serial::serialln(format_args!(
         "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={}",
         mount.cache.hits, mount.cache.misses, mount.cache.batched_pairs
@@ -237,7 +259,7 @@ impl ReadOnlyMount {
         file: &ReadOnlyFile,
         logical_block: u32,
     ) -> &'a [u8] {
-        let physical_block = self.file_physical_block(device, file, logical_block);
+        let physical_block = self.file_physical_block(device, file, logical_block).await;
         let block = self
             .cache
             .read_block(device, &self.superblock, physical_block)
@@ -255,16 +277,20 @@ impl ReadOnlyMount {
         first_logical_block: u32,
         second_logical_block: u32,
     ) {
-        let first = self.file_physical_block(device, file, first_logical_block);
-        let second = self.file_physical_block(device, file, second_logical_block);
+        let first = self
+            .file_physical_block(device, file, first_logical_block)
+            .await;
+        let second = self
+            .file_physical_block(device, file, second_logical_block)
+            .await;
         self.cache
             .prefetch_pair(device, &self.superblock, first, second)
             .await;
     }
 
-    fn file_physical_block(
-        &self,
-        device: &BlockDevice,
+    async fn file_physical_block(
+        &mut self,
+        device: &mut BlockDevice,
         file: &ReadOnlyFile,
         logical_block: u32,
     ) -> u64 {
@@ -275,20 +301,68 @@ impl ReadOnlyMount {
         if u64::from(logical_block) >= file_block_count {
             device.fail("ext4 file read is past end of file");
         }
-        let extent = file
-            .inode
-            .extent_for_logical_block(logical_block)
-            .unwrap_or_else(|_| device.fail("ext4 file extent is unsupported"))
+        let extent = self
+            .file_extent(device, &file.inode, logical_block)
+            .await
             .unwrap_or_else(|| device.fail("sparse ext4 file reads are unsupported"));
         if extent.unwritten {
             device.fail("ext4 regular file extent is invalid");
         }
         let physical_block =
             extent.physical_block + u64::from(logical_block - extent.logical_block);
-        if physical_block >= self.superblock.block_count {
+        let extent_end = extent
+            .physical_block
+            .checked_add(u64::from(extent.block_count))
+            .unwrap_or_else(|| device.fail("ext4 regular file extent overflows"));
+        if physical_block >= self.superblock.block_count || extent_end > self.superblock.block_count
+        {
             device.fail("ext4 regular file block is outside the filesystem");
         }
         physical_block
+    }
+
+    async fn file_extent(
+        &mut self,
+        device: &mut BlockDevice,
+        inode: &Inode,
+        logical_block: u32,
+    ) -> Option<Extent> {
+        let mut depth = inode
+            .extent_depth()
+            .unwrap_or_else(|_| device.fail("ext4 file extent root is invalid"));
+        if depth == 0 {
+            return inode
+                .extent_for_logical_block(logical_block)
+                .unwrap_or_else(|_| device.fail("ext4 inline extent is invalid"));
+        }
+
+        let mut child_block = inode
+            .extent_index_for_logical_block(logical_block)
+            .unwrap_or_else(|_| device.fail("ext4 extent root index is invalid"))
+            .unwrap_or_else(|| device.fail("ext4 extent root index is missing"))
+            .child_block;
+        loop {
+            if child_block == 0 || child_block >= self.superblock.block_count {
+                device.fail("ext4 extent node block is outside the filesystem");
+            }
+            let block = self
+                .cache
+                .read_block(device, &self.superblock, child_block)
+                .await;
+            depth -= 1;
+            let node = ExtentNode::parse(block, depth, inode, &self.superblock)
+                .unwrap_or_else(|_| device.fail("ext4 extent node validation failed"));
+            if node.depth() == 0 {
+                return node
+                    .extent_for_logical_block(logical_block)
+                    .unwrap_or_else(|_| device.fail("ext4 extent leaf is invalid"));
+            }
+            child_block = node
+                .extent_index_for_logical_block(logical_block)
+                .unwrap_or_else(|_| device.fail("ext4 extent index node is invalid"))
+                .unwrap_or_else(|| device.fail("ext4 extent index entry is missing"))
+                .child_block;
+        }
     }
 
     fn directory_extent(&self, device: &BlockDevice, inode: &Inode) -> Extent {
