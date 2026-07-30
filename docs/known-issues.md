@@ -12,6 +12,6 @@
 - 当前内核固定加载到物理 64 MiB；切换自有页表前的最早期初始化仍依赖 OVMF 留下的 identity mapping。
 - ACPI 当前解析 RSDP、RSDT/XSDT 和 MADT；尚未解析 MCFG、HPET、FADT，固定容量 parser 上限也不是完整 ACPICA 实现。
 - PCI 使用 configuration mechanism 1 并消费 firmware 已分配 BAR；尚未解析 bridge 拓扑或 MCFG，也没有 BAR sizing/resource allocation、MSI/MSI-X 或电源管理。
-- virtio-blk 当前可顺序复用一条 descriptor chain，启动时完成 33 次只读请求并跨四轮 ring wrap；没有多 in-flight descriptor 分配、写入、flush/discard、block cache、timeout 或错误恢复。
+- virtio-blk 当前可顺序复用一条 descriptor chain；8-entry FIFO read cache 已验证，但没有失效/回收/writeback。仍无多 in-flight descriptor 分配、写入、flush/discard、timeout 或错误恢复。
 - bitmap font 只覆盖 UI 使用的 ASCII 子集。
 - `capture-desktop.sh` 使用 QEMU PPM；只有安装 `pnmtopng` 时才同时生成 PNG。

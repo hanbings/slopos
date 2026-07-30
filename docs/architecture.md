@@ -56,7 +56,7 @@ memory map 使用 firmware 返回的 descriptor size，而不是假设 Rust 结�
 
 `virtio.rs` 走 modern PCI transport，只协商 `VIRTIO_F_VERSION_1`，为 queue 0 分配独立 descriptor/available/used/control/data frame，并以三 descriptor chain 发出只读 sector 请求。INTx top half 只读取并清除 ISR、累计计数、wake block task 和 EOI；Future 在下半部检查递增 used index 与 status，再复用同一 chain 发出下一次请求。共享 `crates/virtio` 负责可宿主测试的 split-ring layout 与 descriptor 构造。
 
-构建产生两个 disk：64 MiB FAT32 ESP 只供 UEFI loader，256 MiB `SLOPOS_ROOT` ext4 image 作为独立 root disk。`virtio.rs` 只负责 transport、DMA ring、IRQ completion 与有界 block buffer；`fs.rs` 持有 `ReadOnlyMount`/`ReadOnlyFile`，按 inode number 读取并校验对应 group descriptor，再完成 component lookup 与按逻辑块 file read。QEMU 镜像有 2 个 block group，inode 20 实际走 group 1/inode table 38。当前支持跨 group inode 和 depth-0 inline extent，多级 extent tree 与多块目录仍未实现。
+构建产生两个 disk：64 MiB FAT32 ESP 只供 UEFI loader，256 MiB `SLOPOS_ROOT` ext4 image 作为独立 root disk。`virtio.rs` 只负责 transport、DMA ring、IRQ completion 与有界 block buffer；`fs.rs` 持有 `ReadOnlyMount`/`ReadOnlyFile` 和 8-entry FIFO read cache，cache frame 由物理 allocator 提供。inode table、group descriptor 和重复目录 block 命中时不发 DMA，但 parser/checksum 仍照常执行。QEMU 镜像有 2 个 group，inode 20 实际走 group 1/inode table 38。
 
 `executor.rs` 当前固定运行 input、timer、block 三个 pinned future，以原子 ready mask 作为 task queue，以 RawWaker 标识 task，并在空闲时执行 race-free `cli` 检查和 `sti; hlt`。它仍缺动态 task arena、timer wheel、cancellation、async lock 和 SMP。
 

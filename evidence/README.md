@@ -37,6 +37,6 @@ ACPI parser 的宿主测试由 `make test-acpi` 执行。裸机日志记录 QEMU
 
 PCI 枚举器的宿主测试由 `make test-pci` 执行。裸机日志包含 QEMU q35 的设备总数和实际 virtio-blk BDF；当前证据为 `00:03.0`、device ID `1001`，完整 region 校验后的 capability mask `0x1e`（configuration type 1–4）。OVMF 分配的 modern BAR base 为 `0xc000000000`，因此 CR3 证据同时包含跨 PML4 slot 的 7 个 table frame。
 
-virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA 与 INTx→waker→Future：queue size 8，root device 报告 524288 sectors，同一 chain 顺序完成 33 次请求，top half/queue interrupt 计数均为 33，并跨四轮 ring wrap。
+virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA 与 INTx→waker→Future：queue size 8，root device 报告 524288 sectors，cache 以 18 hit/14 miss 减少重复 block lookup；另加 superblock 后，同一 chain 完成 15 次请求，top half/queue interrupt 计数均为 15。
 
 ext4 parser 测试由 `make test-ext4` 执行。裸机日志证明 4096-byte block、65536 blocks、32 inodes、2 groups、group 0 inode table 37、root extent 39 和 5 个 root entries；superblock/group/inode/directory checksum 均由内核校验。`multiblock.bin` 是 inode 20，因此 `inode_group=1` marker 同时证明 group 1 descriptor 与 inode table 38 路径实际执行。固定全部 primary/backup superblock hash seed 并归一化 inode metadata 后，e2fsprogs 1.47.2 镜像 SHA-256 为 `a7b049322d8dd873efa1edf634da66be23f93a9bade170941966e7f9dc968e2d`。这仍不证明通用 VFS。
