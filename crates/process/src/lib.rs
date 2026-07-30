@@ -25,6 +25,8 @@ const INITIAL_STACK_ALIGNMENT: usize = 16;
 pub enum ProcessState {
     Ready,
     Running,
+    Blocked,
+    Runnable,
     Exited,
 }
 
@@ -172,10 +174,31 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
 
     pub fn mark_running(&mut self, pid: ProcessId) -> Result<(), ProcessError> {
         let slot = self.slot_mut(pid).ok_or(ProcessError::NotFound)?;
-        if slot.state != Some(ProcessState::Ready) {
+        if !matches!(
+            slot.state,
+            Some(ProcessState::Ready | ProcessState::Runnable)
+        ) {
             return Err(ProcessError::InvalidState);
         }
         slot.state = Some(ProcessState::Running);
+        Ok(())
+    }
+
+    pub fn mark_runnable(&mut self, pid: ProcessId) -> Result<(), ProcessError> {
+        let slot = self.slot_mut(pid).ok_or(ProcessError::NotFound)?;
+        if !matches!(
+            slot.state,
+            Some(ProcessState::Running | ProcessState::Blocked)
+        ) {
+            return Err(ProcessError::InvalidState);
+        }
+        slot.state = Some(ProcessState::Runnable);
+        Ok(())
+    }
+
+    pub fn mark_blocked(&mut self, pid: ProcessId) -> Result<(), ProcessError> {
+        let slot = self.running_slot_mut(pid)?;
+        slot.state = Some(ProcessState::Blocked);
         Ok(())
     }
 
@@ -280,6 +303,32 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
             return Err(ProcessError::InvalidState);
         }
         Ok(slot.descriptors.close_all())
+    }
+
+    pub fn next_schedulable_after(&self, pid: ProcessId) -> Option<ProcessId> {
+        self.slots
+            .iter()
+            .filter(|slot| {
+                matches!(
+                    slot.state,
+                    Some(ProcessState::Ready | ProcessState::Runnable)
+                )
+            })
+            .filter(|slot| slot.pid > pid)
+            .map(|slot| slot.pid)
+            .min()
+            .or_else(|| {
+                self.slots
+                    .iter()
+                    .filter(|slot| {
+                        matches!(
+                            slot.state,
+                            Some(ProcessState::Ready | ProcessState::Runnable)
+                        )
+                    })
+                    .map(|slot| slot.pid)
+                    .min()
+            })
     }
 
     pub const fn len(&self) -> usize {
@@ -638,22 +687,32 @@ mod tests {
 
     #[test]
     fn enforces_ready_running_exited_and_reaped_transitions() {
-        let mut table = ProcessTable::<1, 1>::new();
-        let pid = table.spawn(None, IMAGE).unwrap();
-        assert_eq!(table.snapshot(pid).unwrap().state, ProcessState::Ready);
-        assert_eq!(table.record_syscall(pid), Err(ProcessError::InvalidState));
-        table.mark_running(pid).unwrap();
-        assert_eq!(table.record_syscall(pid), Ok(1));
-        assert_eq!(table.record_syscall(pid), Ok(2));
-        table.exit(pid, 7).unwrap();
-        let exited = table.snapshot(pid).unwrap();
+        let mut table = ProcessTable::<2, 1>::new();
+        let first = table.spawn(None, IMAGE).unwrap();
+        let second = table.spawn(Some(first), IMAGE).unwrap();
+        assert_eq!(table.snapshot(first).unwrap().state, ProcessState::Ready);
+        assert_eq!(table.record_syscall(first), Err(ProcessError::InvalidState));
+        table.mark_running(first).unwrap();
+        assert_eq!(table.record_syscall(first), Ok(1));
+        table.mark_blocked(first).unwrap();
+        assert_eq!(table.snapshot(first).unwrap().state, ProcessState::Blocked);
+        table.mark_runnable(first).unwrap();
+        assert_eq!(table.next_schedulable_after(first), Some(second));
+        table.mark_running(second).unwrap();
+        table.mark_runnable(second).unwrap();
+        assert_eq!(table.next_schedulable_after(second), Some(first));
+        table.mark_running(first).unwrap();
+        assert_eq!(table.record_syscall(first), Ok(2));
+        table.exit(first, 7).unwrap();
+        assert_eq!(table.next_schedulable_after(first), Some(second));
+        let exited = table.snapshot(first).unwrap();
         assert_eq!(exited.state, ProcessState::Exited);
         assert_eq!(exited.exit_status, Some(7));
         assert_eq!(exited.syscall_count, 2);
-        assert_eq!(table.mark_running(pid), Err(ProcessError::InvalidState));
-        assert_eq!(table.reap(pid).unwrap(), exited);
-        assert!(table.is_empty());
-        assert_eq!(table.snapshot(pid), Err(ProcessError::NotFound));
+        assert_eq!(table.mark_running(first), Err(ProcessError::InvalidState));
+        assert_eq!(table.reap(first).unwrap(), exited);
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.snapshot(first), Err(ProcessError::NotFound));
     }
 
     #[test]

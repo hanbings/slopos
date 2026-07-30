@@ -16,7 +16,7 @@ replay_serial="${repo_dir}/evidence/journal-replay-serial.log"
 replay_debug="${repo_dir}/evidence/journal-replay-uefi-debugcon.log"
 replay_qemu="${repo_dir}/evidence/journal-replay-qemu.log"
 home_snapshot="${repo_dir}/target/journal-replay-homes.bin"
-home_blocks=(0 1 33 38 111)
+home_blocks=(0 1 33 38 117)
 
 restore_clean_artifacts() {
     "${cargo_bin}" build --locked --release \
@@ -46,6 +46,8 @@ block_is_byte() {
 mkdir -p "${repo_dir}/evidence"
 "${cargo_bin}" build --locked --release \
     -p slopos-init --target x86_64-unknown-none
+"${cargo_bin}" build --locked --release \
+    -p slopos-worker --target x86_64-unknown-none
 "${cargo_bin}" build --locked --release \
     -p slopos-kernel --target x86_64-unknown-none \
     --features journal-replay-injection
@@ -80,21 +82,21 @@ if [[ ${injection_status} -ne 0 && ${injection_status} -ne 124 ]]; then
     exit "${injection_status}"
 fi
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26152 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26200 blocks=7 matches_boot=true" \
     "${injection_serial}"
 grep -Fq \
-    "SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/111 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5" \
+    "SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/117 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5" \
     "${injection_serial}"
 grep -Fq "needs_recovery" <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-grep -Eq "^Free blocks:[[:space:]]+61298$" \
+grep -Eq "^Free blocks:[[:space:]]+61292$" \
     <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-grep -Fq "Block 111 marked in use" \
-    <(/usr/sbin/debugfs -R "testb 111" "${root_image}" 2>/dev/null)
+grep -Fq "Block 117 marked in use" \
+    <(/usr/sbin/debugfs -R "testb 117" "${root_image}" 2>/dev/null)
 grep -Fq "Size: 8192" \
     <(/usr/sbin/debugfs -R "stat <31>" "${root_image}" 2>/dev/null)
 grep -Fq "Blockcount: 16" \
     <(/usr/sbin/debugfs -R "stat <31>" "${root_image}" 2>/dev/null)
-block_is_byte 111 71
+block_is_byte 117 71
 
 "${cargo_bin}" build --locked --release \
     -p slopos-kernel --target x86_64-unknown-none
@@ -123,10 +125,13 @@ if [[ ${replay_status} -ne 0 && ${replay_status} -ne 124 ]]; then
     exit "${replay_status}"
 fi
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26152 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26200 blocks=7 matches_boot=true" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=1 source=vfs path=/sbin/slop-init format=elf64" \
+    "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64" \
+    "${replay_serial}"
+grep -Fq \
+    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-worker argv1=--probe format=elf64" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-VFS: process read complete pid=1 fd=3 inode=18 offset=0 requested=76 bytes=76 user_pages=1 cross_page=false async=true" \
@@ -138,13 +143,16 @@ grep -Fq \
     "SLOPOS-PROCESS: pid=1 exit resources released descriptors=1 backing_objects=1 address_space_retained=true" \
     "${replay_serial}"
 grep -Fq \
+    "SLOPOS-PROCESS: pid=2 exit resources released descriptors=0 backing_objects=0 address_space_retained=true" \
+    "${replay_serial}"
+grep -Fq \
     "SLOPOS-EXT4: journal recovery replayed sequence=1 start=1 tags=5 first_target_block=0 escaped=false home_readback=true next_sequence=2 records_cleared=true recovery=false" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-EXT4: journal superblock valid inode=8 physical_block=32801 blocks=4096 first=1 sequence=2 start=0" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-VIRTIO: bounded block sequence complete requests=524 max_in_flight=2 interrupts=523 queue_interrupts=523" \
+    "SLOPOS-VIRTIO: bounded block sequence complete requests=542 max_in_flight=2 interrupts=541 queue_interrupts=541" \
     "${replay_serial}"
 grep -Fq "SLOPOS-DESKTOP: interactive compositor loop entered windows=3" "${replay_serial}"
 if grep -Fq "FATAL" "${replay_serial}"; then
@@ -155,10 +163,10 @@ if /usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null | grep -Fq "needs_recovery"
     echo "journal replay did not clear the ext4 recovery flag" >&2
     exit 1
 fi
-grep -Eq "^Free blocks:[[:space:]]+61299$" \
+grep -Eq "^Free blocks:[[:space:]]+61293$" \
     <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-grep -Fq "Block 111 not in use" \
-    <(/usr/sbin/debugfs -R "testb 111" "${root_image}" 2>/dev/null)
+grep -Fq "Block 117 not in use" \
+    <(/usr/sbin/debugfs -R "testb 117" "${root_image}" 2>/dev/null)
 grep -Fq "Size: 4096" \
     <(/usr/sbin/debugfs -R "stat <31>" "${root_image}" 2>/dev/null)
 grep -Fq "Blockcount: 8" \
@@ -197,7 +205,7 @@ sed -i 's/\r$//' \
 restore_clean_artifacts
 trap - EXIT
 clean_hash="$(sha256sum "${root_image}" | awk '{print $1}')"
-if [[ "${clean_hash}" != "66bf45ea8f78ad520434f1e434a8b8636869471701b6d4c0f10cbef351706465" ]]; then
+if [[ "${clean_hash}" != "3b59c63281b8300a0523fb3ec26dc4d03a028d52f207d5b1e5d528ae4ec20d52" ]]; then
     echo "journal replay cleanup did not restore the reproducible root image" >&2
     exit 1
 fi

@@ -95,10 +95,13 @@ monitor_type() {
     -no-reboot >/dev/null
 
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26152 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26200 blocks=7 matches_boot=true" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: pid=1 source=vfs path=/sbin/slop-init format=elf64" \
+    "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-worker argv1=--probe format=elf64" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-VFS: process read complete pid=1 fd=3 inode=18 offset=0 requested=76 bytes=76 user_pages=1 cross_page=false async=true" \
@@ -108,6 +111,9 @@ grep -Fq \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-PROCESS: pid=1 exit resources released descriptors=1 backing_objects=1 address_space_retained=true" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-PROCESS: pid=2 exit resources released descriptors=0 backing_objects=0 address_space_retained=true" \
     "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: reload requested generation=1 accepted=true" "${serial_log}"

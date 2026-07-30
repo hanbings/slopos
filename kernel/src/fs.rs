@@ -30,7 +30,7 @@ const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
 const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
 const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
-const ALLOCATION_PROBE_BLOCK: u64 = 111;
+const ALLOCATION_PROBE_BLOCK: u64 = 117;
 const CREATE_TRANSACTION_BLOCKS: usize = 5;
 const CREATE_PROBE_INODE: u32 = 32;
 const CREATE_PROBE_NAME: &[u8] = b"create-probe";
@@ -53,12 +53,16 @@ const ROOT_FILESYSTEM_ID: u16 = 1;
 const VFS_TEST_PATH: &[u8] = b"/etc/./slopos/../slopos/system.conf";
 const INIT_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-init"];
 const INIT_EXECUTABLE_DISPLAY: &str = "/sbin/slop-init";
+const WORKER_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-worker"];
+const WORKER_EXECUTABLE_DISPLAY: &str = "/sbin/slop-worker";
 const INIT_EXECUTABLE_CAPACITY: usize = 32 * 1024;
 const PROCESS_FILE_CAPACITY: usize = 8;
 const LINUX_ENOENT: i64 = -2;
 const LINUX_EBADF: i64 = -9;
 const LINUX_EINVAL: i64 = -22;
 const LINUX_EMFILE: i64 = -24;
+type ProcessOpenFiles =
+    [[Option<Ext4File>; PROCESS_FILE_CAPACITY]; crate::process::PROCESS_CAPACITY];
 const NIRI_USER_PATH: [&[u8]; 5] = [b"home", b"slop", b".config", b"niri", b"config.kdl"];
 const NIRI_SYSTEM_PATH: [&[u8]; 3] = [b"etc", b"niri", b"config.kdl"];
 const NIRI_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"niri.kdl"];
@@ -76,13 +80,17 @@ const SWWW_SYSTEM_ENV_PATH: [&[u8]; 3] = [b"etc", b"swww", b"env"];
 const SWWW_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"swww.env"];
 
 struct InitExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
+struct WorkerExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
 
 // The block task is the sole writer and invokes PID 1 synchronously before it
 // resumes filesystem work, so the executable bytes cannot be mutated in use.
 unsafe impl Sync for InitExecutableStorage {}
+unsafe impl Sync for WorkerExecutableStorage {}
 
 static INIT_EXECUTABLE: InitExecutableStorage =
     InitExecutableStorage(UnsafeCell::new([0; INIT_EXECUTABLE_CAPACITY]));
+static WORKER_EXECUTABLE: WorkerExecutableStorage =
+    WorkerExecutableStorage(UnsafeCell::new([0; INIT_EXECUTABLE_CAPACITY]));
 
 #[derive(Clone, Copy)]
 struct ConfigCandidate {
@@ -648,48 +656,86 @@ async fn load_and_run_init(
     device: &mut BlockDevice,
     boot_user_image: &[u8],
 ) {
-    let executable = mount
+    let init_executable = mount
         .try_open_file(device, &INIT_EXECUTABLE_PATH)
         .await
         .unwrap_or_else(|| device.fail("root VFS init executable was not found"));
-    let executable_size = usize::try_from(executable.inode.size)
+    let init_size = usize::try_from(init_executable.inode.size)
         .unwrap_or_else(|_| device.fail("root VFS init executable exceeds address space"));
-    if executable_size == 0 || executable_size > INIT_EXECUTABLE_CAPACITY {
+    if init_size == 0 || init_size > INIT_EXECUTABLE_CAPACITY {
         device.fail("root VFS init executable has an invalid size");
     }
-    // SAFETY: the block task is the only writer. PID 1 may suspend for async
-    // filesystem syscalls below, but the executable backing storage is not
-    // mutated again.
-    let storage = unsafe { &mut *INIT_EXECUTABLE.0.get() };
-    storage.fill(0);
+    // SAFETY: the block task is the only writer. Neither backing storage is
+    // mutated after the process images are constructed below.
+    let init_storage = unsafe { &mut *INIT_EXECUTABLE.0.get() };
+    init_storage.fill(0);
     let mut copied = 0usize;
     let mut logical_block = 0u32;
-    while copied < executable_size {
+    while copied < init_size {
         let bytes = mount
-            .read_file_block(device, &executable, logical_block)
+            .read_file_block(device, &init_executable, logical_block)
             .await;
-        let length = bytes.len().min(executable_size - copied);
-        storage[copied..copied + length].copy_from_slice(&bytes[..length]);
+        let length = bytes.len().min(init_size - copied);
+        init_storage[copied..copied + length].copy_from_slice(&bytes[..length]);
         copied += length;
         logical_block += 1;
     }
-    let image = &storage[..executable_size];
-    if image != boot_user_image {
+    let init_image = &init_storage[..init_size];
+    if init_image != boot_user_image {
         device.fail("root VFS init executable differs from the boot copy");
     }
     crate::serial::serialln(format_args!(
-        "SLOPOS-VFS: executable loaded path={INIT_EXECUTABLE_DISPLAY} inode={} bytes={executable_size} blocks={logical_block} matches_boot=true",
-        executable.inode.number
+        "SLOPOS-VFS: executable loaded path={INIT_EXECUTABLE_DISPLAY} inode={} bytes={init_size} blocks={logical_block} matches_boot=true",
+        init_executable.inode.number
     ));
+
+    let worker_executable = mount
+        .try_open_file(device, &WORKER_EXECUTABLE_PATH)
+        .await
+        .unwrap_or_else(|| device.fail("root VFS worker executable was not found"));
+    let worker_size = usize::try_from(worker_executable.inode.size)
+        .unwrap_or_else(|_| device.fail("root VFS worker executable exceeds address space"));
+    if worker_size == 0 || worker_size > INIT_EXECUTABLE_CAPACITY {
+        device.fail("root VFS worker executable has an invalid size");
+    }
+    // SAFETY: same single-writer lifetime as INIT_EXECUTABLE above.
+    let worker_storage = unsafe { &mut *WORKER_EXECUTABLE.0.get() };
+    worker_storage.fill(0);
+    copied = 0;
+    logical_block = 0;
+    while copied < worker_size {
+        let bytes = mount
+            .read_file_block(device, &worker_executable, logical_block)
+            .await;
+        let length = bytes.len().min(worker_size - copied);
+        worker_storage[copied..copied + length].copy_from_slice(&bytes[..length]);
+        copied += length;
+        logical_block += 1;
+    }
+    let worker_image = &worker_storage[..worker_size];
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VFS: executable loaded path={WORKER_EXECUTABLE_DISPLAY} inode={} bytes={worker_size} blocks={logical_block} matches_boot=not-required",
+        worker_executable.inode.number
+    ));
+
     let root_path =
         AbsolutePath::parse(b"/").unwrap_or_else(|_| device.fail("process VFS root is invalid"));
     let mut namespace = MountTable::<4>::new();
     namespace
         .mount(&root_path, ROOT_FILESYSTEM_ID)
         .unwrap_or_else(|_| device.fail("process VFS root mount failed"));
-    let mut open_files: [Option<Ext4File>; PROCESS_FILE_CAPACITY] =
-        [const { None }; PROCESS_FILE_CAPACITY];
-    let mut event = crate::process::start_probe(image, "vfs", INIT_EXECUTABLE_DISPLAY);
+    let mut open_files: [[Option<Ext4File>; PROCESS_FILE_CAPACITY];
+        crate::process::PROCESS_CAPACITY] =
+        core::array::from_fn(|_| core::array::from_fn(|_| None));
+    let mut exited_processes = 0usize;
+    let mut event = crate::process::start_processes(
+        init_image,
+        "vfs",
+        INIT_EXECUTABLE_DISPLAY,
+        worker_image,
+        "vfs",
+        WORKER_EXECUTABLE_DISPLAY,
+    );
     loop {
         event = match event {
             crate::process::ProcessEvent::OpenAt(request) => {
@@ -704,9 +750,14 @@ async fn load_and_run_init(
             crate::process::ProcessEvent::Close(request) => {
                 complete_process_close(&mut open_files, request)
             }
-            crate::process::ProcessEvent::Exited => {
-                release_exited_process_files(device, &mut open_files);
-                break;
+            crate::process::ProcessEvent::Yielded { pid } => crate::process::schedule_next(pid),
+            crate::process::ProcessEvent::Exited { pid } => {
+                release_exited_process_files(device, &mut open_files, pid);
+                exited_processes += 1;
+                if exited_processes == 2 {
+                    break;
+                }
+                crate::process::schedule_next(pid)
             }
         };
     }
@@ -716,27 +767,31 @@ async fn complete_process_openat(
     mount: &mut Ext4Mount,
     device: &mut BlockDevice,
     namespace: &MountTable<4>,
-    open_files: &mut [Option<Ext4File>; PROCESS_FILE_CAPACITY],
+    open_files: &mut ProcessOpenFiles,
     request: crate::process::OpenAtRequest,
 ) -> crate::process::ProcessEvent {
+    let pid = request.pid();
+    let process_index = process_index(pid)
+        .unwrap_or_else(|| device.fail("process PID is outside the VFS backing table"));
     let path = match AbsolutePath::parse(request.path()) {
         Ok(path) => path,
-        Err(_) => return crate::process::resume_probe(LINUX_EINVAL, None),
+        Err(_) => return crate::process::resume_probe(pid, LINUX_EINVAL, None),
     };
     let resolution = match namespace.resolve(&path) {
         Ok(resolution) => resolution,
-        Err(_) => return crate::process::resume_probe(LINUX_ENOENT, None),
+        Err(_) => return crate::process::resume_probe(pid, LINUX_ENOENT, None),
     };
     let Some(file) = mount
         .try_open_file(device, &path.components()[resolution.matched_components..])
         .await
     else {
-        return crate::process::resume_probe(LINUX_ENOENT, None);
+        return crate::process::resume_probe(pid, LINUX_ENOENT, None);
     };
     let inode = file.inode.number;
     let size = file.inode.size;
     let access_mode = request.access_mode();
     let fd = match crate::process::open_file(
+        pid,
         FileNode {
             filesystem_id: resolution.filesystem_id,
             node_id: u64::from(inode),
@@ -745,14 +800,14 @@ async fn complete_process_openat(
         access_mode,
     ) {
         Ok(fd) => fd,
-        Err(_) => return crate::process::resume_probe(LINUX_EMFILE, None),
+        Err(_) => return crate::process::resume_probe(pid, LINUX_EMFILE, None),
     };
     let slot = process_file_slot(fd)
         .unwrap_or_else(|| device.fail("process VFS descriptor is outside backing table"));
-    if open_files[slot].is_some() {
+    if open_files[process_index][slot].is_some() {
         device.fail("process VFS backing slot was already occupied");
     }
-    open_files[slot] = Some(file);
+    open_files[process_index][slot] = Some(file);
     let display = core::str::from_utf8(request.path()).unwrap_or("<non-utf8>");
     let access = match access_mode {
         AccessMode::ReadOnly => "readonly",
@@ -760,26 +815,29 @@ async fn complete_process_openat(
         AccessMode::ReadWrite => "readwrite",
     };
     crate::serial::serialln(format_args!(
-        "SLOPOS-VFS: process open complete pid=1 fd={fd} inode={inode} bytes={size} access={access} async=true path={display}"
+        "SLOPOS-VFS: process open complete pid={pid} fd={fd} inode={inode} bytes={size} access={access} async=true path={display}"
     ));
-    crate::process::resume_probe(i64::from(fd), None)
+    crate::process::resume_probe(pid, i64::from(fd), None)
 }
 
 async fn complete_process_read(
     mount: &mut Ext4Mount,
     device: &mut BlockDevice,
-    open_files: &[Option<Ext4File>; PROCESS_FILE_CAPACITY],
+    open_files: &ProcessOpenFiles,
     request: crate::process::ReadRequest,
 ) -> crate::process::ProcessEvent {
-    let window = match crate::process::read_window(request.fd, request.requested) {
+    let pid = request.pid;
+    let process_index = process_index(pid)
+        .unwrap_or_else(|| device.fail("process PID is outside the VFS backing table"));
+    let window = match crate::process::read_window(pid, request.fd, request.requested) {
         Ok(window) => window,
-        Err(_) => return crate::process::resume_probe(LINUX_EBADF, None),
+        Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
     };
     let Some(slot) = process_file_slot(request.fd) else {
-        return crate::process::resume_probe(LINUX_EBADF, None);
+        return crate::process::resume_probe(pid, LINUX_EBADF, None);
     };
-    let Some(file) = open_files[slot].as_ref() else {
-        return crate::process::resume_probe(LINUX_EBADF, None);
+    let Some(file) = open_files[process_index][slot].as_ref() else {
+        return crate::process::resume_probe(pid, LINUX_EBADF, None);
     };
     if window.node.filesystem_id != ROOT_FILESYSTEM_ID
         || window.node.node_id != u64::from(file.inode.number)
@@ -795,10 +853,10 @@ async fn complete_process_read(
         &mut output[..request.requested],
     )
     .await;
-    crate::process::advance_fd(request.fd, bytes)
+    crate::process::advance_fd(pid, request.fd, bytes)
         .unwrap_or_else(|_| device.fail("process VFS read offset advance failed"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-VFS: process read complete pid=1 fd={} inode={} offset={} requested={} bytes={bytes} user_pages={} cross_page={} async=true",
+        "SLOPOS-VFS: process read complete pid={pid} fd={} inode={} offset={} requested={} bytes={bytes} user_pages={} cross_page={} async=true",
         request.fd,
         file.inode.number,
         window.offset,
@@ -806,25 +864,28 @@ async fn complete_process_read(
         request.user_pages(),
         request.user_pages() > 1
     ));
-    crate::process::resume_probe(bytes as i64, Some(&output[..bytes]))
+    crate::process::resume_probe(pid, bytes as i64, Some(&output[..bytes]))
 }
 
 async fn complete_process_write(
     mount: &mut Ext4Mount,
     device: &mut BlockDevice,
-    open_files: &[Option<Ext4File>; PROCESS_FILE_CAPACITY],
+    open_files: &ProcessOpenFiles,
     request: crate::process::WriteRequest,
 ) -> crate::process::ProcessEvent {
+    let pid = request.pid;
+    let process_index = process_index(pid)
+        .unwrap_or_else(|| device.fail("process PID is outside the VFS backing table"));
     let input = request.input();
-    let window = match crate::process::write_window(request.fd, input.len()) {
+    let window = match crate::process::write_window(pid, request.fd, input.len()) {
         Ok(window) => window,
-        Err(_) => return crate::process::resume_probe(LINUX_EBADF, None),
+        Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
     };
     let Some(slot) = process_file_slot(request.fd) else {
-        return crate::process::resume_probe(LINUX_EBADF, None);
+        return crate::process::resume_probe(pid, LINUX_EBADF, None);
     };
-    let Some(file) = open_files[slot].as_ref() else {
-        return crate::process::resume_probe(LINUX_EBADF, None);
+    let Some(file) = open_files[process_index][slot].as_ref() else {
+        return crate::process::resume_probe(pid, LINUX_EBADF, None);
     };
     if window.node.filesystem_id != ROOT_FILESYSTEM_ID
         || window.node.node_id != u64::from(file.inode.number)
@@ -832,10 +893,10 @@ async fn complete_process_write(
         device.fail("process VFS write vnode does not match backing file");
     }
     let bytes = write_process_file_range(mount, device, file, window, input).await;
-    crate::process::advance_fd(request.fd, bytes)
+    crate::process::advance_fd(pid, request.fd, bytes)
         .unwrap_or_else(|_| device.fail("process VFS write offset advance failed"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-VFS: process write complete pid=1 fd={} inode={} offset={} requested={} bytes={bytes} user_pages={} cross_page={} async=true flushed=true",
+        "SLOPOS-VFS: process write complete pid={pid} fd={} inode={} offset={} requested={} bytes={bytes} user_pages={} cross_page={} async=true flushed=true",
         request.fd,
         file.inode.number,
         window.offset,
@@ -843,39 +904,42 @@ async fn complete_process_write(
         request.user_pages(),
         request.user_pages() > 1
     ));
-    crate::process::resume_probe(bytes as i64, None)
+    crate::process::resume_probe(pid, bytes as i64, None)
 }
 
 fn complete_process_close(
-    open_files: &mut [Option<Ext4File>; PROCESS_FILE_CAPACITY],
+    open_files: &mut ProcessOpenFiles,
     request: crate::process::CloseRequest,
 ) -> crate::process::ProcessEvent {
-    let Some(slot) = process_file_slot(request.fd) else {
-        return crate::process::resume_probe(LINUX_EBADF, None);
+    let pid = request.pid;
+    let Some(process_index) = process_index(pid) else {
+        return crate::process::resume_probe(pid, LINUX_EBADF, None);
     };
-    let Some(file) = open_files[slot].as_ref() else {
-        return crate::process::resume_probe(LINUX_EBADF, None);
+    let Some(slot) = process_file_slot(request.fd) else {
+        return crate::process::resume_probe(pid, LINUX_EBADF, None);
+    };
+    let Some(file) = open_files[process_index][slot].as_ref() else {
+        return crate::process::resume_probe(pid, LINUX_EBADF, None);
     };
     let inode = file.inode.number;
-    if crate::process::close_fd(request.fd).is_err() {
-        return crate::process::resume_probe(LINUX_EBADF, None);
+    if crate::process::close_fd(pid, request.fd).is_err() {
+        return crate::process::resume_probe(pid, LINUX_EBADF, None);
     }
-    open_files[slot] = None;
+    open_files[process_index][slot] = None;
     crate::serial::serialln(format_args!(
-        "SLOPOS-VFS: process close complete pid=1 fd={} inode={inode} async=false",
+        "SLOPOS-VFS: process close complete pid={pid} fd={} inode={inode} async=false",
         request.fd
     ));
-    crate::process::resume_probe(0, None)
+    crate::process::resume_probe(pid, 0, None)
 }
 
-fn release_exited_process_files(
-    device: &BlockDevice,
-    open_files: &mut [Option<Ext4File>; PROCESS_FILE_CAPACITY],
-) {
-    let descriptors = crate::process::close_all_files()
+fn release_exited_process_files(device: &BlockDevice, open_files: &mut ProcessOpenFiles, pid: u32) {
+    let process_index = process_index(pid)
+        .unwrap_or_else(|| device.fail("exited PID is outside the VFS backing table"));
+    let descriptors = crate::process::close_all_files(pid)
         .unwrap_or_else(|_| device.fail("exited process descriptor cleanup failed"));
     let mut backing_objects = 0usize;
-    for file in open_files {
+    for file in &mut open_files[process_index] {
         if file.take().is_some() {
             backing_objects += 1;
         }
@@ -884,7 +948,7 @@ fn release_exited_process_files(
         device.fail("exited process descriptor/backing cleanup diverged");
     }
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid=1 exit resources released descriptors={descriptors} backing_objects={backing_objects} address_space_retained=true"
+        "SLOPOS-PROCESS: pid={pid} exit resources released descriptors={descriptors} backing_objects={backing_objects} address_space_retained=true"
     ));
 }
 
@@ -968,6 +1032,11 @@ fn process_file_slot(fd: u32) -> Option<usize> {
     let descriptor = fd.checked_sub(FIRST_FILE_DESCRIPTOR)?;
     let slot = usize::try_from(descriptor).ok()?;
     (slot < PROCESS_FILE_CAPACITY).then_some(slot)
+}
+
+fn process_index(pid: u32) -> Option<usize> {
+    let index = usize::try_from(pid.checked_sub(1)?).ok()?;
+    (index < crate::process::PROCESS_CAPACITY).then_some(index)
 }
 
 async fn load_and_publish_desktop_config(

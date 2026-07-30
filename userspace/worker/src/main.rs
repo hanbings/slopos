@@ -10,8 +10,6 @@ use core::panic::PanicInfo;
 const USER_ENTRY: u64 = 0x4000_0000;
 const INITIAL_STACK_BASE: u64 = 0x4000_2000;
 const USER_STACK_TOP: u64 = 0x4000_3000;
-const CROSS_PAGE_BUFFER_ADDRESS: u64 = INITIAL_STACK_BASE - 32;
-const CROSS_PAGE_TRANSFER_BYTES: usize = 64;
 const INITIAL_STACK_WORDS: usize = 26;
 const INITIAL_ARGC: u64 = 2;
 const INITIAL_ENVC: usize = 3;
@@ -27,26 +25,20 @@ const LINUX_AT_EXECFN: u64 = 31;
 const SYS_READ: u64 = 0;
 const SYS_WRITE: u64 = 1;
 const SYS_CLOSE: u64 = 3;
-const SYS_LSEEK: u64 = 8;
 const SYS_SCHED_YIELD: u64 = 24;
 const SYS_EXIT: u64 = 60;
 const SYS_OPENAT: u64 = 257;
 const AT_FDCWD: i64 = -100;
 const O_RDONLY: u64 = 0;
-const O_RDWR: u64 = 2;
-const SEEK_SET: u64 = 0;
 const STDOUT: u64 = 1;
 const EXPECTED_FD: i64 = 3;
-static MESSAGE: &[u8; 18] = b"SLOPOS user write\n";
+static MESSAGE: &[u8; 19] = b"SLOPOS worker done\n";
 static CONFIG_PATH: &[u8; 24] = b"/etc/slopos/system.conf\0";
 static EXPECTED_CONFIG: &[u8; 76] =
     b"# SlopOS declarative configuration seed\ntheme = \"ocean\"\nhostname = \"slopos\"\n";
-static WRITE_PATH: &[u8; 34] = b"/usr/share/slopos/write-probe.bin\0";
-const PATCH_BYTE: u8 = 0xa5;
-const ORIGINAL_BYTE: u8 = b'P';
-static EXPECTED_ARGV: [&[u8]; 2] = [b"/sbin/slop-init", b"--system"];
+static EXPECTED_ARGV: [&[u8]; 2] = [b"/sbin/slop-worker", b"--probe"];
 static EXPECTED_ENVIRONMENT: [&[u8]; INITIAL_ENVC] = [
-    b"SLOPOS_SESSION=desktop",
+    b"SLOPOS_ROLE=worker",
     b"XDG_CURRENT_DESKTOP=SlopOS",
     b"WAYLAND_DISPLAY=wayland-0",
 ];
@@ -59,16 +51,16 @@ global_asm!(
 _start:
     mov rdi, rsp
     and rsp, -16
-    call slopos_init_main
+    call slopos_worker_main
     ud2
     .size _start, .-_start
 "#
 );
 
 #[unsafe(no_mangle)]
-pub extern "C" fn slopos_init_main(initial_stack: *const u64) -> ! {
+pub extern "C" fn slopos_worker_main(initial_stack: *const u64) -> ! {
     if !initial_stack_is_valid(initial_stack) || syscall0(SYS_SCHED_YIELD) != 0 {
-        exit(9);
+        exit(1);
     }
     let fd = syscall4(
         SYS_OPENAT,
@@ -77,89 +69,22 @@ pub extern "C" fn slopos_init_main(initial_stack: *const u64) -> ! {
         O_RDONLY,
         0,
     );
-    if fd != EXPECTED_FD {
-        exit(1);
+    if fd != EXPECTED_FD || syscall0(SYS_SCHED_YIELD) != 0 {
+        exit(2);
     }
     let mut configuration = [0u8; EXPECTED_CONFIG.len()];
-    let bytes = syscall3(
+    if syscall3(
         SYS_READ,
         fd as u64,
         configuration.as_mut_ptr() as u64,
         configuration.len() as u64,
-    );
-    if bytes != EXPECTED_CONFIG.len() as i64 || configuration != *EXPECTED_CONFIG {
-        exit(2);
-    }
-    if syscall1(SYS_CLOSE, fd as u64) != 0 {
+    ) != EXPECTED_CONFIG.len() as i64
+        || configuration != *EXPECTED_CONFIG
+    {
         exit(3);
     }
-    let fd = syscall4(
-        SYS_OPENAT,
-        AT_FDCWD as u64,
-        WRITE_PATH.as_ptr() as u64,
-        O_RDWR,
-        0,
-    );
-    if fd != EXPECTED_FD {
+    if syscall1(SYS_CLOSE, fd as u64) != 0 {
         exit(4);
-    }
-    if syscall0(SYS_SCHED_YIELD) != 0 {
-        exit(4);
-    }
-    // SAFETY: the kernel maps two writable stack pages. This bounded scratch
-    // range deliberately spans their non-contiguous physical frames without
-    // overlapping the initial stack or Rust call stack in the upper page.
-    let transfer = unsafe {
-        core::slice::from_raw_parts_mut(
-            CROSS_PAGE_BUFFER_ADDRESS as *mut u8,
-            CROSS_PAGE_TRANSFER_BYTES,
-        )
-    };
-    transfer.fill(PATCH_BYTE);
-    if !seek(fd, 123)
-        || syscall3(
-            SYS_WRITE,
-            fd as u64,
-            transfer.as_ptr() as u64,
-            transfer.len() as u64,
-        ) != transfer.len() as i64
-        || !seek(fd, 123)
-    {
-        exit(5);
-    }
-    transfer.fill(0);
-    if syscall3(
-        SYS_READ,
-        fd as u64,
-        transfer.as_mut_ptr() as u64,
-        transfer.len() as u64,
-    ) != transfer.len() as i64
-        || !transfer.iter().all(|byte| *byte == PATCH_BYTE)
-        || !seek(fd, 123)
-    {
-        exit(6);
-    }
-    transfer.fill(ORIGINAL_BYTE);
-    if syscall3(
-        SYS_WRITE,
-        fd as u64,
-        transfer.as_ptr() as u64,
-        transfer.len() as u64,
-    ) != transfer.len() as i64
-        || !seek(fd, 123)
-    {
-        exit(6);
-    }
-    transfer.fill(0);
-    if syscall3(
-        SYS_READ,
-        fd as u64,
-        transfer.as_mut_ptr() as u64,
-        transfer.len() as u64,
-    ) != transfer.len() as i64
-        || !transfer.iter().all(|byte| *byte == ORIGINAL_BYTE)
-    {
-        exit(7);
     }
     let result = syscall3(
         SYS_WRITE,
@@ -167,7 +92,7 @@ pub extern "C" fn slopos_init_main(initial_stack: *const u64) -> ! {
         MESSAGE.as_ptr() as u64,
         MESSAGE.len() as u64,
     );
-    exit(if result == MESSAGE.len() as i64 { 0 } else { 8 })
+    exit(if result == MESSAGE.len() as i64 { 0 } else { 5 })
 }
 
 fn initial_stack_is_valid(initial_stack: *const u64) -> bool {
@@ -178,8 +103,7 @@ fn initial_stack_is_valid(initial_stack: *const u64) -> bool {
     if address & 15 != 0 || address < INITIAL_STACK_BASE || end > USER_STACK_TOP {
         return false;
     }
-    // SAFETY: the range above is bounded to the single user stack page mapped
-    // by the kernel before entry.
+    // SAFETY: the kernel constructed this bounded table in the upper stack page.
     let words = unsafe { core::slice::from_raw_parts(initial_stack, INITIAL_STACK_WORDS) };
     if words[0] != INITIAL_ARGC
         || words[3] != 0
@@ -230,19 +154,14 @@ fn stack_string_equals(address: u64, expected: &[u8]) -> bool {
     if address < INITIAL_STACK_BASE || end > USER_STACK_TOP {
         return false;
     }
-    // SAFETY: address..end was bounded to the mapped stack page.
+    // SAFETY: address..end is within the mapped upper stack page.
     let actual = unsafe { core::slice::from_raw_parts(address as *const u8, expected.len() + 1) };
     actual[..expected.len()] == *expected && actual[expected.len()] == 0
 }
 
-fn seek(fd: i64, offset: u64) -> bool {
-    syscall3(SYS_LSEEK, fd as u64, offset, SEEK_SET) == offset as i64
-}
-
 fn syscall0(number: u64) -> i64 {
     let result: i64;
-    // SAFETY: SlopOS configures the architectural x86-64 SYSCALL MSRs with the
-    // Linux register convention before entering this executable.
+    // SAFETY: SlopOS configures the Linux x86-64 register convention.
     unsafe {
         asm!(
             "syscall",
@@ -256,8 +175,7 @@ fn syscall0(number: u64) -> i64 {
 
 fn syscall1(number: u64, first: u64) -> i64 {
     let result: i64;
-    // SAFETY: SlopOS configures the architectural x86-64 SYSCALL MSRs with the
-    // Linux register convention before entering this executable.
+    // SAFETY: SlopOS configures the Linux x86-64 register convention.
     unsafe {
         asm!(
             "syscall",
@@ -272,8 +190,7 @@ fn syscall1(number: u64, first: u64) -> i64 {
 
 fn syscall3(number: u64, first: u64, second: u64, third: u64) -> i64 {
     let result: i64;
-    // SAFETY: SlopOS configures the architectural x86-64 SYSCALL MSRs with the
-    // Linux register convention before entering this executable.
+    // SAFETY: SlopOS configures the Linux x86-64 register convention.
     unsafe {
         asm!(
             "syscall",
@@ -290,8 +207,7 @@ fn syscall3(number: u64, first: u64, second: u64, third: u64) -> i64 {
 
 fn syscall4(number: u64, first: u64, second: u64, third: u64, fourth: u64) -> i64 {
     let result: i64;
-    // SAFETY: SlopOS configures the architectural x86-64 SYSCALL MSRs with the
-    // Linux register convention before entering this executable.
+    // SAFETY: SlopOS configures the Linux x86-64 register convention.
     unsafe {
         asm!(
             "syscall",
@@ -308,8 +224,7 @@ fn syscall4(number: u64, first: u64, second: u64, third: u64, fourth: u64) -> i6
 }
 
 fn exit(status: u64) -> ! {
-    // SAFETY: syscall 60 terminates the current SlopOS process and does not
-    // return to this instruction stream.
+    // SAFETY: syscall 60 terminates this process and never returns.
     unsafe {
         asm!(
             "syscall",
@@ -322,5 +237,5 @@ fn exit(status: u64) -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
-    exit(10)
+    exit(6)
 }

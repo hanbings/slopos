@@ -14,6 +14,7 @@ members = [
     "ebpf",
     "kernel",
     "userspace/init",
+    "userspace/worker",
 ]
 
 [workspace.package]

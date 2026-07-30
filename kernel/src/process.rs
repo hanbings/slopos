@@ -9,10 +9,12 @@ use slopos_process::{
 };
 use slopos_vfs::{AccessMode, FileNode, ReadWindow, VfsError, WriteWindow};
 
-const PID: u32 = 1;
-const PROCESS_CAPACITY: usize = 4;
+const INIT_PID: u32 = 1;
+const WORKER_PID: u32 = 2;
+pub const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
-const PROCESS_EXPECTED_SYSCALLS: u64 = 14;
+const INIT_EXPECTED_SYSCALLS: u64 = 16;
+const WORKER_EXPECTED_SYSCALLS: u64 = 7;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
 const LINUX_AT_FDCWD: u64 = (-100i64) as u64;
@@ -23,6 +25,7 @@ const USER_STDOUT: u64 = 1;
 const LINUX_SYS_WRITE: u64 = 1;
 const LINUX_SYS_CLOSE: u64 = 3;
 const LINUX_SYS_LSEEK: u64 = 8;
+const LINUX_SYS_SCHED_YIELD: u64 = 24;
 const LINUX_SYS_EXIT: u64 = 60;
 const LINUX_SYS_OPENAT: u64 = 257;
 const LINUX_SEEK_SET: u64 = 0;
@@ -30,10 +33,17 @@ const LINUX_EBADF: i64 = -9;
 const LINUX_EFAULT: i64 = -14;
 const LINUX_EINVAL: i64 = -22;
 const LINUX_ENAMETOOLONG: i64 = -36;
-const USER_MESSAGE: &[u8] = b"SLOPOS user write\n";
+const INIT_MESSAGE: &[u8] = b"SLOPOS user write\n";
+const WORKER_MESSAGE: &[u8] = b"SLOPOS worker done\n";
 const INIT_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-init", b"--system"];
+const WORKER_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-worker", b"--probe"];
 const INIT_ENVIRONMENT: &[&[u8]] = &[
     b"SLOPOS_SESSION=desktop",
+    b"XDG_CURRENT_DESKTOP=SlopOS",
+    b"WAYLAND_DISPLAY=wayland-0",
+];
+const WORKER_ENVIRONMENT: &[&[u8]] = &[
+    b"SLOPOS_ROLE=worker",
     b"XDG_CURRENT_DESKTOP=SlopOS",
     b"WAYLAND_DISPLAY=wayland-0",
 ];
@@ -57,7 +67,8 @@ type KernelProcessTable = ProcessTable<PROCESS_CAPACITY, PROCESS_FD_CAPACITY>;
 struct ProcessTableStorage(UnsafeCell<KernelProcessTable>);
 
 // The bootstrap processor is the only process-table owner. Syscall entry runs
-// with IF masked; async completion mutates only while PID 1 is suspended.
+// with IF masked; async completion mutates only while the current process is
+// suspended in the block task.
 unsafe impl Sync for ProcessTableStorage {}
 
 static PROCESS_TABLE: ProcessTableStorage =
@@ -73,22 +84,28 @@ struct UserMapping {
     stack_end: u64,
 }
 
-struct UserMappingStorage(UnsafeCell<Option<UserMapping>>);
+struct UserMappingStorage(UnsafeCell<[Option<UserMapping>; PROCESS_CAPACITY]>);
 
-// The mapping is installed before entering PID 1 and is immutable while the
-// process runs or a suspended syscall is completed by the block task.
+// A slot is installed before its process first runs and remains immutable
+// while that process is alive or suspended in the block task.
 unsafe impl Sync for UserMappingStorage {}
 
-static USER_MAPPING: UserMappingStorage = UserMappingStorage(UnsafeCell::new(None));
+static USER_MAPPINGS: UserMappingStorage =
+    UserMappingStorage(UnsafeCell::new([None; PROCESS_CAPACITY]));
 
 #[derive(Clone, Copy)]
 pub struct OpenAtRequest {
+    pid: u32,
     path: [u8; PROCESS_SYSCALL_PATH_CAPACITY],
     path_length: usize,
     access_mode: AccessMode,
 }
 
 impl OpenAtRequest {
+    pub const fn pid(&self) -> u32 {
+        self.pid
+    }
+
     pub fn path(&self) -> &[u8] {
         &self.path[..self.path_length]
     }
@@ -100,6 +117,7 @@ impl OpenAtRequest {
 
 #[derive(Clone, Copy)]
 pub struct ReadRequest {
+    pub pid: u32,
     pub fd: u32,
     pub requested: usize,
     destination: u64,
@@ -114,6 +132,7 @@ impl ReadRequest {
 
 #[derive(Clone, Copy)]
 pub struct WriteRequest {
+    pub pid: u32,
     pub fd: u32,
     input: [u8; PROCESS_SYSCALL_IO_CAPACITY],
     input_length: usize,
@@ -132,6 +151,7 @@ impl WriteRequest {
 
 #[derive(Clone, Copy)]
 pub struct CloseRequest {
+    pub pid: u32,
     pub fd: u32,
 }
 
@@ -141,6 +161,7 @@ enum PendingSyscall {
     Read(ReadRequest),
     Write(WriteRequest),
     Close(CloseRequest),
+    Yield,
 }
 
 #[derive(Clone, Copy)]
@@ -149,16 +170,26 @@ pub enum ProcessEvent {
     Read(ReadRequest),
     Write(WriteRequest),
     Close(CloseRequest),
-    Exited,
+    Yielded { pid: u32 },
+    Exited { pid: u32 },
 }
 
-struct PendingSyscallStorage(UnsafeCell<Option<PendingSyscall>>);
+struct PendingSyscallStorage(UnsafeCell<[Option<PendingSyscall>; PROCESS_CAPACITY]>);
 
-// PID 1 is the only user process. A pending request is written by the
+// Each process owns at most one pending request. A request is written by the
 // IF-masked fast entry and completed only after control returns to block task.
 unsafe impl Sync for PendingSyscallStorage {}
 
-static PENDING_SYSCALL: PendingSyscallStorage = PendingSyscallStorage(UnsafeCell::new(None));
+static PENDING_SYSCALLS: PendingSyscallStorage =
+    PendingSyscallStorage(UnsafeCell::new([None; PROCESS_CAPACITY]));
+
+struct CurrentProcessStorage(UnsafeCell<Option<u32>>);
+
+// Only the active CPL3 context and its IF-masked syscall entry read/write this
+// value; block-task scheduling runs after the assembly continuation returns.
+unsafe impl Sync for CurrentProcessStorage {}
+
+static CURRENT_PROCESS: CurrentProcessStorage = CurrentProcessStorage(UnsafeCell::new(None));
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -183,36 +214,82 @@ struct SyscallFrame {
     user_rsp: u64,
 }
 
-struct SyscallFrameStorage(UnsafeCell<SyscallFrame>);
+const EMPTY_SYSCALL_FRAME: SyscallFrame = SyscallFrame {
+    r15: 0,
+    r14: 0,
+    r13: 0,
+    r12: 0,
+    r11: 0,
+    r10: 0,
+    r9: 0,
+    r8: 0,
+    rbp: 0,
+    rdi: 0,
+    rsi: 0,
+    rdx: 0,
+    rcx: 0,
+    rbx: 0,
+    rax: 0,
+    user_rip: 0,
+    user_rflags: 0,
+    user_rsp: 0,
+};
 
-// The saved frame belongs to the single suspended PID 1 and is never accessed
-// concurrently with its user-mode execution.
+struct SyscallFrameStorage(UnsafeCell<[SyscallFrame; PROCESS_CAPACITY]>);
+
+// Each saved frame belongs to one suspended process and is never accessed
+// concurrently with that process's user-mode execution.
 unsafe impl Sync for SyscallFrameStorage {}
 
-static SAVED_SYSCALL_FRAME: SyscallFrameStorage =
-    SyscallFrameStorage(UnsafeCell::new(SyscallFrame {
-        r15: 0,
-        r14: 0,
-        r13: 0,
-        r12: 0,
-        r11: 0,
-        r10: 0,
-        r9: 0,
-        r8: 0,
-        rbp: 0,
-        rdi: 0,
-        rsi: 0,
-        rdx: 0,
-        rcx: 0,
-        rbx: 0,
-        rax: 0,
-        user_rip: 0,
-        user_rflags: 0,
-        user_rsp: 0,
-    }));
+static SAVED_SYSCALL_FRAMES: SyscallFrameStorage =
+    SyscallFrameStorage(UnsafeCell::new([EMPTY_SYSCALL_FRAME; PROCESS_CAPACITY]));
 
-pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent {
-    reset_process_table();
+pub fn start_processes(
+    init_image: &[u8],
+    init_source: &str,
+    init_path: &str,
+    worker_image: &[u8],
+    worker_source: &str,
+    worker_path: &str,
+) -> ProcessEvent {
+    reset_process_state();
+    let init_pid = spawn_user_process(
+        init_image,
+        init_source,
+        init_path,
+        None,
+        INIT_ARGUMENTS,
+        INIT_ENVIRONMENT,
+    );
+    if init_pid != INIT_PID {
+        crate::fatal("bootstrap process did not receive PID 1");
+    }
+    let worker_pid = spawn_user_process(
+        worker_image,
+        worker_source,
+        worker_path,
+        Some(init_pid),
+        WORKER_ARGUMENTS,
+        WORKER_ENVIRONMENT,
+    );
+    if worker_pid != WORKER_PID {
+        crate::fatal("worker process did not receive PID 2");
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-PROCESS: table initialized capacity={PROCESS_CAPACITY} processes=2 pids={INIT_PID}/{WORKER_PID} states=ready/ready fd_capacity={PROCESS_FD_CAPACITY} per_process_fds=true"
+    ));
+    configure_fast_syscall();
+    run_process(init_pid)
+}
+
+fn spawn_user_process(
+    user_image: &[u8],
+    source: &str,
+    path: &str,
+    parent: Option<u32>,
+    arguments: &[&[u8]],
+    environment: &[&[u8]],
+) -> u32 {
     let elf = slopos_elf::ElfFile::parse(user_image)
         .unwrap_or_else(|_| crate::fatal("boot user ELF failed validation"));
     if elf.load_segment_count() != 1 {
@@ -246,21 +323,12 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
     let initial_stack = build_linux_initial_stack(
         stack,
         stack_base,
-        INIT_ARGUMENTS,
-        INIT_ENVIRONMENT,
+        arguments,
+        environment,
         elf.entry(),
         PAGE_SIZE,
     )
     .unwrap_or_else(|_| crate::fatal("boot user initial stack construction failed"));
-    set_user_mapping(UserMapping {
-        code_frame: address_space.code_frame,
-        stack_frames: address_space.stack_frames,
-        code_start: crate::paging::USER_CODE_BASE,
-        code_end: crate::paging::USER_CODE_BASE + segment.memory_size(),
-        stack_start: crate::paging::USER_STACK_BASE,
-        stack_end: crate::paging::USER_STACK_TOP,
-    });
-    clear_pending_syscall();
     let image = ProcessImage {
         address_space_root: address_space.root,
         entry: elf.entry(),
@@ -270,16 +338,24 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
         user_memory_end: crate::paging::USER_CODE_BASE + segment.memory_size(),
     };
     let pid = process_table_mut()
-        .spawn(None, image)
-        .unwrap_or_else(|_| crate::fatal("PID 1 process-table insertion failed"));
-    if pid != PID {
-        crate::fatal("bootstrap process did not receive PID 1");
-    }
+        .spawn(parent, image)
+        .unwrap_or_else(|_| crate::fatal("user process-table insertion failed"));
+    set_user_mapping(
+        pid,
+        UserMapping {
+            code_frame: address_space.code_frame,
+            stack_frames: address_space.stack_frames,
+            code_start: crate::paging::USER_CODE_BASE,
+            code_end: crate::paging::USER_CODE_BASE + segment.memory_size(),
+            stack_start: crate::paging::USER_STACK_BASE,
+            stack_end: crate::paging::USER_STACK_TOP,
+        },
+    );
+    let argv0 = core::str::from_utf8(arguments[0]).unwrap_or("<non-utf8>");
+    let argv1 = core::str::from_utf8(arguments[1]).unwrap_or("<non-utf8>");
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: table initialized capacity={PROCESS_CAPACITY} pid={PID} state=ready fd_capacity={PROCESS_FD_CAPACITY} per_process_fds=true"
-    ));
-    crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={PID} source={source} path={path} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frames={:#x}/{:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        "SLOPOS-PROCESS: pid={pid} parent={} source={source} path={path} argv1={argv1} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frames={:#x}/{:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        parent.unwrap_or(0),
         elf.entry(),
         elf.load_segment_count(),
         user_image.len(),
@@ -293,7 +369,7 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
         address_space.stack_frames[1]
     ));
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={PID} initial_stack abi=linux-x86_64 rsp={:#x} aligned=16 stack_pages={} argc={} argv0=/sbin/slop-init envc={} auxv_pairs={} bytes={}",
+        "SLOPOS-PROCESS: pid={pid} initial_stack abi=linux-x86_64 rsp={:#x} aligned=16 stack_pages={} argc={} argv0={argv0} argv1={argv1} envc={} auxv_pairs={} bytes={}",
         initial_stack.stack_pointer,
         crate::paging::USER_STACK_PAGES,
         initial_stack.argument_count,
@@ -301,49 +377,81 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
         initial_stack.auxiliary_pairs,
         initial_stack.used_bytes
     ));
-    configure_fast_syscall();
-    process_table_mut()
-        .mark_running(PID)
-        .unwrap_or_else(|_| crate::fatal("PID 1 ready-to-running transition failed"));
-    // SAFETY: the process page table maps a validated one-page program and
-    // stack under user permissions; GDT, TSS and syscall MSRs are live.
-    unsafe {
-        slopos_enter_user(address_space.root, elf.entry(), initial_stack.stack_pointer);
+    pid
+}
+
+fn run_process(pid: u32) -> ProcessEvent {
+    let process = process_table()
+        .snapshot(pid)
+        .unwrap_or_else(|_| crate::fatal("scheduled process disappeared"));
+    if !matches!(process.state, ProcessState::Ready | ProcessState::Runnable) {
+        crate::fatal("only a schedulable process can enter user mode");
     }
-    process_event_after_user()
+    if process.state == ProcessState::Runnable {
+        match pending_syscall(pid) {
+            Some(PendingSyscall::Yield) => {
+                clear_pending_syscall(pid);
+                saved_syscall_frame_mut(pid).rax = 0;
+            }
+            Some(_) => crate::fatal("runnable process retained an I/O request"),
+            None => {}
+        }
+    } else if pending_syscall(pid).is_some() {
+        crate::fatal("ready process has a pending syscall");
+    }
+    process_table_mut()
+        .mark_running(pid)
+        .unwrap_or_else(|_| crate::fatal("process ready-to-running transition failed"));
+    set_current_process(Some(pid));
+    // SAFETY: the process owns a validated address space. Ready processes use
+    // their ELF entry/initial stack; Runnable processes use a frame captured
+    // by the IF-masked syscall entry.
+    unsafe {
+        if process.state == ProcessState::Ready {
+            slopos_enter_user(
+                process.image.address_space_root,
+                process.image.entry,
+                process.image.stack_pointer,
+            );
+        } else {
+            slopos_resume_user(process.image.address_space_root, saved_syscall_frame(pid));
+        }
+    }
+    set_current_process(None);
+    process_event_after_user(pid)
 }
 
-pub fn open_file(node: FileNode, access_mode: AccessMode) -> Result<u32, ProcessError> {
-    process_table_mut().open_file(PID, node, access_mode)
+pub fn open_file(pid: u32, node: FileNode, access_mode: AccessMode) -> Result<u32, ProcessError> {
+    process_table_mut().open_file(pid, node, access_mode)
 }
 
-pub fn read_window(fd: u32, requested: usize) -> Result<ReadWindow, ProcessError> {
-    process_table().read_window(PID, fd, requested)
+pub fn read_window(pid: u32, fd: u32, requested: usize) -> Result<ReadWindow, ProcessError> {
+    process_table().read_window(pid, fd, requested)
 }
 
-pub fn write_window(fd: u32, requested: usize) -> Result<WriteWindow, ProcessError> {
-    process_table().write_window(PID, fd, requested)
+pub fn write_window(pid: u32, fd: u32, requested: usize) -> Result<WriteWindow, ProcessError> {
+    process_table().write_window(pid, fd, requested)
 }
 
-pub fn advance_fd(fd: u32, length: usize) -> Result<(), ProcessError> {
-    process_table_mut().advance_fd(PID, fd, length)
+pub fn advance_fd(pid: u32, fd: u32, length: usize) -> Result<(), ProcessError> {
+    process_table_mut().advance_fd(pid, fd, length)
 }
 
-pub fn seek_fd(fd: u32, offset: u64) -> Result<(), ProcessError> {
-    process_table_mut().seek_fd(PID, fd, offset)
+pub fn seek_fd(pid: u32, fd: u32, offset: u64) -> Result<(), ProcessError> {
+    process_table_mut().seek_fd(pid, fd, offset)
 }
 
-pub fn close_fd(fd: u32) -> Result<(), ProcessError> {
-    process_table_mut().close_fd(PID, fd)
+pub fn close_fd(pid: u32, fd: u32) -> Result<(), ProcessError> {
+    process_table_mut().close_fd(pid, fd)
 }
 
-pub fn close_all_files() -> Result<usize, ProcessError> {
-    process_table_mut().close_all_files(PID)
+pub fn close_all_files(pid: u32) -> Result<usize, ProcessError> {
+    process_table_mut().close_all_files(pid)
 }
 
-pub fn resume_probe(result: i64, read_output: Option<&[u8]>) -> ProcessEvent {
-    let pending =
-        pending_syscall().unwrap_or_else(|| crate::fatal("process resume has no pending syscall"));
+pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> ProcessEvent {
+    let pending = pending_syscall(pid)
+        .unwrap_or_else(|| crate::fatal("process resume has no pending syscall"));
     match pending {
         PendingSyscall::Read(request) => {
             if result < 0 {
@@ -358,7 +466,7 @@ pub fn resume_probe(result: i64, read_output: Option<&[u8]>) -> ProcessEvent {
                 if length > request.requested || output.len() != length {
                     crate::fatal("read completion output length mismatch");
                 }
-                copy_to_user(request.destination, output)
+                copy_to_user(pid, request.destination, output)
                     .unwrap_or_else(|| crate::fatal("read completion user buffer became invalid"));
             }
         }
@@ -367,30 +475,51 @@ pub fn resume_probe(result: i64, read_output: Option<&[u8]>) -> ProcessEvent {
                 crate::fatal("non-read completion carried output bytes");
             }
         }
+        PendingSyscall::Yield => crate::fatal("yield was sent through I/O completion"),
     }
-    clear_pending_syscall();
-    // SAFETY: PID 1 is suspended in the saved fast-syscall frame, and the
-    // block task is its exclusive completer.
-    let frame = unsafe { &mut *SAVED_SYSCALL_FRAME.0.get() };
+    clear_pending_syscall(pid);
+    let frame = saved_syscall_frame_mut(pid);
     frame.rax = result as u64;
     let process = process_table()
-        .snapshot(PID)
+        .snapshot(pid)
         .unwrap_or_else(|_| crate::fatal("resumed process disappeared"));
-    if process.state != ProcessState::Running {
-        crate::fatal("only a running process can resume from an async syscall");
+    if process.state != ProcessState::Blocked {
+        crate::fatal("only a blocked process can complete an async syscall");
     }
-    // SAFETY: the frame was captured by the IF-masked fast entry, its user
-    // ranges were validated, and the process page table remains live.
-    unsafe {
-        slopos_resume_user(process.image.address_space_root, frame);
+    process_table_mut()
+        .mark_runnable(pid)
+        .unwrap_or_else(|_| crate::fatal("process blocked-to-runnable transition failed"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-SCHED: pid={pid} state=blocked->runnable reason=io-complete"
+    ));
+    run_process(pid)
+}
+
+pub fn schedule_next(after_pid: u32) -> ProcessEvent {
+    let pid = process_table()
+        .next_schedulable_after(after_pid)
+        .unwrap_or_else(|| crate::fatal("cooperative scheduler found no runnable process"));
+    let process = process_table()
+        .snapshot(pid)
+        .unwrap_or_else(|_| crate::fatal("scheduled process disappeared"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-SCHED: cooperative switch from={after_pid} to={pid} next_state={:?} independent_cr3=true",
+        process.state
+    ));
+    match process.state {
+        ProcessState::Ready | ProcessState::Runnable => run_process(pid),
+        ProcessState::Running | ProcessState::Blocked | ProcessState::Exited => {
+            crate::fatal("cooperative scheduler selected an invalid state")
+        }
     }
-    process_event_after_user()
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
+    let pid =
+        current_process().unwrap_or_else(|| crate::fatal("syscall entry has no current process"));
     let process = process_table()
-        .snapshot(PID)
+        .snapshot(pid)
         .unwrap_or_else(|_| crate::fatal("syscall has no current process"));
     if process.state != ProcessState::Running
         || frame.user_rip < process.image.user_memory_start
@@ -404,7 +533,7 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
     frame.user_rflags &= !RFLAGS_USER_CLEAR;
     frame.user_rflags |= RFLAGS_RESERVED_ONE | RFLAGS_INTERRUPT_ENABLE;
     process_table_mut()
-        .record_syscall(PID)
+        .record_syscall(pid)
         .unwrap_or_else(|_| crate::fatal("syscall process accounting failed"));
     match frame.rax {
         LINUX_SYS_OPENAT => {
@@ -420,7 +549,7 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                     return 0;
                 }
             };
-            let request = match copy_user_path(frame.rsi, access_mode) {
+            let request = match copy_user_path(pid, frame.rsi, access_mode) {
                 Ok(request) => request,
                 Err(errno) => {
                     frame.rax = errno as u64;
@@ -428,9 +557,9 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 }
             };
             let display = core::str::from_utf8(request.path()).unwrap_or("<non-utf8>");
-            suspend_syscall(frame, PendingSyscall::OpenAt(request));
+            suspend_io_syscall(pid, frame, PendingSyscall::OpenAt(request));
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags={} path={display} origin=cpl3",
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags={} path={display} origin=cpl3",
                 frame.rdx
             ));
             2
@@ -447,15 +576,17 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 frame.rax = 0;
                 return 0;
             }
-            if !validate_user_range(frame.rsi, requested, true) {
+            if !validate_user_range(pid, frame.rsi, requested, true) {
                 frame.rax = LINUX_EFAULT as u64;
                 return 0;
             }
             let user_pages = user_page_count(frame.rsi, requested)
                 .unwrap_or_else(|| crate::fatal("validated read range has invalid page span"));
-            suspend_syscall(
+            suspend_io_syscall(
+                pid,
                 frame,
                 PendingSyscall::Read(ReadRequest {
+                    pid,
                     fd,
                     requested,
                     destination: frame.rsi,
@@ -463,29 +594,34 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 }),
             );
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd={fd} requested={requested} user_pages={user_pages} origin=cpl3"
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd={fd} requested={requested} user_pages={user_pages} origin=cpl3"
             ));
             2
         }
         LINUX_SYS_WRITE => {
             if frame.rdi == USER_STDOUT {
-                if frame.rdx != USER_MESSAGE.len() as u64 {
+                let expected = match pid {
+                    INIT_PID => INIT_MESSAGE,
+                    WORKER_PID => WORKER_MESSAGE,
+                    _ => crate::fatal("stdout write came from an unknown process"),
+                };
+                if frame.rdx != expected.len() as u64 {
                     frame.rax = LINUX_EINVAL as u64;
                     return 0;
                 }
-                let mut message = [0u8; USER_MESSAGE.len()];
-                if copy_from_user(frame.rsi, &mut message).is_none() {
+                let mut message = [0u8; WORKER_MESSAGE.len()];
+                if copy_from_user(pid, frame.rsi, &mut message[..expected.len()]).is_none() {
                     frame.rax = LINUX_EFAULT as u64;
                     return 0;
                 }
-                if message != USER_MESSAGE {
+                if message[..expected.len()] != *expected {
                     crate::fatal("user write syscall payload is invalid");
                 }
-                frame.rax = USER_MESSAGE.len() as u64;
+                frame.rax = expected.len() as u64;
                 crate::serial::serialln(format_args!(
-                    "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes={} origin=cpl3 result={}",
-                    USER_MESSAGE.len(),
-                    USER_MESSAGE.len()
+                    "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes={} origin=cpl3 result={}",
+                    expected.len(),
+                    expected.len()
                 ));
                 return 0;
             }
@@ -500,20 +636,24 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 frame.rax = 0;
                 return 0;
             }
+            let Some(user_pages) = user_page_count(frame.rsi, requested) else {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            };
             let mut request = WriteRequest {
+                pid,
                 fd,
                 input: [0; PROCESS_SYSCALL_IO_CAPACITY],
                 input_length: requested,
-                user_pages: user_page_count(frame.rsi, requested)
-                    .unwrap_or_else(|| crate::fatal("write range has invalid page span")),
+                user_pages,
             };
-            if copy_from_user(frame.rsi, &mut request.input[..requested]).is_none() {
+            if copy_from_user(pid, frame.rsi, &mut request.input[..requested]).is_none() {
                 frame.rax = LINUX_EFAULT as u64;
                 return 0;
             }
-            suspend_syscall(frame, PendingSyscall::Write(request));
+            suspend_io_syscall(pid, frame, PendingSyscall::Write(request));
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd={fd} requested={requested} user_pages={} origin=cpl3",
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd={fd} requested={requested} user_pages={} origin=cpl3",
                 request.user_pages()
             ));
             2
@@ -523,9 +663,9 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 frame.rax = LINUX_EBADF as u64;
                 return 0;
             };
-            suspend_syscall(frame, PendingSyscall::Close(CloseRequest { fd }));
+            suspend_io_syscall(pid, frame, PendingSyscall::Close(CloseRequest { pid, fd }));
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd={fd} origin=cpl3"
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd={fd} origin=cpl3"
             ));
             2
         }
@@ -538,11 +678,11 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 frame.rax = LINUX_EINVAL as u64;
                 return 0;
             }
-            match seek_fd(fd, frame.rsi) {
+            match seek_fd(pid, fd, frame.rsi) {
                 Ok(()) => {
                     frame.rax = frame.rsi;
                     crate::serial::serialln(format_args!(
-                        "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd={fd} offset={} whence=0 async=false",
+                        "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd={fd} offset={} whence=0 async=false",
                         frame.rsi
                     ));
                 }
@@ -555,16 +695,26 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             }
             0
         }
+        LINUX_SYS_SCHED_YIELD => {
+            save_pending_syscall(pid, frame, PendingSyscall::Yield);
+            process_table_mut()
+                .mark_runnable(pid)
+                .unwrap_or_else(|_| crate::fatal("process running-to-runnable transition failed"));
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3"
+            ));
+            1
+        }
         LINUX_SYS_EXIT => {
             if frame.rdi > u64::from(u8::MAX) {
                 crate::fatal("user exit syscall status is invalid");
             }
             let status = frame.rdi as i32;
             process_table_mut()
-                .exit(PID, status)
+                .exit(pid, status)
                 .unwrap_or_else(|_| crate::fatal("process-table exit transition failed"));
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=kernel nr=60 exit status={status} origin=cpl3"
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=kernel nr=60 exit status={status} origin=cpl3"
             ));
             1
         }
@@ -575,46 +725,64 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
     }
 }
 
-fn process_event_after_user() -> ProcessEvent {
+fn process_event_after_user(pid: u32) -> ProcessEvent {
     let process = process_table()
-        .snapshot(PID)
-        .unwrap_or_else(|_| crate::fatal("PID 1 disappeared from the process table"));
+        .snapshot(pid)
+        .unwrap_or_else(|_| crate::fatal("returning process disappeared"));
     if process.state == ProcessState::Exited {
+        let expected_syscalls = match pid {
+            INIT_PID => INIT_EXPECTED_SYSCALLS,
+            WORKER_PID => WORKER_EXPECTED_SYSCALLS,
+            _ => crate::fatal("unknown process exited"),
+        };
         if process.exit_status != Some(0)
-            || process.syscall_count != PROCESS_EXPECTED_SYSCALLS
-            || pending_syscall().is_some()
+            || process.syscall_count != expected_syscalls
+            || pending_syscall(pid).is_some()
         {
-            crate::fatal("PID 1 returned without a successful process-table exit");
+            crate::fatal("process returned without a successful process-table exit");
         }
         crate::serial::serialln(format_args!(
-            "SLOPOS-PROCESS: pid={PID} state=exited status=0 syscalls={PROCESS_EXPECTED_SYSCALLS} retained=true kernel_return=true"
+            "SLOPOS-PROCESS: pid={pid} state=exited status=0 syscalls={expected_syscalls} retained=true kernel_return=true"
         ));
-        return ProcessEvent::Exited;
+        return ProcessEvent::Exited { pid };
     }
-    match pending_syscall()
-        .unwrap_or_else(|| crate::fatal("running PID 1 returned without a pending syscall"))
-    {
-        PendingSyscall::OpenAt(request) => ProcessEvent::OpenAt(request),
-        PendingSyscall::Read(request) => ProcessEvent::Read(request),
-        PendingSyscall::Write(request) => ProcessEvent::Write(request),
-        PendingSyscall::Close(request) => ProcessEvent::Close(request),
+    match (
+        process.state,
+        pending_syscall(pid)
+            .unwrap_or_else(|| crate::fatal("returning process has no pending syscall")),
+    ) {
+        (ProcessState::Blocked, PendingSyscall::OpenAt(request)) => ProcessEvent::OpenAt(request),
+        (ProcessState::Blocked, PendingSyscall::Read(request)) => ProcessEvent::Read(request),
+        (ProcessState::Blocked, PendingSyscall::Write(request)) => ProcessEvent::Write(request),
+        (ProcessState::Blocked, PendingSyscall::Close(request)) => ProcessEvent::Close(request),
+        (ProcessState::Runnable, PendingSyscall::Yield) => ProcessEvent::Yielded { pid },
+        _ => crate::fatal("process returned with an inconsistent scheduler state"),
     }
 }
 
-fn suspend_syscall(frame: &SyscallFrame, request: PendingSyscall) {
-    if pending_syscall().is_some() {
+fn suspend_io_syscall(pid: u32, frame: &SyscallFrame, request: PendingSyscall) {
+    save_pending_syscall(pid, frame, request);
+    process_table_mut()
+        .mark_blocked(pid)
+        .unwrap_or_else(|_| crate::fatal("process running-to-blocked transition failed"));
+}
+
+fn save_pending_syscall(pid: u32, frame: &SyscallFrame, request: PendingSyscall) {
+    if pending_syscall(pid).is_some() {
         crate::fatal("process issued a second syscall while one was pending");
     }
+    let index = pid_index(pid);
     // SAFETY: syscall entry is IF-masked and is the only writer until it
     // returns to the block task.
     unsafe {
-        SAVED_SYSCALL_FRAME.0.get().write(*frame);
-        PENDING_SYSCALL.0.get().write(Some(request));
+        (*SAVED_SYSCALL_FRAMES.0.get())[index] = *frame;
+        (*PENDING_SYSCALLS.0.get())[index] = Some(request);
     }
 }
 
-fn copy_user_path(address: u64, access_mode: AccessMode) -> Result<OpenAtRequest, i64> {
+fn copy_user_path(pid: u32, address: u64, access_mode: AccessMode) -> Result<OpenAtRequest, i64> {
     let mut request = OpenAtRequest {
+        pid,
         path: [0; PROCESS_SYSCALL_PATH_CAPACITY],
         path_length: 0,
         access_mode,
@@ -623,7 +791,7 @@ fn copy_user_path(address: u64, access_mode: AccessMode) -> Result<OpenAtRequest
         let index = u64::try_from(index).map_err(|_| LINUX_EFAULT)?;
         let byte_address = address.checked_add(index).ok_or(LINUX_EFAULT)?;
         let mut byte = [0u8; 1];
-        copy_from_user(byte_address, &mut byte).ok_or(LINUX_EFAULT)?;
+        copy_from_user(pid, byte_address, &mut byte).ok_or(LINUX_EFAULT)?;
         let byte = byte[0];
         if byte == 0 {
             if request.path_length == 0 {
@@ -637,14 +805,14 @@ fn copy_user_path(address: u64, access_mode: AccessMode) -> Result<OpenAtRequest
     Err(LINUX_ENAMETOOLONG)
 }
 
-fn copy_from_user(address: u64, output: &mut [u8]) -> Option<()> {
-    if !validate_user_range(address, output.len(), false) {
+fn copy_from_user(pid: u32, address: u64, output: &mut [u8]) -> Option<()> {
+    if !validate_user_range(pid, address, output.len(), false) {
         return None;
     }
     let mut copied = 0usize;
     while copied < output.len() {
         let cursor = address.checked_add(u64::try_from(copied).ok()?)?;
-        let (pointer, length) = user_physical_chunk(cursor, output.len() - copied, false)?;
+        let (pointer, length) = user_physical_chunk(pid, cursor, output.len() - copied, false)?;
         // SAFETY: validation covered the entire source range before mutation;
         // each chunk is bounded to a live, identity-mapped user frame.
         unsafe {
@@ -655,16 +823,16 @@ fn copy_from_user(address: u64, output: &mut [u8]) -> Option<()> {
     Some(())
 }
 
-fn copy_to_user(address: u64, bytes: &[u8]) -> Option<()> {
-    if !validate_user_range(address, bytes.len(), true) {
+fn copy_to_user(pid: u32, address: u64, bytes: &[u8]) -> Option<()> {
+    if !validate_user_range(pid, address, bytes.len(), true) {
         return None;
     }
     let mut copied = 0usize;
     while copied < bytes.len() {
         let cursor = address.checked_add(u64::try_from(copied).ok()?)?;
-        let (pointer, length) = user_physical_chunk(cursor, bytes.len() - copied, true)?;
+        let (pointer, length) = user_physical_chunk(pid, cursor, bytes.len() - copied, true)?;
         // SAFETY: validation covered the entire destination before mutation;
-        // PID 1 is suspended and each chunk lies in a writable mapped frame.
+        // this process is suspended and each chunk lies in a writable frame.
         unsafe {
             ptr::copy_nonoverlapping(bytes[copied..].as_ptr(), pointer, length);
         }
@@ -673,7 +841,7 @@ fn copy_to_user(address: u64, bytes: &[u8]) -> Option<()> {
     Some(())
 }
 
-fn validate_user_range(address: u64, length: usize, writable: bool) -> bool {
+fn validate_user_range(pid: u32, address: u64, length: usize, writable: bool) -> bool {
     let Ok(total_length) = u64::try_from(length) else {
         return false;
     };
@@ -688,7 +856,7 @@ fn validate_user_range(address: u64, length: usize, writable: bool) -> bool {
         let Some(cursor) = address.checked_add(offset) else {
             return false;
         };
-        let Some((_, chunk)) = user_physical_chunk(cursor, length - checked, writable) else {
+        let Some((_, chunk)) = user_physical_chunk(pid, cursor, length - checked, writable) else {
             return false;
         };
         checked += chunk;
@@ -708,11 +876,12 @@ fn user_page_count(address: u64, length: usize) -> Option<u8> {
 }
 
 fn user_physical_chunk(
+    pid: u32,
     address: u64,
     maximum_length: usize,
     writable: bool,
 ) -> Option<(*mut u8, usize)> {
-    let mapping = user_mapping()?;
+    let mapping = user_mapping(pid)?;
     if maximum_length == 0 {
         return Some((core::ptr::null_mut(), 0));
     }
@@ -736,44 +905,90 @@ fn user_physical_chunk(
     Some((physical as *mut u8, maximum_length.min(page_remaining)))
 }
 
-fn set_user_mapping(mapping: UserMapping) {
-    // SAFETY: installed once before PID 1 starts, while no user-copy operation
-    // can overlap.
-    unsafe { USER_MAPPING.0.get().write(Some(mapping)) };
+fn set_user_mapping(pid: u32, mapping: UserMapping) {
+    let index = pid_index(pid);
+    // SAFETY: each slot is installed before its process starts, while no
+    // user-copy operation can overlap.
+    unsafe { (*USER_MAPPINGS.0.get())[index] = Some(mapping) };
 }
 
-fn user_mapping() -> Option<UserMapping> {
-    // SAFETY: immutable after installation for this single-process milestone.
-    unsafe { *USER_MAPPING.0.get() }
+fn user_mapping(pid: u32) -> Option<UserMapping> {
+    let index = pid_index(pid);
+    // SAFETY: immutable after installation for the lifetime of this process.
+    unsafe { (*USER_MAPPINGS.0.get())[index] }
 }
 
-fn pending_syscall() -> Option<PendingSyscall> {
+fn pending_syscall(pid: u32) -> Option<PendingSyscall> {
+    let index = pid_index(pid);
     // SAFETY: access alternates between IF-masked syscall entry and the block
-    // task while PID 1 is suspended.
-    unsafe { *PENDING_SYSCALL.0.get() }
+    // task while this process is suspended.
+    unsafe { (*PENDING_SYSCALLS.0.get())[index] }
 }
 
-fn clear_pending_syscall() {
-    // SAFETY: called before first entry or by the exclusive block-task
-    // completer while PID 1 is suspended.
-    unsafe { PENDING_SYSCALL.0.get().write(None) };
+fn clear_pending_syscall(pid: u32) {
+    let index = pid_index(pid);
+    // SAFETY: called by the exclusive block-task scheduler/completer.
+    unsafe { (*PENDING_SYSCALLS.0.get())[index] = None };
 }
 
-fn reset_process_table() {
-    // SAFETY: this runs once before PID 1 starts and no reference to the old
-    // empty table exists.
-    unsafe { PROCESS_TABLE.0.get().write(KernelProcessTable::new()) };
+fn saved_syscall_frame(pid: u32) -> *const SyscallFrame {
+    let index = pid_index(pid);
+    // SAFETY: run_process validated the Runnable state before retrieving this
+    // process-owned frame, which remains stored throughout the resume.
+    unsafe { core::ptr::addr_of!((*SAVED_SYSCALL_FRAMES.0.get())[index]) }
+}
+
+fn saved_syscall_frame_mut(pid: u32) -> &'static mut SyscallFrame {
+    let index = pid_index(pid);
+    // SAFETY: the block task is the sole accessor while this process is not
+    // executing in user mode.
+    unsafe { &mut (*SAVED_SYSCALL_FRAMES.0.get())[index] }
+}
+
+fn set_current_process(pid: Option<u32>) {
+    // SAFETY: only the single-core scheduler writes this around CPL3 entry.
+    unsafe { *CURRENT_PROCESS.0.get() = pid };
+}
+
+fn current_process() -> Option<u32> {
+    // SAFETY: only read by the IF-masked syscall entry of the active process.
+    unsafe { *CURRENT_PROCESS.0.get() }
+}
+
+fn pid_index(pid: u32) -> usize {
+    let index = pid
+        .checked_sub(1)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_else(|| crate::fatal("process PID cannot index kernel state"));
+    if index >= PROCESS_CAPACITY {
+        crate::fatal("process PID exceeds kernel state capacity");
+    }
+    index
+}
+
+fn reset_process_state() {
+    // SAFETY: this runs once before either user process starts.
+    unsafe {
+        PROCESS_TABLE.0.get().write(KernelProcessTable::new());
+        USER_MAPPINGS.0.get().write([None; PROCESS_CAPACITY]);
+        PENDING_SYSCALLS.0.get().write([None; PROCESS_CAPACITY]);
+        SAVED_SYSCALL_FRAMES
+            .0
+            .get()
+            .write([EMPTY_SYSCALL_FRAME; PROCESS_CAPACITY]);
+        CURRENT_PROCESS.0.get().write(None);
+    }
 }
 
 fn process_table() -> &'static KernelProcessTable {
     // SAFETY: process execution is single-core; mutation only occurs before
-    // entry, inside the IF-masked handler, or while PID 1 is suspended.
+    // entry, inside the IF-masked handler, or while a process is suspended.
     unsafe { &*PROCESS_TABLE.0.get() }
 }
 
 fn process_table_mut() -> &'static mut KernelProcessTable {
-    // SAFETY: the bootstrap path, IF-masked syscall handler, and block-task
-    // syscall completer are mutually exclusive writers in this milestone.
+    // SAFETY: the scheduler, IF-masked syscall handler, and block-task syscall
+    // completer are mutually exclusive writers.
     unsafe { &mut *PROCESS_TABLE.0.get() }
 }
 
