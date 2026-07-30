@@ -4,6 +4,7 @@
 
 pub const SUPERBLOCK_SIZE: usize = 1024;
 pub const SUPERBLOCK_MAGIC: u16 = 0xef53;
+pub const FEATURE_INCOMPAT_RECOVER: u32 = 0x0004;
 pub const FEATURE_INCOMPAT_64BIT: u32 = 0x0080;
 pub const FEATURE_INCOMPAT_CHECKSUM_SEED: u32 = 0x2000;
 pub const FEATURE_READ_ONLY_COMPAT_METADATA_CHECKSUM: u32 = 0x0400;
@@ -22,6 +23,7 @@ const FEATURE_INCOMPAT_FILETYPE: u32 = 0x0002;
 const FEATURE_INCOMPAT_EXTENTS: u32 = 0x0040;
 const FEATURE_INCOMPAT_FLEX_BG: u32 = 0x0200;
 const SUPPORTED_INCOMPAT_FEATURES: u32 = FEATURE_INCOMPAT_FILETYPE
+    | FEATURE_INCOMPAT_RECOVER
     | FEATURE_INCOMPAT_EXTENTS
     | FEATURE_INCOMPAT_64BIT
     | FEATURE_INCOMPAT_FLEX_BG
@@ -104,6 +106,10 @@ pub struct Superblock {
 
 impl Superblock {
     pub fn parse(bytes: &[u8]) -> Result<Self, ParseError> {
+        Self::parse_internal(bytes, false)
+    }
+
+    fn parse_internal(bytes: &[u8], allow_recovery: bool) -> Result<Self, ParseError> {
         if bytes.len() < SUPERBLOCK_SIZE {
             return Err(ParseError::Truncated);
         }
@@ -189,7 +195,9 @@ impl Superblock {
             return Err(ParseError::InvalidGeometry);
         }
         let state = read_u16(bytes, 58)?;
-        if state & FILESYSTEM_STATE_CLEAN == 0 {
+        if state & FILESYSTEM_STATE_CLEAN == 0
+            || (!allow_recovery && feature_incompat & FEATURE_INCOMPAT_RECOVER != 0)
+        {
             return Err(ParseError::DirtyFilesystem);
         }
         Ok(Self {
@@ -295,6 +303,22 @@ impl Superblock {
     }
 }
 
+pub fn set_superblock_recovery(bytes: &mut [u8], required: bool) -> Result<(), ParseError> {
+    let superblock = Superblock::parse_internal(bytes, true)?;
+    let feature_incompat = if required {
+        superblock.feature_incompat | FEATURE_INCOMPAT_RECOVER
+    } else {
+        superblock.feature_incompat & !FEATURE_INCOMPAT_RECOVER
+    };
+    write_u32(bytes, 96, feature_incompat)?;
+    if superblock.has_metadata_checksums() {
+        let checksum = crc32c(u32::MAX, &bytes[..1020]);
+        write_u32(bytes, 1020, checksum)?;
+    }
+    Superblock::parse_internal(bytes, true)?;
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JournalSuperblock {
     pub block_size: u32,
@@ -359,6 +383,23 @@ impl JournalSuperblock {
             user_count,
         })
     }
+}
+
+pub fn set_journal_superblock_state(
+    bytes: &mut [u8],
+    sequence: u32,
+    start: u32,
+) -> Result<(), ParseError> {
+    let superblock = JournalSuperblock::parse(bytes)?;
+    if sequence == 0
+        || (start != 0 && (start < superblock.first_log_block || start >= superblock.max_length))
+    {
+        return Err(ParseError::InvalidJournal);
+    }
+    write_be_u32(bytes, 24, sequence)?;
+    write_be_u32(bytes, 28, start)?;
+    JournalSuperblock::parse(bytes)?;
+    Ok(())
 }
 
 const JOURNAL_TAG_ESCAPE: u16 = 0x0001;
@@ -1087,6 +1128,14 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ParseError> {
     Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
 }
 
+fn write_u32(bytes: &mut [u8], offset: usize, value: u32) -> Result<(), ParseError> {
+    bytes
+        .get_mut(offset..offset + 4)
+        .ok_or(ParseError::Truncated)?
+        .copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
 fn read_be_u32(bytes: &[u8], offset: usize) -> Result<u32, ParseError> {
     let value = bytes.get(offset..offset + 4).ok_or(ParseError::Truncated)?;
     Ok(u32::from_be_bytes([value[0], value[1], value[2], value[3]]))
@@ -1439,6 +1488,51 @@ mod tests {
             ),
             Err(ParseError::InvalidJournal)
         );
+    }
+
+    #[test]
+    fn toggles_ext4_recovery_with_checksum_restoration() {
+        let mut bytes = valid_superblock();
+        let original = bytes;
+        set_superblock_recovery(&mut bytes, true).unwrap();
+        assert_ne!(bytes, original);
+        assert_eq!(
+            read_u32(&bytes, 96).unwrap() & FEATURE_INCOMPAT_RECOVER,
+            FEATURE_INCOMPAT_RECOVER
+        );
+        assert_eq!(Superblock::parse(&bytes), Err(ParseError::DirtyFilesystem));
+        set_superblock_recovery(&mut bytes, false).unwrap();
+        assert_eq!(bytes, original);
+        assert!(Superblock::parse(&bytes).is_ok());
+    }
+
+    #[test]
+    fn updates_big_endian_journal_state() {
+        let mut bytes = [0u8; JOURNAL_SUPERBLOCK_SIZE];
+        bytes[0..4].copy_from_slice(&JOURNAL_MAGIC.to_be_bytes());
+        bytes[4..8].copy_from_slice(&4u32.to_be_bytes());
+        bytes[12..16].copy_from_slice(&4096u32.to_be_bytes());
+        bytes[16..20].copy_from_slice(&4096u32.to_be_bytes());
+        bytes[20..24].copy_from_slice(&1u32.to_be_bytes());
+        bytes[24..28].copy_from_slice(&1u32.to_be_bytes());
+        bytes[48..64].copy_from_slice(&[0x53; 16]);
+        bytes[64..68].copy_from_slice(&1u32.to_be_bytes());
+        let original = bytes;
+
+        set_journal_superblock_state(&mut bytes, 1, 1).unwrap();
+        let active = JournalSuperblock::parse(&bytes).unwrap();
+        assert_eq!(active.sequence, 1);
+        assert_eq!(active.start, 1);
+        set_journal_superblock_state(&mut bytes, 2, 0).unwrap();
+        let checkpointed = JournalSuperblock::parse(&bytes).unwrap();
+        assert_eq!(checkpointed.sequence, 2);
+        assert_eq!(checkpointed.start, 0);
+        assert_eq!(
+            set_journal_superblock_state(&mut bytes, 0, 0),
+            Err(ParseError::InvalidJournal)
+        );
+        set_journal_superblock_state(&mut bytes, 1, 0).unwrap();
+        assert_eq!(bytes, original);
     }
 
     #[test]
