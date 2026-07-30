@@ -12,6 +12,7 @@ members = [
     "crates/shell",
     "crates/vfs",
     "crates/virtio",
+    "crates/wayland",
     "ebpf",
     "kernel",
     "userspace/init",
