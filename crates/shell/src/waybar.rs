@@ -13,6 +13,15 @@ pub enum BarPosition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarButton {
+    Left,
+    Middle,
+    Right,
+    Backward,
+    Forward,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BarModuleList<'a> {
     modules: [&'a str; MAX_BAR_MODULES],
     length: usize,
@@ -56,6 +65,7 @@ pub struct BarModuleConfig<'a> {
     pub name: &'a str,
     pub format: Option<&'a str>,
     pub format_alt: Option<&'a str>,
+    pub format_alt_click: BarButton,
     pub format_disconnected: Option<&'a str>,
     pub interval: Option<u16>,
     pub tooltip: Option<bool>,
@@ -74,6 +84,7 @@ impl<'a> BarModuleConfig<'a> {
             name,
             format: None,
             format_alt: None,
+            format_alt_click: BarButton::Left,
             format_disconnected: None,
             interval: None,
             tooltip: None,
@@ -116,6 +127,12 @@ impl<'a> BarModuleConfigList<'a> {
             .flatten()
             .find(|module| module.name == name)
             .copied()
+    }
+
+    pub fn index_of(self, name: &str) -> Option<usize> {
+        self.entries[..self.length]
+            .iter()
+            .position(|module| module.is_some_and(|module| module.name == name))
     }
 
     fn push(&mut self, module: BarModuleConfig<'a>) -> Result<(), BarConfigError> {
@@ -566,6 +583,11 @@ impl<'a> JsonParser<'a> {
                             module.format_alt = Some(self.module_format_value()?);
                             supported = true;
                         }
+                        "format-alt-click" => {
+                            mark_once(&mut fields, 1 << 12)?;
+                            module.format_alt_click = self.module_button_value()?;
+                            supported = true;
+                        }
                         "format-disconnected" => {
                             mark_once(&mut fields, 1 << 2)?;
                             module.format_disconnected = Some(self.module_format_value()?);
@@ -664,6 +686,18 @@ impl<'a> JsonParser<'a> {
             return Err(BarConfigError::InvalidModuleOption);
         }
         Ok(value)
+    }
+
+    fn module_button_value(&mut self) -> Result<BarButton, BarConfigError> {
+        match self.next() {
+            Token::String("click" | "click-left") | Token::Number("1") => Ok(BarButton::Left),
+            Token::String("click-middle") | Token::Number("2") => Ok(BarButton::Middle),
+            Token::String("click-right") | Token::Number("3") => Ok(BarButton::Right),
+            Token::String("click-backward") | Token::Number("8") => Ok(BarButton::Backward),
+            Token::String("click-forward") | Token::Number("9") => Ok(BarButton::Forward),
+            Token::End => Err(BarConfigError::UnexpectedEnd),
+            _ => Err(BarConfigError::InvalidModuleOption),
+        }
     }
 
     fn skip_value(&mut self) -> Result<(), BarConfigError> {
@@ -803,6 +837,7 @@ mod tests {
                 "clock": {
                     "format": "{:%H:%M}",
                     "format-alt": "UTC",
+                    "format-alt-click": "click-right",
                     "interval": 60,
                     "tooltip": false,
                     "min-length": 3,
@@ -837,6 +872,7 @@ mod tests {
         let clock = config.module_configs.get("clock").unwrap();
         assert_eq!(clock.format, Some("{:%H:%M}"));
         assert_eq!(clock.format_alt, Some("UTC"));
+        assert_eq!(clock.format_alt_click, BarButton::Right);
         assert_eq!(clock.interval, Some(60));
         assert_eq!(clock.tooltip, Some(false));
         assert_eq!(clock.min_length, Some(3));
@@ -850,11 +886,21 @@ mod tests {
 
     #[test]
     fn supports_block_comments_and_defaults() {
-        let config = parse_waybar_config(r#"/* comment */ { "modules-left": [] }"#).unwrap();
+        let config = parse_waybar_config(
+            r#"/* comment */ {
+                "modules-left": [],
+                "clock": { "format-alt": "UTC" }
+            }"#,
+        )
+        .unwrap();
         assert_eq!(config.position, BarPosition::Top);
         assert_eq!(config.height, 30);
         assert_eq!(config.spacing, 4);
         assert!(config.modules_left.is_empty());
+        assert_eq!(
+            config.module_configs.get("clock").unwrap().format_alt_click,
+            BarButton::Left
+        );
     }
 
     #[test]
@@ -896,6 +942,10 @@ mod tests {
         );
         assert_eq!(
             parse_waybar_config("{ \"clock\": { \"on-click\": \"status\nabout\" } }"),
+            Err(BarConfigError::InvalidModuleOption)
+        );
+        assert_eq!(
+            parse_waybar_config(r#"{ "clock": { "format-alt-click": "double-click" } }"#),
             Err(BarConfigError::InvalidModuleOption)
         );
     }

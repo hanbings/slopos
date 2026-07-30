@@ -20,9 +20,9 @@ pub use wallpaper::{
     transition_pixel,
 };
 pub use waybar::{
-    BarConfigError, BarFormatError, BarFormatValue, BarModuleConfig, BarModuleConfigList,
-    BarModuleList, BarPosition, BarText, MAX_BAR_MODULE_CONFIGS, MAX_BAR_MODULES, MAX_BAR_TEXT,
-    WaybarConfig, format_bar_text, parse_waybar_config,
+    BarButton, BarConfigError, BarFormatError, BarFormatValue, BarModuleConfig,
+    BarModuleConfigList, BarModuleList, BarPosition, BarText, MAX_BAR_MODULE_CONFIGS,
+    MAX_BAR_MODULES, MAX_BAR_TEXT, WaybarConfig, format_bar_text, parse_waybar_config,
 };
 pub use waybar_style::{
     MAX_WAYBAR_STYLE_RULES, ResolvedWaybarStyle, WaybarStyle, WaybarStyleError, parse_waybar_style,

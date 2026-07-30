@@ -11,6 +11,7 @@ debug_log="${repo_dir}/evidence/custom-config-uefi-debugcon.log"
 qemu_log="${repo_dir}/evidence/custom-config-qemu.log"
 workspace_screenshot="${repo_dir}/evidence/custom-config-workspace-click.ppm"
 action_screenshot="${repo_dir}/evidence/custom-config-on-click.ppm"
+format_restored_screenshot="${repo_dir}/evidence/custom-config-format-restored.ppm"
 right_action_screenshot="${repo_dir}/evidence/custom-config-on-click-right.ppm"
 middle_action_screenshot="${repo_dir}/evidence/custom-config-on-click-middle.ppm"
 scroll_up_screenshot="${repo_dir}/evidence/custom-config-scroll-up.ppm"
@@ -63,6 +64,7 @@ sed \
     -e '/"modules-left":/,/]/ s/"niri\/workspaces"/"niri\/window"/' \
     -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
     -e '/"clock": {/a\        "on-click": "status",' \
+    -e '/"clock": {/a\        "format-alt": "UTC ALT",' \
     -e '/"clock": {/a\        "on-click-right": "help",' \
     -e '/"clock": {/a\        "on-click-middle": "swww query",' \
     -e '/"clock": {/a\        "on-scroll-up": "swww img /usr/share/backgrounds/slopos-sunset.ppm --transition-type none",' \
@@ -119,6 +121,10 @@ set +e
     echo "mouse_move 0 0 1"
     sleep 1
     echo "screendump ${scroll_down_screenshot}"
+    echo "mouse_button 1"
+    echo "mouse_button 0"
+    sleep 1
+    echo "screendump ${format_restored_screenshot}"
     echo "quit"
 } | timeout 24s qemu-system-x86_64 \
     -machine q35,accel=tcg \
@@ -191,6 +197,16 @@ grep -Fq \
     "SLOPOS-WAYBAR: module clicked name=clock button=left action=status accepted=true animate=false" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-WAYBAR: format toggled name=clock button=left alternate=true text=\"UTC ALT\"" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: format toggled name=clock button=left alternate=false text=\"UTC\"" \
+    "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-WAYBAR: format toggled name=clock button=left" "${serial_log}")" -ne 2 ]]; then
+    echo "Waybar alternate format did not complete one toggle cycle" >&2
+    exit 1
+fi
+grep -Fq \
     "SLOPOS-WAYBAR: module clicked name=clock button=right action=help accepted=true animate=false" \
     "${serial_log}"
 grep -Fq \
@@ -208,6 +224,7 @@ grep -Fq "SLOPOS-TERMINAL: command=HELP" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=SWWW QUERY" "${serial_log}"
 test -s "${workspace_screenshot}"
 test -s "${action_screenshot}"
+test -s "${format_restored_screenshot}"
 test -s "${right_action_screenshot}"
 test -s "${middle_action_screenshot}"
 test -s "${scroll_up_screenshot}"
@@ -217,6 +234,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/custom-config-workspace-click.png"
     pnmtopng "${action_screenshot}" \
         >"${repo_dir}/evidence/custom-config-on-click.png"
+    pnmtopng "${format_restored_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-format-restored.png"
     pnmtopng "${right_action_screenshot}" \
         >"${repo_dir}/evidence/custom-config-on-click-right.png"
     pnmtopng "${middle_action_screenshot}" \
@@ -236,4 +255,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded user desktop configuration override and configured Waybar placement verified"
+echo "SlopOS bounded user desktop configuration override, Waybar placement, actions, and alternate format verified"

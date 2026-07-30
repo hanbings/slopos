@@ -7,12 +7,12 @@ use crate::ps2::{Controller, DesktopEvent, InputEvent, Key, KeyEvent, KeyModifie
 use crate::serial::serialln;
 use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
-    BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers, ImgRequest,
-    NiriAction, NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle, SwwwCommand,
-    SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle,
-    WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout, parse_niri_shell_config,
-    parse_ppm, parse_swww_command, parse_swww_environment, parse_waybar_config, parse_waybar_style,
-    transition_pixel,
+    BarButton, BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers,
+    ImgRequest, NiriAction, NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle,
+    SwwwCommand, SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig,
+    WaybarStyle, WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout,
+    parse_niri_shell_config, parse_ppm, parse_swww_command, parse_swww_environment,
+    parse_waybar_config, parse_waybar_style, transition_pixel,
 };
 
 const WINDOW_COUNT: usize = 3;
@@ -53,6 +53,7 @@ pub struct Desktop {
     niri: NiriShellConfig<'static>,
     bar: WaybarConfig<'static>,
     bar_style: WaybarStyle<'static>,
+    bar_alternate_formats: u32,
     swww_defaults: SwwwDefaults,
     wallpaper: WallpaperDaemon,
     wallpaper_current_image: Option<PpmImage<'static>>,
@@ -169,6 +170,7 @@ impl Desktop {
             niri,
             bar,
             bar_style,
+            bar_alternate_formats: 0,
             swww_defaults,
             wallpaper,
             wallpaper_current_image: None,
@@ -677,6 +679,7 @@ impl Desktop {
         self.niri = niri;
         self.bar = bar;
         self.bar_style = bar_style;
+        self.bar_alternate_formats = 0;
         self.swww_defaults = swww_defaults;
         self.config_generation = sources.generation;
         self.sync_focused_window();
@@ -779,7 +782,11 @@ impl Desktop {
             _ => (module, 0),
         };
         let module_config = self.bar.module_configs.get(module);
-        let template = if module == "network" {
+        let template = if self.bar_module_alternate_format_active(module) {
+            module_config
+                .and_then(|config| config.format_alt)
+                .unwrap_or(default)
+        } else if module == "network" {
             module_config
                 .and_then(|config| config.format_disconnected.or(config.format))
                 .unwrap_or(default)
@@ -798,6 +805,38 @@ impl Desktop {
                 .unwrap_or_else(|_| crate::fatal("Waybar min-length exceeds fixed text buffer"));
         }
         text
+    }
+
+    fn bar_module_alternate_format_active(&self, module: &str) -> bool {
+        self.bar
+            .module_configs
+            .index_of(module)
+            .is_some_and(|index| self.bar_alternate_formats & (1u32 << index) != 0)
+    }
+
+    fn toggle_bar_module_format(
+        &mut self,
+        module: &'static str,
+        button: BarButton,
+        button_name: &'static str,
+    ) -> bool {
+        let Some(config) = self.bar.module_configs.get(module) else {
+            return false;
+        };
+        if config.format_alt.is_none() || config.format_alt_click != button {
+            return false;
+        }
+        let Some(index) = self.bar.module_configs.index_of(module) else {
+            crate::fatal("Waybar alternate format config lost its index");
+        };
+        self.bar_alternate_formats ^= 1u32 << index;
+        let active = self.bar_module_alternate_format_active(module);
+        let text = self.bar_module_text(module);
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: format toggled name={module} button={button_name} alternate={active} text=\"{}\"",
+            text.as_str()
+        ));
+        true
     }
 
     fn render_window(&self, framebuffer: &mut Framebuffer, index: usize) {
@@ -1071,14 +1110,17 @@ impl Desktop {
             ));
             return false;
         }
-        if let Some(module) = self.bar_module_at(self.pointer_x, self.pointer_y)
-            && let Some(action) = self
+        if let Some(module) = self.bar_module_at(self.pointer_x, self.pointer_y) {
+            self.toggle_bar_module_format(module, BarButton::Left, "left");
+            if let Some(action) = self
                 .bar
                 .module_configs
                 .get(module)
                 .and_then(|config| config.on_click)
-        {
-            return self.execute_bar_action(module, action, "left");
+            {
+                return self.execute_bar_action(module, action, "left");
+            }
+            return false;
         }
         if let Some(index) = self.window_at_pointer() {
             let window = self
@@ -1111,6 +1153,7 @@ impl Desktop {
         let Some(module) = self.bar_module_at(self.pointer_x, self.pointer_y) else {
             return false;
         };
+        self.toggle_bar_module_format(module, BarButton::Right, "right");
         let Some(action) = self
             .bar
             .module_configs
@@ -1126,6 +1169,7 @@ impl Desktop {
         let Some(module) = self.bar_module_at(self.pointer_x, self.pointer_y) else {
             return false;
         };
+        self.toggle_bar_module_format(module, BarButton::Middle, "middle");
         let Some(action) = self
             .bar
             .module_configs
