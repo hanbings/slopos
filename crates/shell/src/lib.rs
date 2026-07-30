@@ -662,6 +662,60 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         changed
     }
 
+    pub fn expand_focused_column_to_available_width(&mut self) -> bool {
+        if self.column_count == 0 || self.columns[self.focused_column].maximized {
+            return false;
+        }
+
+        let view_start = self.view_offset;
+        let view_end = view_start + i32::from(self.output_width);
+        let gap = i32::from(self.config.gaps);
+        let mut width_taken = 0i32;
+        let mut leftmost_start = None;
+        let mut active_visible = false;
+        let mut non_active_visible = false;
+
+        for index in 0..self.column_count {
+            let start = self.column_start(index);
+            let width = i32::from(self.effective_column_width(index));
+            if start < view_start + gap {
+                continue;
+            }
+            if start + width + gap > view_end {
+                break;
+            }
+
+            if leftmost_start.is_none() {
+                leftmost_start = Some(start);
+            }
+            if index == self.focused_column {
+                active_visible = true;
+            } else {
+                non_active_visible = true;
+            }
+            width_taken += width + gap;
+        }
+
+        if !active_visible {
+            return false;
+        }
+        let available = i32::from(self.output_width) - gap - width_taken;
+        if available <= 0 {
+            return false;
+        }
+        if !non_active_visible {
+            self.columns[self.focused_column].maximized = true;
+            self.ensure_focused_visible();
+            return true;
+        }
+
+        let current = i32::from(self.columns[self.focused_column].width);
+        self.columns[self.focused_column].width = current.saturating_add(available) as u16;
+        self.view_offset = leftmost_start.expect("a visible active column has a left edge") - gap;
+        self.ensure_focused_visible();
+        true
+    }
+
     pub fn switch_preset_window_height(&mut self) -> bool {
         self.switch_preset_window_height_in_direction(false)
     }
@@ -1641,6 +1695,30 @@ mod tests {
         assert_eq!(layout.tile_rect(1).unwrap().width, 968);
         assert!(layout.toggle_maximize_focused_column());
         assert_eq!(layout.tile_rect(1).unwrap().width, 311);
+    }
+
+    #[test]
+    fn expands_a_column_into_space_not_taken_by_visible_columns() {
+        let config = LayoutConfig {
+            default_column_width: ColumnWidth::Fixed(300),
+            ..LayoutConfig::default()
+        };
+        let mut layout = ScrollLayout::<2, 1>::new(1000, 700, 30, config);
+        layout.open_window(1).unwrap();
+        layout.open_window(2).unwrap();
+        assert!(layout.focus_column_left());
+        assert!(layout.expand_focused_column_to_available_width());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 652);
+        assert_eq!(layout.tile_rect(2).unwrap().x, 684);
+        assert!(!layout.expand_focused_column_to_available_width());
+
+        let mut single = ScrollLayout::<1, 1>::new(1000, 700, 30, config);
+        single.open_window(1).unwrap();
+        assert!(single.expand_focused_column_to_available_width());
+        assert_eq!(single.tile_rect(1).unwrap().width, 968);
+        assert!(!single.expand_focused_column_to_available_width());
+        assert!(single.toggle_maximize_focused_column());
+        assert_eq!(single.tile_rect(1).unwrap().width, 300);
     }
 
     #[test]

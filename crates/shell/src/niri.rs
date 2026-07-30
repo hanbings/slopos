@@ -76,6 +76,7 @@ pub enum NiriAction<'a> {
     SwitchPresetWindowHeightBack,
     MaximizeColumn,
     CenterColumn,
+    ExpandColumnToAvailableWidth,
     SetColumnWidth(ColumnWidthChange),
     SetWindowHeight(ColumnWidthChange),
     ResetWindowHeight,
@@ -491,6 +492,7 @@ impl<'a> ShellConfigParser<'a> {
             "switch-preset-window-height-back" => NiriAction::SwitchPresetWindowHeightBack,
             "maximize-column" => NiriAction::MaximizeColumn,
             "center-column" => NiriAction::CenterColumn,
+            "expand-column-to-available-width" => NiriAction::ExpandColumnToAvailableWidth,
             "set-column-width" => {
                 let KdlToken::String(width) = self.next() else {
                     return Err(NiriConfigError::InvalidBinding);
@@ -976,6 +978,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].center_focused_column()
     }
 
+    pub fn expand_focused_column_to_available_width(&mut self) -> bool {
+        self.layouts[self.active].expand_focused_column_to_available_width()
+    }
+
     pub fn view_offset(&self) -> i32 {
         self.layouts[self.active].view_offset()
     }
@@ -1108,6 +1114,7 @@ mod tests {
                 Mod+Ctrl+R { reset-window-height; }
                 Mod+F { maximize-column; }
                 Mod+C { center-column; }
+                Mod+Ctrl+F { expand-column-to-available-width; }
                 Mod+Q { close-window; }
             }
             window-rule {
@@ -1127,7 +1134,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 27);
+        assert_eq!(config.bindings.len(), 28);
         assert_eq!(
             config
                 .bindings
@@ -1219,6 +1226,13 @@ mod tests {
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Character(b'C')),
             Some(NiriAction::CenterColumn)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::Character(b'F')
+            ),
+            Some(NiriAction::ExpandColumnToAvailableWidth)
         );
         assert_eq!(
             config.bindings.action(

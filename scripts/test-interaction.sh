@@ -118,6 +118,25 @@ monitor_type() {
     echo "screendump ${repo_dir}/evidence/niri-preset-column-width.ppm"
     echo "sendkey meta_l-shift-r 50"
     sleep 1
+    echo "sendkey meta_l-right 50"
+    sleep 1
+    echo "sendkey meta_l-shift-r 50"
+    sleep 1
+    echo "sendkey meta_l-left 50"
+    sleep 1
+    echo "sendkey meta_l-ctrl-f 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-column-expanded.ppm"
+    echo "sendkey meta_l-shift-r 50"
+    sleep 1
+    echo "sendkey meta_l-shift-r 50"
+    sleep 1
+    echo "sendkey meta_l-right 50"
+    sleep 1
+    echo "sendkey meta_l-r 50"
+    sleep 1
+    echo "sendkey meta_l-left 50"
+    sleep 1
     echo "mouse_move -300 -300"
     sleep 1
     echo "mouse_button 1"
@@ -302,6 +321,8 @@ grep -Fq "SLOPOS-NIRI: binding action=focus-window-down changed=true workspace=1
 grep -Fq "SLOPOS-NIRI: binding action=expel-window-from-column changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=center-column changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: column centered kind=TERMINAL x=268 offset=-252 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=expand-column-to-available-width changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window resized kind=TERMINAL width=657 layout=scrolling" "${serial_log}"
 if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=maximize-column changed=true workspace=1 name=main focused=0" "${serial_log}")" -ne 2 ]]; then
     echo "niri maximize-column did not toggle full width and restore" >&2
     exit 1
@@ -360,6 +381,7 @@ test -s "${repo_dir}/evidence/niri-column-expelled.ppm"
 test -s "${repo_dir}/evidence/niri-column-centered.ppm"
 test -s "${repo_dir}/evidence/niri-column-maximized.ppm"
 test -s "${repo_dir}/evidence/niri-preset-column-width.ppm"
+test -s "${repo_dir}/evidence/niri-column-expanded.ppm"
 test -s "${repo_dir}/evidence/window-moved.ppm"
 test -s "${repo_dir}/evidence/window-resized.ppm"
 test -s "${repo_dir}/evidence/column-reordered.ppm"
@@ -401,6 +423,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-column-maximized.png"
     pnmtopng "${repo_dir}/evidence/niri-preset-column-width.ppm" \
         >"${repo_dir}/evidence/niri-preset-column-width.png"
+    pnmtopng "${repo_dir}/evidence/niri-column-expanded.ppm" \
+        >"${repo_dir}/evidence/niri-column-expanded.png"
     pnmtopng "${repo_dir}/evidence/window-moved.ppm" \
         >"${repo_dir}/evidence/window-moved.png"
     pnmtopng "${repo_dir}/evidence/window-resized.ppm" \

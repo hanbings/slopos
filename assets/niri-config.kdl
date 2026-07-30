@@ -40,6 +40,7 @@ binds {
     Mod+Ctrl+R { reset-window-height; }
     Mod+F { maximize-column; }
     Mod+C { center-column; }
+    Mod+Ctrl+F { expand-column-to-available-width; }
     Mod+Q { close-window; }
 }
 
