@@ -15,3 +15,4 @@ slopos-acpi = { path = "../crates/acpi" }
 slopos-boot-protocol = { path = "../crates/boot-protocol" }
 slopos-ebpf = { path = "../ebpf" }
 slopos-pci = { path = "../crates/pci" }
+slopos-virtio = { path = "../crates/virtio" }

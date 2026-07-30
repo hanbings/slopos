@@ -33,7 +33,9 @@ pub struct Device {
     pub subsystem_id: u16,
     pub interrupt_line: u8,
     pub interrupt_pin: u8,
+    pub bars: [u32; 6],
     pub virtio_capability_mask: u32,
+    virtio_capabilities: [VirtioCapability; 6],
 }
 
 impl Device {
@@ -56,7 +58,9 @@ impl Device {
         subsystem_id: 0,
         interrupt_line: 0,
         interrupt_pin: 0,
+        bars: [0; 6],
         virtio_capability_mask: 0,
+        virtio_capabilities: [VirtioCapability::EMPTY; 6],
     };
 
     pub const fn is_multifunction(self) -> bool {
@@ -77,6 +81,67 @@ impl Device {
     pub const fn is_virtio_block(self) -> bool {
         matches!(self.virtio_device_type(), Some(2))
     }
+
+    pub fn bar_base(&self, index: usize) -> Option<u64> {
+        let low = *self.bars.get(index)?;
+        if low == 0 || low == u32::MAX || low & 1 != 0 {
+            return None;
+        }
+        let memory_type = (low >> 1) & 0b11;
+        let low_address = u64::from(low & 0xffff_fff0);
+        let address = if memory_type == 0b10 {
+            let high = u64::from(*self.bars.get(index + 1)?);
+            low_address | (high << 32)
+        } else if memory_type <= 0b01 {
+            low_address
+        } else {
+            return None;
+        };
+        (address != 0).then_some(address)
+    }
+
+    pub fn virtio_region(&self, configuration_type: u8) -> Option<VirtioRegion> {
+        let capability = *self
+            .virtio_capabilities
+            .get(usize::from(configuration_type))?;
+        if !capability.valid {
+            return None;
+        }
+        let bar_base = self.bar_base(usize::from(capability.bar))?;
+        Some(VirtioRegion {
+            base: bar_base.checked_add(u64::from(capability.offset))?,
+            length: capability.length,
+            notify_multiplier: capability.notify_multiplier,
+            bar: capability.bar,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VirtioCapability {
+    valid: bool,
+    bar: u8,
+    offset: u32,
+    length: u32,
+    notify_multiplier: u32,
+}
+
+impl VirtioCapability {
+    const EMPTY: Self = Self {
+        valid: false,
+        bar: 0,
+        offset: 0,
+        length: 0,
+        notify_multiplier: 0,
+    };
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtioRegion {
+    pub base: u64,
+    pub length: u32,
+    pub notify_multiplier: u32,
+    pub bar: u8,
 }
 
 pub struct Inventory {
@@ -164,17 +229,21 @@ fn read_device(
     let class_revision = config.read_u32(bus, device, function, 0x08);
     let header = config.read_u32(bus, device, function, 0x0c);
     let header_type = (header >> 16) as u8;
+    let mut bars = [0u32; 6];
     let subsystem = if header_type & 0x7f == 0 {
+        for (index, bar) in bars.iter_mut().enumerate() {
+            *bar = config.read_u32(bus, device, function, 0x10 + index as u8 * 4);
+        }
         config.read_u32(bus, device, function, 0x2c)
     } else {
         0
     };
     let interrupt = config.read_u32(bus, device, function, 0x3c);
     let status = (command_status >> 16) as u16;
-    let virtio_capability_mask = if status & STATUS_CAPABILITIES_LIST != 0 {
+    let (virtio_capability_mask, virtio_capabilities) = if status & STATUS_CAPABILITIES_LIST != 0 {
         scan_virtio_capabilities(config, bus, device, function)
     } else {
-        0
+        (0, [VirtioCapability::EMPTY; 6])
     };
 
     Some(Device {
@@ -196,7 +265,9 @@ fn read_device(
         subsystem_id: (subsystem >> 16) as u16,
         interrupt_line: interrupt as u8,
         interrupt_pin: (interrupt >> 8) as u8,
+        bars,
         virtio_capability_mask,
+        virtio_capabilities,
     })
 }
 
@@ -205,10 +276,11 @@ fn scan_virtio_capabilities(
     bus: u8,
     device: u8,
     function: u8,
-) -> u32 {
+) -> (u32, [VirtioCapability; 6]) {
     let mut pointer = config.read_u32(bus, device, function, 0x34) as u8 & 0xfc;
     let mut visited = 0u64;
     let mut mask = 0u32;
+    let mut capabilities = [VirtioCapability::EMPTY; 6];
     for _ in 0..48 {
         if pointer < 0x40 {
             break;
@@ -224,12 +296,36 @@ fn scan_virtio_capabilities(
         let next = (capability >> 8) as u8 & 0xfc;
         let length = (capability >> 16) as u8;
         let configuration_type = (capability >> 24) as u8;
-        if identifier == CAPABILITY_VENDOR_SPECIFIC && length >= 16 && configuration_type < 32 {
-            mask |= 1 << configuration_type;
+        if identifier == CAPABILITY_VENDOR_SPECIFIC
+            && (1..=5).contains(&configuration_type)
+            && length >= 16
+            && u16::from(pointer) + 15 <= u16::from(u8::MAX)
+        {
+            let bar = config.read_u32(bus, device, function, pointer + 4) as u8;
+            let offset = config.read_u32(bus, device, function, pointer + 8);
+            let region_length = config.read_u32(bus, device, function, pointer + 12);
+            if bar < 6 && region_length != 0 {
+                let notify_multiplier = if configuration_type == 2
+                    && length >= 20
+                    && u16::from(pointer) + 19 <= u16::from(u8::MAX)
+                {
+                    config.read_u32(bus, device, function, pointer + 16)
+                } else {
+                    0
+                };
+                mask |= 1 << configuration_type;
+                capabilities[usize::from(configuration_type)] = VirtioCapability {
+                    valid: true,
+                    bar,
+                    offset,
+                    length: region_length,
+                    notify_multiplier,
+                };
+            }
         }
         pointer = next;
     }
-    mask
+    (mask, capabilities)
 }
 
 #[cfg(test)]
@@ -296,10 +392,22 @@ mod tests {
             (BLOCK, 0x04, u32::from(STATUS_CAPABILITIES_LIST) << 16),
             (BLOCK, 0x08, 0x0100_0001),
             (BLOCK, 0x0c, 0x0080_0000),
+            (BLOCK, 0x10, 1),
+            (BLOCK, 0x14, 0),
+            (BLOCK, 0x18, 0),
+            (BLOCK, 0x1c, 0),
+            (BLOCK, 0x20, 0x8000_0004),
+            (BLOCK, 0x24, 0),
             (BLOCK, 0x2c, 0x0002_1af4),
             (BLOCK, 0x34, 0x40),
             (BLOCK, 0x40, 0x0110_5009),
+            (BLOCK, 0x44, 4),
+            (BLOCK, 0x48, 0),
+            (BLOCK, 0x4c, 56),
             (BLOCK, 0x50, 0x0410_0009),
+            (BLOCK, 0x54, 4),
+            (BLOCK, 0x58, 0x2000),
+            (BLOCK, 0x5c, 8),
             (BLOCK, 0x3c, 0x0001_000b),
             (NET_FUNCTION, 0x00, 0x1041_1af4),
             (NET_FUNCTION, 0x04, 0),
@@ -314,6 +422,25 @@ mod tests {
         assert_eq!(block.address, BLOCK);
         assert_eq!(block.virtio_device_type(), Some(2));
         assert_eq!(block.virtio_capability_mask, (1 << 1) | (1 << 4));
+        assert_eq!(block.bar_base(4), Some(0x8000_0000));
+        assert_eq!(
+            block.virtio_region(1),
+            Some(VirtioRegion {
+                base: 0x8000_0000,
+                length: 56,
+                notify_multiplier: 0,
+                bar: 4
+            })
+        );
+        assert_eq!(
+            block.virtio_region(4),
+            Some(VirtioRegion {
+                base: 0x8000_2000,
+                length: 8,
+                notify_multiplier: 0,
+                bar: 4
+            })
+        );
         assert_eq!(inventory.virtio_devices().count(), 2);
     }
 
@@ -335,9 +462,18 @@ mod tests {
             (BLOCK, 0x04, u32::from(STATUS_CAPABILITIES_LIST) << 16),
             (BLOCK, 0x08, 0),
             (BLOCK, 0x0c, 0),
+            (BLOCK, 0x10, 0),
+            (BLOCK, 0x14, 0),
+            (BLOCK, 0x18, 0),
+            (BLOCK, 0x1c, 0),
+            (BLOCK, 0x20, 0x8000_0000),
+            (BLOCK, 0x24, 0),
             (BLOCK, 0x2c, 0),
             (BLOCK, 0x34, 0x40),
             (BLOCK, 0x40, 0x0110_4009),
+            (BLOCK, 0x44, 4),
+            (BLOCK, 0x48, 0),
+            (BLOCK, 0x4c, 56),
             (BLOCK, 0x3c, 0),
         ]);
         let inventory = scan(&mut config);

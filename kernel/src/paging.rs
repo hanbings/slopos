@@ -19,7 +19,13 @@ pub struct PagingStats {
     pub huge_pages: usize,
 }
 
-pub fn install(framebuffer: FramebufferInfo, mmio_pages: &[u64]) -> PagingStats {
+#[derive(Clone, Copy)]
+pub struct MmioRange {
+    pub base: u64,
+    pub size: u64,
+}
+
+pub fn install(framebuffer: FramebufferInfo, mmio_ranges: &[MmioRange]) -> PagingStats {
     let pml4 = table_frame();
     let pdpt = table_frame();
     set_entry(pml4, 0, pdpt | PRESENT | WRITABLE);
@@ -42,17 +48,20 @@ pub fn install(framebuffer: FramebufferInfo, mmio_pages: &[u64]) -> PagingStats 
     }
 
     map_mmio_range(
-        pdpt,
+        pml4,
         framebuffer.base,
         framebuffer.size,
         &mut page_table_frames,
         &mut huge_pages,
     );
-    for &address in mmio_pages {
+    for range in mmio_ranges {
+        if range.base == 0 || range.size == 0 {
+            continue;
+        }
         map_mmio_range(
-            pdpt,
-            address,
-            PAGE_SIZE,
+            pml4,
+            range.base,
+            range.size,
             &mut page_table_frames,
             &mut huge_pages,
         );
@@ -80,7 +89,7 @@ pub fn install(framebuffer: FramebufferInfo, mmio_pages: &[u64]) -> PagingStats 
 }
 
 fn map_mmio_range(
-    pdpt: u64,
+    pml4: u64,
     base: u64,
     size: u64,
     page_table_frames: &mut usize,
@@ -90,16 +99,25 @@ fn map_mmio_range(
     let end = base.saturating_add(size).next_multiple_of(HUGE_PAGE_SIZE);
     let mut physical = start;
     while physical < end {
-        let gib_index = (physical >> 30) as usize;
-        if gib_index >= ENTRY_COUNT {
-            crate::fatal("MMIO range lies outside lower PML4 slot");
+        if physical >> 48 != 0 {
+            crate::fatal("MMIO range lies outside lower canonical address space");
         }
-        let mut directory_entry = get_entry(pdpt, gib_index);
+        let pml4_index = ((physical >> 39) & 0x1ff) as usize;
+        let mut pdpt_entry = get_entry(pml4, pml4_index);
+        if pdpt_entry & PRESENT == 0 {
+            let new_pdpt = table_frame();
+            *page_table_frames += 1;
+            pdpt_entry = new_pdpt | PRESENT | WRITABLE;
+            set_entry(pml4, pml4_index, pdpt_entry);
+        }
+        let target_pdpt = pdpt_entry & !(PAGE_SIZE - 1);
+        let gib_index = ((physical >> 30) & 0x1ff) as usize;
+        let mut directory_entry = get_entry(target_pdpt, gib_index);
         if directory_entry & PRESENT == 0 {
             let directory = table_frame();
             *page_table_frames += 1;
             directory_entry = directory | PRESENT | WRITABLE;
-            set_entry(pdpt, gib_index, directory_entry);
+            set_entry(target_pdpt, gib_index, directory_entry);
         }
         let directory = directory_entry & !(PAGE_SIZE - 1);
         let index = ((physical >> 21) & 0x1ff) as usize;

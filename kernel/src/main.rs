@@ -17,6 +17,7 @@ mod pci;
 mod ps2;
 mod serial;
 mod timer;
+mod virtio;
 
 use core::arch::asm;
 use core::panic::PanicInfo;
@@ -87,6 +88,50 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         boot_info.initrd.base, boot_info.initrd.size
     ));
 
+    let pci_inventory = pci::discover();
+    if pci_inventory.overflowed {
+        fatal("PCI inventory capacity exhausted");
+    }
+    let virtio_count = pci_inventory.virtio_devices().count();
+    let virtio_block = *pci_inventory
+        .find_virtio_block()
+        .unwrap_or_else(|| fatal("QEMU virtio block device was not enumerated"));
+    let virtio_common = virtio_block
+        .virtio_region(1)
+        .unwrap_or_else(|| fatal("virtio common configuration is missing"));
+    let virtio_notify = virtio_block
+        .virtio_region(2)
+        .unwrap_or_else(|| fatal("virtio notify configuration is missing"));
+    let virtio_isr = virtio_block
+        .virtio_region(3)
+        .unwrap_or_else(|| fatal("virtio ISR configuration is missing"));
+    let virtio_device = virtio_block
+        .virtio_region(4)
+        .unwrap_or_else(|| fatal("virtio device configuration is missing"));
+    serialln(format_args!(
+        "SLOPOS-PCI: mechanism1 devices={} virtio={} block={:02x}:{:02x}.{} id={:04x} caps={:#x}",
+        pci_inventory.len(),
+        virtio_count,
+        virtio_block.address.bus,
+        virtio_block.address.device,
+        virtio_block.address.function,
+        virtio_block.device_id,
+        virtio_block.virtio_capability_mask
+    ));
+    serialln(format_args!(
+        "SLOPOS-PCI: bars={:08x}/{:08x}/{:08x}/{:08x}/{:08x}/{:08x} regions={:#x}/{:#x}/{:#x}/{:#x}",
+        virtio_block.bars[0],
+        virtio_block.bars[1],
+        virtio_block.bars[2],
+        virtio_block.bars[3],
+        virtio_block.bars[4],
+        virtio_block.bars[5],
+        virtio_common.base,
+        virtio_notify.base,
+        virtio_isr.base,
+        virtio_device.base
+    ));
+
     let memory_stats = memory::initialize(boot_info.memory_map);
     let probe_frame =
         memory::allocate_frame().unwrap_or_else(|| fatal("no physical frame available"));
@@ -105,14 +150,30 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         memory_stats.conventional_regions, memory_stats.free_frames, probe_frame
     ));
 
-    let mut interrupt_mmio = [0u64; MAX_IO_APICS + 1];
-    interrupt_mmio[0] = platform.madt.local_apic_address;
+    let mut mmio_ranges = [paging::MmioRange { base: 0, size: 0 }; MAX_IO_APICS + 5];
+    mmio_ranges[0] = paging::MmioRange {
+        base: platform.madt.local_apic_address,
+        size: 4096,
+    };
     for (index, io_apic) in platform.madt.io_apics().iter().enumerate() {
-        interrupt_mmio[index + 1] = u64::from(io_apic.address);
+        mmio_ranges[index + 1] = paging::MmioRange {
+            base: u64::from(io_apic.address),
+            size: 4096,
+        };
+    }
+    let interrupt_range_count = platform.madt.io_apics().len() + 1;
+    for (index, region) in [virtio_common, virtio_notify, virtio_isr, virtio_device]
+        .iter()
+        .enumerate()
+    {
+        mmio_ranges[interrupt_range_count + index] = paging::MmioRange {
+            base: region.base,
+            size: u64::from(region.length),
+        };
     }
     let paging_stats = paging::install(
         boot_info.framebuffer,
-        &interrupt_mmio[..platform.madt.io_apics().len() + 1],
+        &mmio_ranges[..interrupt_range_count + 4],
     );
     serialln(format_args!(
         "SLOPOS-MM: CR3 switched root={:#x} table_frames={} huge_pages={}",
@@ -140,23 +201,14 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
 
     verify_ebpf_runtime();
 
-    let pci_inventory = pci::discover();
-    if pci_inventory.overflowed {
-        fatal("PCI inventory capacity exhausted");
-    }
-    let virtio_count = pci_inventory.virtio_devices().count();
-    let virtio_block = pci_inventory
-        .find_virtio_block()
-        .unwrap_or_else(|| fatal("QEMU virtio block device was not enumerated"));
+    let block_stats =
+        virtio::initialize_block(virtio_block, virtio_common, virtio_notify, virtio_device);
     serialln(format_args!(
-        "SLOPOS-PCI: mechanism1 devices={} virtio={} block={:02x}:{:02x}.{} id={:04x} caps={:#x}",
-        pci_inventory.len(),
-        virtio_count,
-        virtio_block.address.bus,
-        virtio_block.address.device,
-        virtio_block.address.function,
-        virtio_block.device_id,
-        virtio_block.virtio_capability_mask
+        "SLOPOS-VIRTIO: modern block queue={} capacity_sectors={} sector0_signature={:02x}{:02x}",
+        block_stats.queue_size,
+        block_stats.capacity_sectors,
+        block_stats.sector_signature[0],
+        block_stats.sector_signature[1]
     ));
 
     let mut framebuffer = match Framebuffer::new(boot_info.framebuffer) {
