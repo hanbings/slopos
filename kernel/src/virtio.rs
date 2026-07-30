@@ -9,7 +9,9 @@ use core::sync::atomic::{AtomicU64, Ordering, fence};
 use core::task::{Context, Poll};
 use slopos_pci::{Device, VirtioRegion};
 use slopos_virtio::{
-    BLOCK_REQUEST_IN, BlockRequestHeader, Descriptor, block_read_descriptors_at, choose_queue_size,
+    BLOCK_FEATURE_FLUSH, BLOCK_FEATURE_READ_ONLY, BLOCK_REQUEST_FLUSH, BLOCK_REQUEST_IN,
+    BLOCK_REQUEST_OUT, BlockRequestHeader, Descriptor, block_flush_descriptors_at,
+    block_read_descriptors_at, block_write_descriptors_at, choose_queue_size,
 };
 
 const STATUS_ACKNOWLEDGE: u8 = 1;
@@ -52,6 +54,7 @@ pub struct BlockDevice {
     notify_address: usize,
     queue_size: u16,
     capacity_sectors: u64,
+    flush_supported: bool,
     available_index: u16,
 }
 
@@ -94,13 +97,19 @@ pub fn initialize_block(
         STATUS_ACKNOWLEDGE | STATUS_DRIVER,
     );
 
+    write_u32(common_base, COMMON_DEVICE_FEATURE_SELECT, 0);
+    let low_features = read_u32(common_base, COMMON_DEVICE_FEATURE);
+    if low_features & BLOCK_FEATURE_READ_ONLY != 0 {
+        fail(common_base, "virtio block device is read-only");
+    }
+    let negotiated_low_features = low_features & BLOCK_FEATURE_FLUSH;
     write_u32(common_base, COMMON_DEVICE_FEATURE_SELECT, 1);
     let high_features = read_u32(common_base, COMMON_DEVICE_FEATURE);
     if high_features & FEATURE_VERSION_1 == 0 {
         fail(common_base, "virtio modern VERSION_1 feature is absent");
     }
     write_u32(common_base, COMMON_DRIVER_FEATURE_SELECT, 0);
-    write_u32(common_base, COMMON_DRIVER_FEATURE, 0);
+    write_u32(common_base, COMMON_DRIVER_FEATURE, negotiated_low_features);
     write_u32(common_base, COMMON_DRIVER_FEATURE_SELECT, 1);
     write_u32(common_base, COMMON_DRIVER_FEATURE, FEATURE_VERSION_1);
     write_u8(
@@ -181,6 +190,7 @@ pub fn initialize_block(
             notify_address,
             queue_size,
             capacity_sectors,
+            flush_supported: negotiated_low_features & BLOCK_FEATURE_FLUSH != 0,
             available_index: 0,
         }
     }
@@ -210,8 +220,8 @@ pub fn interrupt_counts() -> (u64, u64) {
 
 impl BlockDevice {
     pub(crate) async fn read(&mut self, sector: u64, byte_count: usize) {
-        self.validate_read(sector, byte_count);
-        self.prepare_request(0, sector, byte_count);
+        self.validate_transfer(sector, byte_count);
+        self.prepare_read(0, sector, byte_count);
         let expected_used_index = self.publish(&[0]);
         Completion {
             used_page: self.used_page,
@@ -228,10 +238,10 @@ impl BlockDevice {
         second_sector: u64,
         byte_count: usize,
     ) {
-        self.validate_read(first_sector, byte_count);
-        self.validate_read(second_sector, byte_count);
-        self.prepare_request(0, first_sector, byte_count);
-        self.prepare_request(1, second_sector, byte_count);
+        self.validate_transfer(first_sector, byte_count);
+        self.validate_transfer(second_sector, byte_count);
+        self.prepare_read(0, first_sector, byte_count);
+        self.prepare_read(1, second_sector, byte_count);
         let expected_used_index = self.publish(&[0, DESCRIPTORS_PER_REQUEST]);
         Completion {
             used_page: self.used_page,
@@ -241,6 +251,34 @@ impl BlockDevice {
         fence(Ordering::Acquire);
         self.validate_status(0);
         self.validate_status(1);
+    }
+
+    pub(crate) async fn write(&mut self, sector: u64, data: &[u8]) {
+        self.validate_transfer(sector, data.len());
+        self.prepare_write(0, sector, data);
+        let expected_used_index = self.publish(&[0]);
+        Completion {
+            used_page: self.used_page,
+            expected_used_index,
+        }
+        .await;
+        fence(Ordering::Acquire);
+        self.validate_status(0);
+    }
+
+    pub(crate) async fn flush(&mut self) {
+        if !self.flush_supported {
+            self.fail("virtio block device does not support flush");
+        }
+        self.prepare_flush(0);
+        let expected_used_index = self.publish(&[0]);
+        Completion {
+            used_page: self.used_page,
+            expected_used_index,
+        }
+        .await;
+        fence(Ordering::Acquire);
+        self.validate_status(0);
     }
 
     pub(crate) fn data(&self, byte_count: usize) -> &[u8] {
@@ -265,7 +303,7 @@ impl BlockDevice {
         }
     }
 
-    fn validate_read(&self, sector: u64, byte_count: usize) {
+    fn validate_transfer(&self, sector: u64, byte_count: usize) {
         if byte_count == 0
             || byte_count > DATA_PAGE_SIZE
             || byte_count % SECTOR_SIZE != 0
@@ -273,11 +311,11 @@ impl BlockDevice {
                 .checked_add((byte_count / SECTOR_SIZE) as u64)
                 .is_none_or(|end| end > self.capacity_sectors)
         {
-            self.fail("virtio block read is outside device bounds");
+            self.fail("virtio block transfer is outside device bounds");
         }
     }
 
-    fn prepare_request(&self, slot_index: usize, sector: u64, byte_count: usize) {
+    fn prepare_read(&self, slot_index: usize, sector: u64, byte_count: usize) {
         let slot = self.request_slots[slot_index];
         let head = slot_index as u16 * DESCRIPTORS_PER_REQUEST;
         // SAFETY: this slot is not in flight; it owns its control/data pages
@@ -300,6 +338,67 @@ impl BlockDevice {
                 size_of::<BlockRequestHeader>() as u32,
                 slot.data_page as u64,
                 byte_count as u32,
+                status as u64,
+            );
+            let descriptors = self.descriptor_page as *mut Descriptor;
+            for (offset, descriptor) in chain.into_iter().enumerate() {
+                ptr::write_volatile(descriptors.add(usize::from(head) + offset), descriptor);
+            }
+        }
+    }
+
+    fn prepare_write(&self, slot_index: usize, sector: u64, data: &[u8]) {
+        let slot = self.request_slots[slot_index];
+        let head = slot_index as u16 * DESCRIPTORS_PER_REQUEST;
+        // SAFETY: this slot is not in flight and the copied input remains in
+        // its permanently allocated DMA page through completion.
+        unsafe {
+            ptr::write_volatile(
+                slot.control_page as *mut BlockRequestHeader,
+                BlockRequestHeader {
+                    request_type: BLOCK_REQUEST_OUT,
+                    reserved: 0,
+                    sector,
+                },
+            );
+            ptr::copy_nonoverlapping(data.as_ptr(), slot.data_page as *mut u8, data.len());
+            let status = slot.control_page + size_of::<BlockRequestHeader>();
+            ptr::write_volatile(status as *mut u8, 0xff);
+            let chain = block_write_descriptors_at(
+                head,
+                slot.control_page as u64,
+                size_of::<BlockRequestHeader>() as u32,
+                slot.data_page as u64,
+                data.len() as u32,
+                status as u64,
+            );
+            let descriptors = self.descriptor_page as *mut Descriptor;
+            for (offset, descriptor) in chain.into_iter().enumerate() {
+                ptr::write_volatile(descriptors.add(usize::from(head) + offset), descriptor);
+            }
+        }
+    }
+
+    fn prepare_flush(&self, slot_index: usize) {
+        let slot = self.request_slots[slot_index];
+        let head = slot_index as u16 * DESCRIPTORS_PER_REQUEST;
+        // SAFETY: this slot is not in flight and the two-entry flush chain
+        // remains owned by the driver until its used-index completion.
+        unsafe {
+            ptr::write_volatile(
+                slot.control_page as *mut BlockRequestHeader,
+                BlockRequestHeader {
+                    request_type: BLOCK_REQUEST_FLUSH,
+                    reserved: 0,
+                    sector: 0,
+                },
+            );
+            let status = slot.control_page + size_of::<BlockRequestHeader>();
+            ptr::write_volatile(status as *mut u8, 0xff);
+            let chain = block_flush_descriptors_at(
+                head,
+                slot.control_page as u64,
+                size_of::<BlockRequestHeader>() as u32,
                 status as u64,
             );
             let descriptors = self.descriptor_page as *mut Descriptor;
@@ -349,6 +448,10 @@ impl BlockDevice {
 
     pub(crate) const fn capacity_sectors(&self) -> u64 {
         self.capacity_sectors
+    }
+
+    pub(crate) const fn flush_supported(&self) -> bool {
+        self.flush_supported
     }
 
     pub(crate) const fn request_count(&self) -> u16 {

@@ -5,6 +5,10 @@
 pub const DESCRIPTOR_NEXT: u16 = 1;
 pub const DESCRIPTOR_WRITE: u16 = 2;
 pub const BLOCK_REQUEST_IN: u32 = 0;
+pub const BLOCK_REQUEST_OUT: u32 = 1;
+pub const BLOCK_REQUEST_FLUSH: u32 = 4;
+pub const BLOCK_FEATURE_READ_ONLY: u32 = 1 << 5;
+pub const BLOCK_FEATURE_FLUSH: u32 = 1 << 9;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
@@ -97,6 +101,60 @@ pub const fn block_read_descriptors_at(
     ]
 }
 
+pub const fn block_write_descriptors_at(
+    head: u16,
+    header_address: u64,
+    header_length: u32,
+    data_address: u64,
+    data_length: u32,
+    status_address: u64,
+) -> [Descriptor; 3] {
+    assert!(head <= u16::MAX - 2);
+    [
+        Descriptor {
+            address: header_address,
+            length: header_length,
+            flags: DESCRIPTOR_NEXT,
+            next: head + 1,
+        },
+        Descriptor {
+            address: data_address,
+            length: data_length,
+            flags: DESCRIPTOR_NEXT,
+            next: head + 2,
+        },
+        Descriptor {
+            address: status_address,
+            length: 1,
+            flags: DESCRIPTOR_WRITE,
+            next: 0,
+        },
+    ]
+}
+
+pub const fn block_flush_descriptors_at(
+    head: u16,
+    header_address: u64,
+    header_length: u32,
+    status_address: u64,
+) -> [Descriptor; 2] {
+    assert!(head < u16::MAX);
+    [
+        Descriptor {
+            address: header_address,
+            length: header_length,
+            flags: DESCRIPTOR_NEXT,
+            next: head + 1,
+        },
+        Descriptor {
+            address: status_address,
+            length: 1,
+            flags: DESCRIPTOR_WRITE,
+            next: 0,
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +212,33 @@ mod tests {
         assert_eq!(descriptors[0].next, 4);
         assert_eq!(descriptors[1].next, 5);
         assert_eq!(descriptors[2].next, 0);
+    }
+
+    #[test]
+    fn builds_device_readable_write_and_data_free_flush_chains() {
+        let write = block_write_descriptors_at(3, 0x1000, 16, 0x2000, 4096, 0x3000);
+        assert_eq!(write[0].flags, DESCRIPTOR_NEXT);
+        assert_eq!(write[1].flags, DESCRIPTOR_NEXT);
+        assert_eq!(write[1].next, 5);
+        assert_eq!(write[2].flags, DESCRIPTOR_WRITE);
+
+        let flush = block_flush_descriptors_at(6, 0x4000, 16, 0x5000);
+        assert_eq!(
+            flush,
+            [
+                Descriptor {
+                    address: 0x4000,
+                    length: 16,
+                    flags: DESCRIPTOR_NEXT,
+                    next: 7,
+                },
+                Descriptor {
+                    address: 0x5000,
+                    length: 1,
+                    flags: DESCRIPTOR_WRITE,
+                    next: 0,
+                },
+            ]
+        );
     }
 }

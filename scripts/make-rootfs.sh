@@ -30,6 +30,8 @@ dd if=/dev/zero bs=1024 count=6 status=none \
     | tr '\000' 'Z' >"${staging_dir}/usr/share/slopos/multiblock.bin"
 dd if=/dev/zero bs=4096 count=9 status=none \
     | tr '\000' 'D' >"${staging_dir}/usr/share/slopos/deep-extent.bin"
+dd if=/dev/zero bs=4096 count=1 status=none \
+    | tr '\000' 'P' >"${staging_dir}/usr/share/slopos/write-probe.bin"
 large_directory="${staging_dir}/usr/share/slopos/large-directory"
 mkdir -p "${large_directory}"
 cp "${staging_dir}/etc/slopos-release" "${large_directory}/seed"

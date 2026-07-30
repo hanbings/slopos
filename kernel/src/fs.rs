@@ -24,16 +24,18 @@ const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"multiblock.b
 const DEEP_EXTENT_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"deep-extent.bin"];
 const CROSS_BLOCK_PATH: [&[u8]; 5] = [b"usr", b"share", b"slopos", b"large-directory", b"tail-29"];
 const SYMLINK_PATH: [&[u8]; 2] = [b"etc", b"current-release"];
+const WRITE_PROBE_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"write-probe.bin"];
 const ROOT_FILESYSTEM_ID: u16 = 1;
 const VFS_TEST_PATH: &[u8] = b"/etc/./slopos/../slopos/system.conf";
 
 pub async fn mount_task(mut device: BlockDevice) -> ! {
     crate::serial::serialln(format_args!(
-        "SLOPOS-VIRTIO: modern block queue ready size={} capacity_sectors={}",
+        "SLOPOS-VIRTIO: modern block queue ready size={} capacity_sectors={} flush={}",
         device.queue_size(),
-        device.capacity_sectors()
+        device.capacity_sectors(),
+        device.flush_supported()
     ));
-    let mut mount = ReadOnlyMount::mount(&mut device).await;
+    let mut mount = Ext4Mount::mount(&mut device).await;
     let superblock = &mount.superblock;
     let volume_name = core::str::from_utf8(superblock.volume_name())
         .unwrap_or_else(|_| device.fail("ext4 volume label is not UTF-8"));
@@ -248,9 +250,43 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         seek_bytes.len()
     ));
 
+    let write_probe = mount.open_file(&mut device, &WRITE_PROBE_PATH).await;
+    if write_probe.inode.size != u64::from(mount.superblock.block_size) {
+        device.fail("ext4 write probe size mismatch");
+    }
+    let original = mount.read_file_block(&mut device, &write_probe, 0).await;
+    if original.len() != BLOCK_SIZE || original.iter().any(|byte| *byte != b'P') {
+        device.fail("ext4 write probe initial content mismatch");
+    }
+    let mut write_buffer = [0xa5; BLOCK_SIZE];
+    let physical_block = mount
+        .overwrite_existing_file_block(&mut device, &write_probe, 0, &write_buffer)
+        .await;
+    let persisted = mount.read_file_block(&mut device, &write_probe, 0).await;
+    if persisted.iter().any(|byte| *byte != 0xa5) {
+        device.fail("ext4 write probe did not persist after flush");
+    }
+    write_buffer.fill(b'P');
+    let restored_block = mount
+        .overwrite_existing_file_block(&mut device, &write_probe, 0, &write_buffer)
+        .await;
+    let restored = mount.read_file_block(&mut device, &write_probe, 0).await;
+    if restored_block != physical_block || restored.iter().any(|byte| *byte != b'P') {
+        device.fail("ext4 write probe restoration failed");
+    }
+    if mount.cache.invalidations != 2 {
+        device.fail("ext4 write probe cache invalidation count mismatch");
+    }
     crate::serial::serialln(format_args!(
-        "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={}",
-        mount.cache.hits, mount.cache.misses, mount.cache.batched_pairs
+        "SLOPOS-EXT4: in-place write valid inode={} physical_block={physical_block} bytes={} writes=2 flushes=2 cache_invalidations={} restored=true path=/usr/share/slopos/write-probe.bin",
+        write_probe.inode.number,
+        write_buffer.len(),
+        mount.cache.invalidations
+    ));
+
+    crate::serial::serialln(format_args!(
+        "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={} batched_pairs={} invalidations={}",
+        mount.cache.hits, mount.cache.misses, mount.cache.batched_pairs, mount.cache.invalidations
     ));
     let (interrupts, queue_interrupts) = crate::virtio::interrupt_counts();
     crate::serial::serialln(format_args!(
@@ -262,18 +298,18 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
     unreachable!()
 }
 
-struct ReadOnlyMount {
+struct Ext4Mount {
     superblock: Superblock,
     group0: GroupDescriptor,
     cache: BlockCache,
 }
 
 async fn read_descriptor(
-    mount: &mut ReadOnlyMount,
+    mount: &mut Ext4Mount,
     device: &mut BlockDevice,
     descriptors: &mut FileDescriptorTable<8>,
     fd: u32,
-    file: &ReadOnlyFile,
+    file: &Ext4File,
     output: &mut [u8],
 ) -> usize {
     let window = descriptors
@@ -310,7 +346,7 @@ async fn read_descriptor(
     copied
 }
 
-impl ReadOnlyMount {
+impl Ext4Mount {
     async fn mount(device: &mut BlockDevice) -> Self {
         device.read(SUPERBLOCK_SECTOR, SUPERBLOCK_SIZE).await;
         let superblock = Superblock::parse(device.data(SUPERBLOCK_SIZE))
@@ -355,13 +391,13 @@ impl ReadOnlyMount {
         }
     }
 
-    async fn open_file(&mut self, device: &mut BlockDevice, components: &[&[u8]]) -> ReadOnlyFile {
+    async fn open_file(&mut self, device: &mut BlockDevice, components: &[&[u8]]) -> Ext4File {
         let (inode, parent_inode, directory_block, followed_symlink) =
             self.resolve_path(device, components).await;
         if !inode.is_regular_file() {
             device.fail("ext4 open target is not a regular file");
         }
-        ReadOnlyFile {
+        Ext4File {
             inode,
             parent_inode,
             directory_block,
@@ -496,7 +532,7 @@ impl ReadOnlyMount {
     async fn read_file_block<'a>(
         &'a mut self,
         device: &mut BlockDevice,
-        file: &ReadOnlyFile,
+        file: &Ext4File,
         logical_block: u32,
     ) -> &'a [u8] {
         let byte_offset = u64::from(logical_block) * u64::from(self.superblock.block_size);
@@ -519,7 +555,7 @@ impl ReadOnlyMount {
     async fn prefetch_file_pair(
         &mut self,
         device: &mut BlockDevice,
-        file: &ReadOnlyFile,
+        file: &Ext4File,
         first_logical_block: u32,
         second_logical_block: u32,
     ) {
@@ -534,6 +570,33 @@ impl ReadOnlyMount {
         self.cache
             .prefetch_pair(device, &self.superblock, first, second)
             .await;
+    }
+
+    async fn overwrite_existing_file_block(
+        &mut self,
+        device: &mut BlockDevice,
+        file: &Ext4File,
+        logical_block: u32,
+        data: &[u8],
+    ) -> u64 {
+        let byte_offset = u64::from(logical_block)
+            .checked_mul(u64::from(self.superblock.block_size))
+            .unwrap_or_else(|| device.fail("ext4 write offset overflow"));
+        let write_end = byte_offset
+            .checked_add(u64::from(self.superblock.block_size))
+            .unwrap_or_else(|| device.fail("ext4 write end overflow"));
+        if data.len() != BLOCK_SIZE || write_end > file.inode.size {
+            device.fail("ext4 in-place write must cover an existing full block");
+        }
+        let physical_block = self
+            .inode_physical_block(device, &file.inode, logical_block)
+            .await
+            .unwrap_or_else(|| device.fail("ext4 in-place write targets a hole"));
+        let sector = block_to_sector(device, &self.superblock, physical_block);
+        device.write(sector, data).await;
+        device.flush().await;
+        self.cache.invalidate(physical_block);
+        physical_block
     }
 
     async fn inode_physical_block(
@@ -623,7 +686,7 @@ impl ReadOnlyMount {
     }
 }
 
-struct ReadOnlyFile {
+struct Ext4File {
     inode: Inode,
     parent_inode: u32,
     directory_block: u32,
@@ -658,6 +721,7 @@ struct BlockCache {
     hits: u64,
     misses: u64,
     batched_pairs: u64,
+    invalidations: u64,
 }
 
 impl BlockCache {
@@ -676,6 +740,7 @@ impl BlockCache {
             hits: 0,
             misses: 0,
             batched_pairs: 0,
+            invalidations: 0,
         }
     }
 
@@ -769,6 +834,19 @@ impl BlockCache {
     fn entry_bytes(&self, index: usize) -> &[u8] {
         // SAFETY: every cache entry owns a permanently live 4 KiB frame.
         unsafe { core::slice::from_raw_parts(self.entries[index].frame as *const u8, BLOCK_SIZE) }
+    }
+
+    fn invalidate(&mut self, block: u64) -> bool {
+        let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.valid && entry.block == block)
+        else {
+            return false;
+        };
+        entry.valid = false;
+        self.invalidations += 1;
+        true
     }
 }
 
