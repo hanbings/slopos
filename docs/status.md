@@ -7,11 +7,11 @@
 | 原生图形桌面 | 部分实现 | QEMU 中直接进入三个窗口的交互桌面；键盘命令和鼠标拖动已自动验证。仍是内核态 early desktop，不是最终用户态桌面。 |
 | Rust 实现语言 | 已实现并验证（当前代码范围） | loader、kernel、UI、输入和脚本所对应的 SlopOS 源码均为 Rust；仅有最小内联 x86 汇编。 |
 | UEFI 引导 | 已实现并验证 | 独立 loader 加载 ELF kernel、ACPI、GOP、bootstrap image、memory map，调用 `ExitBootServices` 并跳入内核。 |
-| 异步内核 | 部分实现 | 两任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer future 和 IRQ-to-input-queue wakeup 已在 QEMU 运行；timer wheel、locks、cancellation、backpressure、I/O completion 和 SMP 尚未实现。 |
+| 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
 | 进程/线程/调度 | 尚未实现 | 当前只有一个内核执行流；没有用户态、地址空间或 preemption。 |
 | 内存管理 | 部分实现 | kernel 解析 firmware descriptor stride，建立 frame allocator、自有四级页表并切换 CR3，建立 1 MiB kernel bump heap；frame/heap 读回与真实 vector-14 diagnostic 已验证。没有 user address space、细粒度页权限、COW 或 demand paging。 |
 | ext4/btrfs 文件系统 | 尚未实现 | 启动文件由 firmware FAT 协议读取；`initrd.slp` 只是 bootstrap payload，绝不声明为 ext4/btrfs。 |
-| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT 与 PS/2 IRQ 上半部已验证；PCI/modern virtio-blk 完成 feature negotiation、split virtqueue 和 sector-0 DMA read。virtio 仍是启动时 polling 单请求；没有 completion IRQ、缓存、写入、其他设备类或 application processor。 |
+| 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 完成 feature negotiation、split virtqueue、sector-0 DMA read 和 INTx async completion。仍只有一个启动请求；没有缓存、写入、MSI-X、其他设备类或 application processor。 |
 | 图形系统与 Wayland | 部分实现 | framebuffer renderer 和早期 window manager 可用；所有 Wayland wire/object/global/xdg 功能尚未实现。 |
 | 声明式配置 | 部分实现 | UI 中可原子切换一个内存主题预览；没有 parser、types、schema、module、diff、持久化或 rollback。 |
 | 文本编辑器 | 尚未实现 | kernel monitor 只编辑当前命令行，不是普通文本或配置文件编辑器。 |
@@ -39,4 +39,4 @@
 
 ## 下一项最高价值工作
 
-下一阶段应把当前 polling virtio block 请求改为 bounded request/completion queue，并把 INTx 或 MSI-X completion 接入现有 IRQ-to-waker 路径；随后才能在 block cache 上实现真实文件系统。之后需要可回收 heap、动态 task arena 和首个隔离用户地址空间。eBPF 方向仍需 map、program type、attach point 与 ELF relocation。
+下一阶段应把当前单请求 virtio probe 扩展为 descriptor free list 与 bounded multi-request queue，再在其上增加 block cache 和只读文件系统探针。之后需要可回收 heap、动态 task arena 和首个隔离用户地址空间。eBPF 方向仍需 map、program type、attach point 与 ELF relocation。

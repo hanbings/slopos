@@ -37,4 +37,4 @@ ACPI parser 的宿主测试由 `make test-acpi` 执行。裸机日志记录 QEMU
 
 PCI 枚举器的宿主测试由 `make test-pci` 执行。裸机日志包含 QEMU q35 的设备总数和实际 virtio-blk BDF；当前证据为 `00:03.0`、device ID `1001`，完整 region 校验后的 capability mask `0x1e`（configuration type 1–4）。OVMF 分配的 modern BAR base 为 `0xc000000000`，因此 CR3 证据同时包含跨 PML4 slot 的 7 个 table frame。
 
-virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA：queue size 8，设备报告 131072 sectors，sector 0 末尾为 `55aa`。当前只证明一次 polling read，不证明异步 completion、写入或文件系统。
+virtio layout 测试由 `make test-virtio` 执行。裸机 `SLOPOS-VIRTIO` 证据来自真实 descriptor DMA 与 INTx→waker→Future：queue size 8，设备报告 131072 sectors，sector 0 末尾为 `55aa`，top half/queue interrupt 计数均为 1。当前只证明一次只读请求，不证明通用异步队列、写入或文件系统。

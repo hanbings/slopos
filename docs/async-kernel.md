@@ -4,16 +4,17 @@
 
 已经实际运行并由 `make test-boot` 验证：
 
-- 两个 pinned `Future` task；
+- 三个 pinned `Future` task（input、timer、block）；
 - 原子 ready bit queue；
 - 每 task RawWaker；
 - 100 Hz PIT interrupt 唤醒 timer future；
 - PS/2 IRQ 上半部读取/确认设备并写入固定容量 SPSC ring；
 - input future 在下半部解析扫描码和鼠标 packet；
+- virtio INTx top half 读取 ISR 并 wake block future；future 在下半部消费 used ring；
 - executor 空闲时以 `sti; hlt` 等待，避免忙轮询；
 - ring 满时统计 drop，提供最早期 backpressure 可观察性。
 
-当前 executor 是固定两任务、无动态 spawn 的早期实现，不满足最终完整异步内核范围。
+当前 executor 是固定三任务、无动态 spawn 的早期实现，不满足最终完整异步内核范围。
 
 计划模型：
 
@@ -29,4 +30,4 @@
 
 计划 cancellation 语义：drop request future 只撤销尚未提交的请求；已经提交给硬件的请求进入 detached completion，资源直到 completion/timeout reset 后释放。返回用户可见结果只能发生一次。
 
-在 task arena、timer wheel、async locks、cancellation、timeout、bounded producer wakeup、真实 virtio I/O completion 和多核 run queue 完成前，本子系统保持“部分实现”。
+真实单次 virtio I/O completion 已完成；在 task arena、timer wheel、async locks、cancellation、timeout、bounded multi-request producer wakeup 和多核 run queue 完成前，本子系统保持“部分实现”。

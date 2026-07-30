@@ -15,6 +15,6 @@
 
 内核的第一种 transport 是 x86 PCI configuration mechanism 1：对 `0xcf8` 写入 BDF/offset，再从 `0xcfc` 读取 32-bit configuration value。扫描发生在 interrupts disabled 的单核启动阶段，因此当前 port pair 不需要额外锁。驱动启用 device 时只对 command register 做 16-bit write，以免把读回的 write-one-to-clear status 位写回。
 
-`make test-pci` 用伪 config space 验证 multifunction、modern/transitional virtio ID、vendor capability 与循环链。`make test-boot` 在 QEMU q35 上必须实际发现承载 ESP 的 virtio-blk function；当前为 `00:03.0`、ID `1af4:1001`，capability mask `0x3e`。
+`make test-pci` 用伪 config space 验证 multifunction、modern/transitional virtio ID、vendor capability 与循环链。`make test-boot` 在 QEMU q35 上必须实际发现承载 ESP 的 virtio-blk function；当前为 `00:03.0`、ID `1af4:1001`，经完整 region 校验后的 capability mask `0x1e`。
 
 未实现：MCFG/ECAM、bridge-aware resource traversal、BAR sizing/resource allocation、MSI/MSI-X、hotplug 和 power management。virtio 数据路径见 [virtio.md](virtio.md)。
