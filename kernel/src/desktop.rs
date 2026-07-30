@@ -1327,6 +1327,12 @@ impl Desktop {
             }
             NiriAction::ConsumeWindowIntoColumn => self.workspaces.consume_window_into_column(),
             NiriAction::ExpelWindowFromColumn => self.workspaces.expel_window_from_column(),
+            NiriAction::ConsumeOrExpelWindowLeft => {
+                self.workspaces.consume_or_expel_focused_window_left()
+            }
+            NiriAction::ConsumeOrExpelWindowRight => {
+                self.workspaces.consume_or_expel_focused_window_right()
+            }
             NiriAction::SwitchPresetColumnWidth => self.workspaces.switch_preset_column_width(),
             NiriAction::SwitchPresetColumnWidthBack => {
                 self.workspaces.switch_preset_column_width_back()
@@ -1451,6 +1457,27 @@ impl Desktop {
                 title(window.kind),
                 window.x,
                 action_name(action)
+            ));
+        }
+        if changed
+            && matches!(
+                action,
+                NiriAction::ConsumeOrExpelWindowLeft | NiriAction::ConsumeOrExpelWindowRight
+            )
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: window consume-or-expel kind={} direction={} x={} y={} width={} height={} layout=scrolling",
+                title(window.kind),
+                if matches!(action, NiriAction::ConsumeOrExpelWindowLeft) {
+                    "left"
+                } else {
+                    "right"
+                },
+                window.x,
+                window.y,
+                window.width,
+                window.height
             ));
         }
         serialln(format_args!(
@@ -1665,6 +1692,8 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::MoveColumnToWorkspace(_) => "move-column-to-workspace",
         NiriAction::ConsumeWindowIntoColumn => "consume-window-into-column",
         NiriAction::ExpelWindowFromColumn => "expel-window-from-column",
+        NiriAction::ConsumeOrExpelWindowLeft => "consume-or-expel-window-left",
+        NiriAction::ConsumeOrExpelWindowRight => "consume-or-expel-window-right",
         NiriAction::SwitchPresetColumnWidth => "switch-preset-column-width",
         NiriAction::SwitchPresetColumnWidthBack => "switch-preset-column-width-back",
         NiriAction::SwitchPresetWindowHeight => "switch-preset-window-height",

@@ -444,6 +444,32 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         true
     }
 
+    pub fn consume_or_expel_focused_window_left(&mut self) -> bool {
+        if self.column_count == 0 {
+            return false;
+        }
+        if self.columns[self.focused_column].window_count > 1 {
+            return self.extract_focused_window_to_side(true);
+        }
+        if self.focused_column == 0 {
+            return false;
+        }
+        self.consume_focused_singleton_into_adjacent(true)
+    }
+
+    pub fn consume_or_expel_focused_window_right(&mut self) -> bool {
+        if self.column_count == 0 {
+            return false;
+        }
+        if self.columns[self.focused_column].window_count > 1 {
+            return self.extract_focused_window_to_side(false);
+        }
+        if self.focused_column + 1 >= self.column_count {
+            return false;
+        }
+        self.consume_focused_singleton_into_adjacent(false)
+    }
+
     pub fn close_window(&mut self, window: u32) -> Result<(), LayoutError> {
         let (column_index, window_index) =
             self.find_window(window).ok_or(LayoutError::UnknownWindow)?;
@@ -674,7 +700,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             return true;
         }
         if self.columns[self.focused_column].window_count > 1
-            && !self.extract_focused_window_to_right()
+            && !self.extract_focused_window_to_side(false)
         {
             return false;
         }
@@ -969,7 +995,32 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         None
     }
 
-    fn extract_focused_window_to_right(&mut self) -> bool {
+    fn consume_focused_singleton_into_adjacent(&mut self, left: bool) -> bool {
+        let source = self.focused_column;
+        let target = if left { source - 1 } else { source + 1 };
+        if self.columns[target].window_count == WINDOWS {
+            return false;
+        }
+        let window = self.columns[source].windows[0];
+        for index in source..self.column_count - 1 {
+            self.columns[index] = self.columns[index + 1];
+        }
+        self.column_count -= 1;
+        self.columns[self.column_count] = Column::empty();
+
+        let destination = if left { source - 1 } else { source };
+        let destination_row = self.columns[destination].window_count;
+        self.columns[destination].windows[destination_row] = window;
+        self.columns[destination].window_count += 1;
+        self.columns[destination].focused_window = destination_row;
+        self.columns[destination].maximized_to_edges = false;
+        self.columns[destination].reset_window_heights();
+        self.focused_column = destination;
+        self.ensure_focused_visible();
+        true
+    }
+
+    fn extract_focused_window_to_side(&mut self, left: bool) -> bool {
         if self.column_count == 0
             || self.column_count == COLUMNS
             || self.columns[self.focused_column].window_count <= 1
@@ -990,7 +1041,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         self.columns[source].focused_window = source_row.min(self.columns[source].window_count - 1);
         self.columns[source].reset_window_heights();
 
-        let destination = source + 1;
+        let destination = if left { source } else { source + 1 };
         for index in (destination..self.column_count).rev() {
             self.columns[index + 1] = self.columns[index];
         }
@@ -1001,6 +1052,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         self.columns[destination] = column;
         self.column_count += 1;
         self.focused_column = destination;
+        self.ensure_focused_visible();
         true
     }
 
@@ -1059,7 +1111,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             || (self.config.center_focused_column == CenterFocusedColumn::OnOverflow
                 && (start < self.view_offset + gap || end > self.view_offset + output_width - gap));
         if should_center {
-            self.view_offset = centered.clamp(0, self.maximum_view_offset());
+            self.view_offset = centered;
         } else if start < self.view_offset + gap {
             self.view_offset = (start - gap).max(0);
         } else if end > self.view_offset + output_width - gap {
@@ -1721,6 +1773,52 @@ mod tests {
         assert!(layout.expel_window_from_column());
         assert_eq!(layout.focused_window(), Some(1));
         assert!(layout.tile_rect(2).unwrap().x > layout.tile_rect(1).unwrap().x);
+    }
+
+    #[test]
+    fn consumes_or_expels_the_focused_window_toward_either_side() {
+        let config = LayoutConfig {
+            always_center_single_column: true,
+            ..LayoutConfig::default()
+        };
+        let mut layout = ScrollLayout::<3, 2>::new(1000, 700, 30, config);
+        layout.open_window(1).unwrap();
+        layout.open_window(2).unwrap();
+
+        assert!(layout.consume_or_expel_focused_window_left());
+        assert_eq!(layout.len(), 1);
+        assert_eq!(layout.focused_window(), Some(2));
+        assert_eq!(layout.tile_rect(1).unwrap().x, 262);
+        assert_eq!(layout.tile_rect(1).unwrap().y, 46);
+        assert_eq!(layout.tile_rect(2).unwrap().x, 262);
+        assert_eq!(layout.tile_rect(2).unwrap().y, 373);
+
+        assert!(layout.consume_or_expel_focused_window_left());
+        assert_eq!(layout.len(), 2);
+        assert_eq!(layout.focused_window(), Some(2));
+        assert_eq!(layout.tile_rect(2).unwrap().x, 262);
+        assert_eq!(layout.tile_rect(1).unwrap().x, 754);
+
+        assert!(layout.consume_or_expel_focused_window_right());
+        assert_eq!(layout.len(), 1);
+        assert_eq!(layout.focused_window(), Some(2));
+        assert_eq!(layout.tile_rect(1).unwrap().x, 262);
+        assert_eq!(layout.tile_rect(2).unwrap().y, 373);
+
+        assert!(layout.consume_or_expel_focused_window_right());
+        assert_eq!(layout.len(), 2);
+        assert_eq!(layout.focused_window(), Some(2));
+        assert_eq!(layout.tile_rect(1).unwrap().x, 16);
+        assert_eq!(layout.tile_rect(2).unwrap().x, 508);
+        assert!(!layout.consume_or_expel_focused_window_right());
+        assert!(layout.focus_column_left());
+        assert!(!layout.consume_or_expel_focused_window_left());
+
+        let mut full = ScrollLayout::<1, 2>::new(1000, 700, 30, LayoutConfig::default());
+        full.open_window(1).unwrap();
+        full.consume_window(2).unwrap();
+        assert!(!full.consume_or_expel_focused_window_left());
+        assert!(!full.consume_or_expel_focused_window_right());
     }
 
     #[test]

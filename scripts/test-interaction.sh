@@ -101,6 +101,22 @@ monitor_type() {
     echo "sendkey meta_l-dot 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-column-expelled.ppm"
+    echo "sendkey meta_l-right 50"
+    sleep 1
+    echo "sendkey meta_l-bracket_left 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-consume-or-expel-left-stacked.ppm"
+    echo "sendkey meta_l-bracket_left 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-consume-or-expel-left-expelled.ppm"
+    echo "sendkey meta_l-bracket_right 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-consume-or-expel-right-stacked.ppm"
+    echo "sendkey meta_l-bracket_right 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-consume-or-expel-right-expelled.ppm"
+    echo "sendkey meta_l-left 50"
+    sleep 1
     echo "sendkey meta_l-c 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-column-centered.ppm"
@@ -343,6 +359,18 @@ grep -Fq "SLOPOS-NIRI: binding action=move-window-down changed=true workspace=1 
 grep -Fq "SLOPOS-NIRI: binding action=focus-window-up changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-window-down changed=true workspace=1 name=main focused=1" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=expel-window-from-column changed=true workspace=1 name=main focused=0" "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=consume-or-expel-window-left changed=true workspace=1 name=main focused=1" "${serial_log}")" -ne 2 ]]; then
+    echo "niri consume-or-expel-window-left did not consume and expel the focused window" >&2
+    exit 1
+fi
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=consume-or-expel-window-right changed=true workspace=1 name=main focused=1" "${serial_log}")" -ne 2 ]]; then
+    echo "niri consume-or-expel-window-right did not consume and expel the focused window" >&2
+    exit 1
+fi
+grep -Fq "SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=left x=268 y=412 width=488 height=340 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=left x=268 y=56 width=488 height=696 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=right x=268 y=412 width=488 height=340 layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=right x=520 y=56 width=488 height=696 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=center-column changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: column centered kind=TERMINAL x=268 offset=-252 layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=expand-column-to-available-width changed=true workspace=1 name=main focused=0" "${serial_log}"
@@ -410,6 +438,10 @@ test -s "${repo_dir}/evidence/niri-preset-window-height.ppm"
 test -s "${repo_dir}/evidence/niri-window-moved-up.ppm"
 test -s "${repo_dir}/evidence/niri-window-focus-up.ppm"
 test -s "${repo_dir}/evidence/niri-column-expelled.ppm"
+test -s "${repo_dir}/evidence/niri-consume-or-expel-left-stacked.ppm"
+test -s "${repo_dir}/evidence/niri-consume-or-expel-left-expelled.ppm"
+test -s "${repo_dir}/evidence/niri-consume-or-expel-right-stacked.ppm"
+test -s "${repo_dir}/evidence/niri-consume-or-expel-right-expelled.ppm"
 test -s "${repo_dir}/evidence/niri-column-centered.ppm"
 test -s "${repo_dir}/evidence/niri-column-maximized.ppm"
 test -s "${repo_dir}/evidence/niri-preset-column-width.ppm"
@@ -451,6 +483,14 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-window-focus-up.png"
     pnmtopng "${repo_dir}/evidence/niri-column-expelled.ppm" \
         >"${repo_dir}/evidence/niri-column-expelled.png"
+    pnmtopng "${repo_dir}/evidence/niri-consume-or-expel-left-stacked.ppm" \
+        >"${repo_dir}/evidence/niri-consume-or-expel-left-stacked.png"
+    pnmtopng "${repo_dir}/evidence/niri-consume-or-expel-left-expelled.ppm" \
+        >"${repo_dir}/evidence/niri-consume-or-expel-left-expelled.png"
+    pnmtopng "${repo_dir}/evidence/niri-consume-or-expel-right-stacked.ppm" \
+        >"${repo_dir}/evidence/niri-consume-or-expel-right-stacked.png"
+    pnmtopng "${repo_dir}/evidence/niri-consume-or-expel-right-expelled.ppm" \
+        >"${repo_dir}/evidence/niri-consume-or-expel-right-expelled.png"
     pnmtopng "${repo_dir}/evidence/niri-column-centered.ppm" \
         >"${repo_dir}/evidence/niri-column-centered.png"
     pnmtopng "${repo_dir}/evidence/niri-column-maximized.ppm" \

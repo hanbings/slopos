@@ -30,6 +30,8 @@ binds {
     Mod+Ctrl+J { move-window-down; }
     Mod+Comma { consume-window-into-column; }
     Mod+Period { expel-window-from-column; }
+    Mod+BracketLeft { consume-or-expel-window-left; }
+    Mod+BracketRight { consume-or-expel-window-right; }
     Mod+Minus { set-column-width "-10%"; }
     Mod+Equal { set-column-width "+10%"; }
     Mod+Shift+Minus { set-window-height "-10%"; }
@@ -64,6 +66,7 @@ layout {
         proportion 0.5
         proportion 0.667
     }
+    always-center-single-column
     default-column-width { proportion 0.5; }
 
     focus-ring {

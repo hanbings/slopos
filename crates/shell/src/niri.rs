@@ -3,7 +3,7 @@
 use crate::{ColumnWidth, ColumnWidthChange, LayoutConfig, LayoutError, Rect, ScrollLayout};
 
 pub const MAX_NIRI_WORKSPACES: usize = 8;
-pub const MAX_NIRI_BINDINGS: usize = 40;
+pub const MAX_NIRI_BINDINGS: usize = 64;
 pub const MAX_NIRI_WINDOW_RULES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +70,8 @@ pub enum NiriAction<'a> {
     MoveColumnToWorkspace(WorkspaceReference<'a>),
     ConsumeWindowIntoColumn,
     ExpelWindowFromColumn,
+    ConsumeOrExpelWindowLeft,
+    ConsumeOrExpelWindowRight,
     SwitchPresetColumnWidth,
     SwitchPresetColumnWidthBack,
     SwitchPresetWindowHeight,
@@ -488,6 +490,8 @@ impl<'a> ShellConfigParser<'a> {
             }
             "consume-window-into-column" => NiriAction::ConsumeWindowIntoColumn,
             "expel-window-from-column" => NiriAction::ExpelWindowFromColumn,
+            "consume-or-expel-window-left" => NiriAction::ConsumeOrExpelWindowLeft,
+            "consume-or-expel-window-right" => NiriAction::ConsumeOrExpelWindowRight,
             "switch-preset-column-width" => NiriAction::SwitchPresetColumnWidth,
             "switch-preset-column-width-back" => NiriAction::SwitchPresetColumnWidthBack,
             "switch-preset-window-height" => NiriAction::SwitchPresetWindowHeight,
@@ -642,6 +646,8 @@ fn parse_binding_key(value: &str) -> Result<BindingKey, NiriConfigError> {
         "Equal" => Ok(BindingKey::Equal),
         "Comma" => Ok(BindingKey::Character(b',')),
         "Period" | "Dot" => Ok(BindingKey::Character(b'.')),
+        "BracketLeft" => Ok(BindingKey::Character(b'[')),
+        "BracketRight" => Ok(BindingKey::Character(b']')),
         _ if value.len() == 1 => Ok(BindingKey::Character(
             value.as_bytes()[0].to_ascii_uppercase(),
         )),
@@ -932,6 +938,14 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].expel_window_from_column()
     }
 
+    pub fn consume_or_expel_focused_window_left(&mut self) -> bool {
+        self.layouts[self.active].consume_or_expel_focused_window_left()
+    }
+
+    pub fn consume_or_expel_focused_window_right(&mut self) -> bool {
+        self.layouts[self.active].consume_or_expel_focused_window_right()
+    }
+
     pub fn scroll_by(&mut self, delta: i32) {
         self.layouts[self.active].scroll_by(delta);
     }
@@ -1115,6 +1129,8 @@ mod tests {
                 Mod+Ctrl+J { move-window-down; }
                 Mod+Comma { consume-window-into-column; }
                 Mod+Period { expel-window-from-column; }
+                Mod+BracketLeft { consume-or-expel-window-left; }
+                Mod+BracketRight { consume-or-expel-window-right; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
                 Mod+Shift+Minus { set-window-height "-10%"; }
@@ -1148,7 +1164,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 30);
+        assert_eq!(config.bindings.len(), 32);
         assert_eq!(
             config
                 .bindings
@@ -1324,6 +1340,18 @@ mod tests {
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Character(b'.')),
             Some(NiriAction::ExpelWindowFromColumn)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b'[')),
+            Some(NiriAction::ConsumeOrExpelWindowLeft)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Character(b']')),
+            Some(NiriAction::ConsumeOrExpelWindowRight)
         );
         assert_eq!(
             config
