@@ -751,6 +751,9 @@ async fn load_and_run_init(
                 complete_process_close(&mut open_files, request)
             }
             crate::process::ProcessEvent::Yielded { pid } => crate::process::schedule_next(pid),
+            crate::process::ProcessEvent::Preempted { pid, tick, count } => {
+                crate::process::schedule_after_preemption(pid, tick, count)
+            }
             crate::process::ProcessEvent::Waiting { pid } => crate::process::schedule_next(pid),
             crate::process::ProcessEvent::Exited { pid } => {
                 release_exited_process_files(device, &mut open_files, pid);

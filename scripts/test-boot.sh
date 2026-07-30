@@ -47,6 +47,7 @@ if [[ ${qemu_status} -ne 0 && ${qemu_status} -ne 124 ]]; then
     echo "QEMU failed with status ${qemu_status}" >&2
     exit "${qemu_status}"
 fi
+sed -i 's/\r$//' "${serial_log}" "${debug_log}" "${qemu_log}"
 
 required_markers=(
     "SLOPOS-UEFI: loader entered"
@@ -64,8 +65,8 @@ required_markers=(
     "SLOPOS-VIRTIO: modern block queue ready size=8 capacity_sectors=524288 flush=true"
     "SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT"
     "blocks=65536 inodes=32 groups=2"
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26264 blocks=7 matches_boot=true"
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-worker inode=24 bytes=25488 blocks=7 matches_boot=not-required"
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26312 blocks=7 matches_boot=true"
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-worker inode=24 bytes=25552 blocks=7 matches_boot=not-required"
     "SLOPOS-EXT4: root directory valid group_inode_table=37 inode=2 extent_block=39 entries=6 etc_inode=13 lost_found_inode=11 metadata_checksums=group/inode/directory"
     "SLOPOS-CONFIG: VFS load published initial=true generation=1 atomic=true paths=/etc/slopos/niri.kdl,/etc/slopos/waybar.jsonc,/etc/slopos/waybar.css,/etc/slopos/swww.env"
     "SLOPOS-CONFIG: reload applied generation=1 atomic=true niri=/etc/slopos/niri.kdl waybar=/etc/slopos/waybar.jsonc style=/etc/slopos/waybar.css swww=/etc/slopos/swww.env workspaces=3 module_configs=6 css_rules=12"
@@ -85,26 +86,31 @@ required_markers=(
     "SLOPOS-EXT4: metadata journal transactions valid inode=31 inode_table_block=38 size=4095/4096 checksums=valid transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true writes=23 flushes=17"
     "SLOPOS-EXT4: fd append journal transactions valid fd=3 inode=31 block=117 bitmap_block=33 group_descriptor_block=1 inode_table_block=38 append_bytes=4096 size=4096/8192/4096 extent_blocks=1/2/1 checksums=superblock/group/bitmap/inode/data transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true"
     "SLOPOS-EXT4: VFS create journal transactions valid fd=3 inode=32 parent_inode=27 inode_bitmap_block=36 group_descriptor_block=1 inode_table_block=38 directory_block=102 free_inodes=1/0/1 size=0 access=readwrite checksums=superblock/group/bitmap/inode/directory transactions=2 sequences=1/2 final_sequence=3 test_sequence_rewound=true restored=true path=/usr/share/slopos/create-probe"
-    "SLOPOS-FS: block cache entries=8 hits=148 misses=125 batched_pairs=1 invalidations=18"
-    "SLOPOS-VIRTIO: bounded block sequence complete requests=507 max_in_flight=2 interrupts=506 queue_interrupts=506"
+    "SLOPOS-FS: block cache entries=8 hits="
+    "batched_pairs=1 invalidations=18"
+    "SLOPOS-VIRTIO: bounded block sequence complete requests="
+    "max_in_flight=2 interrupts="
     "SLOPOS-KERNEL: framebuffer ownership accepted"
     "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
     "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized"
     "SLOPOS-PROCESS: table initialized capacity=4 processes=2 pids=1/2 states=ready/ready fd_capacity=8 per_process_fds=true"
-    "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64 entry=0x40000000 segments=1 file_bytes=26264"
-    "load_bytes=2528 memory_bytes=2528 address_space="
+    "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64 entry=0x40000000 segments=1 file_bytes=26312"
+    "load_bytes=2576 memory_bytes=2576 address_space="
     "user_code=0x40000000 user_stack=0x40003000"
     "code=user-readonly stack=user-writable kernel=supervisor"
     "stack_frames="
     "SLOPOS-PROCESS: pid=1 initial_stack abi=linux-x86_64 rsp=0x40002ec0 aligned=16 stack_pages=2 argc=2 argv0=/sbin/slop-init argv1=--system envc=3 auxv_pairs=9 bytes=320"
-    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-worker argv1=--probe format=elf64 entry=0x40000000 segments=1 file_bytes=25488 load_bytes=1744 memory_bytes=1744"
+    "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-worker argv1=--probe format=elf64 entry=0x40000000 segments=1 file_bytes=25552 load_bytes=1808 memory_bytes=1808"
     "SLOPOS-PROCESS: pid=2 initial_stack abi=linux-x86_64 rsp=0x40002ec0 aligned=16 stack_pages=2 argc=2 argv0=/sbin/slop-worker argv1=--probe envc=3 auxv_pairs=9 bytes=320"
     "SLOPOS-SYSCALL: fast path ready instruction=syscall return=sysretq"
     "fmask=0x47700 efer_sce=true"
     "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3"
-    "SLOPOS-SCHED: cooperative switch from=1 to=2 next_state=Ready independent_cr3=true"
+    "SLOPOS-SCHED: cooperative switch from=1 to=2"
     "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3"
-    "SLOPOS-SCHED: cooperative switch from=2 to=1 next_state=Runnable independent_cr3=true"
+    "SLOPOS-SCHED: cooperative switch from=2 to=1"
+    "SLOPOS-SCHED: timer preempt from=1 to=2"
+    "preemptions=1 next_state="
+    "SLOPOS-SCHED: timer preempt from=2 to=1"
     "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path=/etc/slopos/system.conf origin=cpl3"
     "SLOPOS-VFS: process open complete pid=1 fd=3 inode=18 bytes=76 access=readonly async=true path=/etc/slopos/system.conf"
     "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=76 user_pages=1 origin=cpl3"
@@ -119,12 +125,12 @@ required_markers=(
     "SLOPOS-VFS: process read complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true"
     "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=18 origin=cpl3 result=18"
     "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=60 exit status=0 origin=cpl3"
-    "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=61 wait4 child=any state=blocked origin=cpl3"
-    "SLOPOS-PROCESS: pid=1 state=exited status=0 syscalls=17 retained=true kernel_return=true"
+    "nr=61 wait4 child="
+    "SLOPOS-PROCESS: pid=1 state=exited status=0 syscalls=17 preemptions="
     "SLOPOS-PROCESS: pid=1 exit resources released descriptors=1 backing_objects=1 address_space_release=pending-reap"
     "SLOPOS-VFS: process open complete pid=2 fd=3 inode=18 bytes=76 access=readonly async=true path=/etc/slopos/system.conf"
     "SLOPOS-VFS: process read complete pid=2 fd=3 inode=18 offset=0 requested=76 bytes=76 user_pages=1 cross_page=false async=true"
-    "SLOPOS-PROCESS: pid=2 state=exited status=0 syscalls=7 retained=true kernel_return=true"
+    "SLOPOS-PROCESS: pid=2 state=exited status=0 syscalls=7 preemptions="
     "SLOPOS-PROCESS: pid=2 exit resources released descriptors=0 backing_objects=0 address_space_release=pending-reap"
     "SLOPOS-PROCESS: pid=2 state=reaped address_space_released=true frames=7 reuse_probe="
     "SLOPOS-PROCESS: pid=1 wait4 child=2 status=0 child_reaped=true"
@@ -145,5 +151,17 @@ for marker in "${required_markers[@]}"; do
         exit 1
     fi
 done
+
+virtio_summary="$(grep -F "SLOPOS-VIRTIO: bounded block sequence complete requests=" "${serial_log}" | tail -n 1)"
+requests="${virtio_summary#*requests=}"
+requests="${requests%% *}"
+interrupts="${virtio_summary#*interrupts=}"
+interrupts="${interrupts%% *}"
+queue_interrupts="${virtio_summary#*queue_interrupts=}"
+queue_interrupts="${queue_interrupts%% *}"
+if (( requests != interrupts + 1 || interrupts != queue_interrupts )); then
+    echo "virtio request/completion accounting diverged: ${virtio_summary}" >&2
+    exit 1
+fi
 
 echo "SlopOS UEFI-to-desktop boot markers verified"

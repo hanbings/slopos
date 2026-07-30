@@ -82,7 +82,7 @@ if [[ ${injection_status} -ne 0 && ${injection_status} -ne 124 ]]; then
     exit "${injection_status}"
 fi
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26264 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26312 blocks=7 matches_boot=true" \
     "${injection_serial}"
 grep -Fq \
     "SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/117 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5" \
@@ -125,7 +125,7 @@ if [[ ${replay_status} -ne 0 && ${replay_status} -ne 124 ]]; then
     exit "${replay_status}"
 fi
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26264 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26312 blocks=7 matches_boot=true" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64" \
@@ -133,6 +133,8 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-worker argv1=--probe format=elf64" \
     "${replay_serial}"
+grep -Fq "SLOPOS-SCHED: timer preempt from=1 to=2" "${replay_serial}"
+grep -Fq "SLOPOS-SCHED: timer preempt from=2 to=1" "${replay_serial}"
 grep -Fq \
     "SLOPOS-VFS: process read complete pid=1 fd=3 inode=18 offset=0 requested=76 bytes=76 user_pages=1 cross_page=false async=true" \
     "${replay_serial}"
@@ -151,9 +153,18 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-EXT4: journal superblock valid inode=8 physical_block=32801 blocks=4096 first=1 sequence=2 start=0" \
     "${replay_serial}"
-grep -Fq \
-    "SLOPOS-VIRTIO: bounded block sequence complete requests=542 max_in_flight=2 interrupts=541 queue_interrupts=541" \
-    "${replay_serial}"
+virtio_summary="$(grep -F "SLOPOS-VIRTIO: bounded block sequence complete requests=" "${replay_serial}" | tail -n 1)"
+requests="${virtio_summary#*requests=}"
+requests="${requests%% *}"
+interrupts="${virtio_summary#*interrupts=}"
+interrupts="${interrupts%% *}"
+queue_interrupts="${virtio_summary#*queue_interrupts=}"
+queue_interrupts="${queue_interrupts%% *}"
+queue_interrupts="${queue_interrupts//$'\r'/}"
+if (( requests != interrupts + 1 || interrupts != queue_interrupts )); then
+    echo "journal replay virtio accounting diverged: ${virtio_summary}" >&2
+    exit 1
+fi
 grep -Fq "SLOPOS-DESKTOP: interactive compositor loop entered windows=3" "${replay_serial}"
 if grep -Fq "FATAL" "${replay_serial}"; then
     echo "journal replay boot reached a fatal path" >&2
@@ -205,7 +216,7 @@ sed -i 's/\r$//' \
 restore_clean_artifacts
 trap - EXIT
 clean_hash="$(sha256sum "${root_image}" | awk '{print $1}')"
-if [[ "${clean_hash}" != "aca219563969cb6238603a9225361e8242cd3c446c3d3581ab0ce8e5ca53c491" ]]; then
+if [[ "${clean_hash}" != "c2f5c180d64f1ef45883c47258bfb794e344bbab2bd9c9d4e6623f007a1d1125" ]]; then
     echo "journal replay cleanup did not restore the reproducible root image" >&2
     exit 1
 fi

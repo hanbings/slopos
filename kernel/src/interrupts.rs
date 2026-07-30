@@ -261,9 +261,22 @@ unsafe fn configure_pit() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn slopos_timer_handler() {
-    crate::timer::interrupt_tick();
+extern "C" fn slopos_timer_handler(frame: *const u64) -> u64 {
+    let tick = crate::timer::interrupt_tick();
+    // The assembly stub saved 15 GPRs before the hardware frame, so CS is
+    // word 16. Only a CPL3 frame also contains user RSP/SS and is large enough
+    // to view as InterruptFrame.
+    let user_cs = unsafe { frame.add(16).read() };
+    let preempted = if user_cs & 3 == 3 {
+        // SAFETY: a privilege-changing interrupt pushes RIP/CS/RFLAGS/RSP/SS
+        // after the 15 registers saved by the timer stub.
+        let frame = unsafe { &*frame.cast::<crate::process::InterruptFrame>() };
+        crate::process::preempt_from_timer(frame, tick)
+    } else {
+        false
+    };
     crate::apic::end_of_interrupt();
+    u64::from(preempted)
 }
 
 #[unsafe(no_mangle)]
@@ -348,10 +361,9 @@ unsafe extern "C" {
     fn slopos_spurious_interrupt();
 }
 
-// Each stub saves all SysV caller-clobbered integer registers, realigns an
-// arbitrary interrupted stack for a Rust call, invokes a bounded top half, and
-// restores the exact interrupted context before IRETQ. IRQ gates run at ring 0
-// and do not switch GS or privilege stacks in this phase.
+// Device IRQ stubs save all SysV caller-clobbered integer registers, realign an
+// arbitrary interrupted stack for a Rust call, invoke a bounded top half, and
+// restore the exact interrupted context before IRETQ.
 global_asm!(
     r#"
     .macro SLOPOS_IRQ_STUB name, handler
@@ -387,7 +399,6 @@ global_asm!(
     .size \name, .-\name
     .endm
 
-    SLOPOS_IRQ_STUB slopos_timer_interrupt, slopos_timer_handler
     SLOPOS_IRQ_STUB slopos_keyboard_interrupt, slopos_keyboard_handler
     SLOPOS_IRQ_STUB slopos_virtio_interrupt, slopos_virtio_handler
     SLOPOS_IRQ_STUB slopos_mouse_interrupt, slopos_mouse_handler
@@ -397,6 +408,61 @@ global_asm!(
 slopos_spurious_interrupt:
     iretq
     .size slopos_spurious_interrupt, .-slopos_spurious_interrupt
+"#
+);
+
+// The timer needs every user GPR. A CPL3 tick may return normally through
+// IRETQ, or abandon the TSS privilege stack after Rust saved the frame and jump
+// to the process assembly continuation on the block-task kernel stack.
+global_asm!(
+    r#"
+    .global slopos_timer_interrupt
+    .type slopos_timer_interrupt, @function
+slopos_timer_interrupt:
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    cld
+    mov rdx, rsp
+    and rsp, -16
+    sub rsp, 16
+    mov [rsp], rdx
+    mov rdi, rdx
+    call slopos_timer_handler
+    mov rsp, [rsp]
+    test rax, rax
+    jnz slopos_timer_preempted
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+    iretq
+slopos_timer_preempted:
+    jmp slopos_return_to_kernel
+    .size slopos_timer_interrupt, .-slopos_timer_interrupt
 "#
 );
 

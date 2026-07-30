@@ -38,6 +38,7 @@ const O_RDWR: u64 = 2;
 const SEEK_SET: u64 = 0;
 const STDOUT: u64 = 1;
 const EXPECTED_FD: i64 = 3;
+const PREEMPTION_TSC_WINDOW: u64 = 100_000_000;
 static MESSAGE: &[u8; 18] = b"SLOPOS user write\n";
 static CONFIG_PATH: &[u8; 24] = b"/etc/slopos/system.conf\0";
 static EXPECTED_CONFIG: &[u8; 76] =
@@ -71,6 +72,7 @@ pub extern "C" fn slopos_init_main(initial_stack: *const u64) -> ! {
     if !initial_stack_is_valid(initial_stack) || syscall0(SYS_SCHED_YIELD) != 0 {
         exit(9);
     }
+    exercise_preemption();
     let fd = syscall4(
         SYS_OPENAT,
         AT_FDCWD as u64,
@@ -178,6 +180,29 @@ pub extern "C" fn slopos_init_main(initial_stack: *const u64) -> ! {
     } else {
         10
     })
+}
+
+fn exercise_preemption() {
+    let start = read_timestamp_counter();
+    while read_timestamp_counter().wrapping_sub(start) < PREEMPTION_TSC_WINDOW {
+        core::hint::spin_loop();
+    }
+}
+
+fn read_timestamp_counter() -> u64 {
+    let low: u32;
+    let high: u32;
+    // SAFETY: TSC is architectural on x86-64 and the instruction has no
+    // memory or stack side effects.
+    unsafe {
+        asm!(
+            "rdtsc",
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    (u64::from(high) << 32) | u64::from(low)
 }
 
 fn initial_stack_is_valid(initial_stack: *const u64) -> bool {

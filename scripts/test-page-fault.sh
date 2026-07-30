@@ -48,8 +48,12 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "${ovmf_vars}"
     -monitor stdio \
     -no-reboot >/dev/null
 
+sed -i 's/\r$//' \
+    "${serial_log}" \
+    "${repo_dir}/evidence/page-fault-uefi-debugcon.log"
+
 grep -Fq \
-    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26264 blocks=7 matches_boot=true" \
+    "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26312 blocks=7 matches_boot=true" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64" \
@@ -57,6 +61,8 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-worker argv1=--probe format=elf64" \
     "${serial_log}"
+grep -Fq "SLOPOS-SCHED: timer preempt from=1 to=2" "${serial_log}"
+grep -Fq "SLOPOS-SCHED: timer preempt from=2 to=1" "${serial_log}"
 grep -Fq \
     "SLOPOS-VFS: process read complete pid=1 fd=3 inode=18 offset=0 requested=76 bytes=76 user_pages=1 cross_page=false async=true" \
     "${serial_log}"

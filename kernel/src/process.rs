@@ -57,6 +57,8 @@ const IA32_FMASK: u32 = 0xc000_0084;
 const EFER_SYSCALL_ENABLE: u64 = 1;
 const KERNEL_CODE_SELECTOR: u64 = 0x08;
 const SYSRET_SELECTOR_BASE: u64 = 0x10;
+const USER_DATA_SELECTOR: u64 = 0x1b;
+const USER_CODE_SELECTOR: u64 = 0x23;
 const STAR_VALUE: u64 = (SYSRET_SELECTOR_BASE << 48) | (KERNEL_CODE_SELECTOR << 32);
 const RFLAGS_RESERVED_ONE: u64 = 1 << 1;
 const RFLAGS_INTERRUPT_ENABLE: u64 = 1 << 9;
@@ -181,6 +183,7 @@ pub enum ProcessEvent {
     Write(WriteRequest),
     Close(CloseRequest),
     Yielded { pid: u32 },
+    Preempted { pid: u32, tick: u64, count: u64 },
     Waiting { pid: u32 },
     Exited { pid: u32 },
 }
@@ -196,8 +199,8 @@ static PENDING_SYSCALLS: PendingSyscallStorage =
 
 struct CurrentProcessStorage(UnsafeCell<Option<u32>>);
 
-// Only the active CPL3 context and its IF-masked syscall entry read/write this
-// value; block-task scheduling runs after the assembly continuation returns.
+// Only the active CPL3 context and its IF-masked syscall/timer entries read
+// this value; block-task scheduling runs after the continuation returns.
 unsafe impl Sync for CurrentProcessStorage {}
 
 static CURRENT_PROCESS: CurrentProcessStorage = CurrentProcessStorage(UnsafeCell::new(None));
@@ -224,6 +227,43 @@ struct SyscallFrame {
     user_rflags: u64,
     user_rsp: u64,
 }
+
+#[repr(C)]
+pub(crate) struct InterruptFrame {
+    r15: u64,
+    r14: u64,
+    r13: u64,
+    r12: u64,
+    r11: u64,
+    r10: u64,
+    r9: u64,
+    r8: u64,
+    rbp: u64,
+    rdi: u64,
+    rsi: u64,
+    rdx: u64,
+    rcx: u64,
+    rbx: u64,
+    rax: u64,
+    user_rip: u64,
+    user_cs: u64,
+    user_rflags: u64,
+    user_rsp: u64,
+    user_ss: u64,
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<SyscallFrame>() == 144);
+    assert!(core::mem::offset_of!(SyscallFrame, user_rip) == 120);
+    assert!(core::mem::offset_of!(SyscallFrame, user_rflags) == 128);
+    assert!(core::mem::offset_of!(SyscallFrame, user_rsp) == 136);
+    assert!(core::mem::size_of::<InterruptFrame>() == 160);
+    assert!(core::mem::offset_of!(InterruptFrame, user_rip) == 120);
+    assert!(core::mem::offset_of!(InterruptFrame, user_cs) == 128);
+    assert!(core::mem::offset_of!(InterruptFrame, user_rflags) == 136);
+    assert!(core::mem::offset_of!(InterruptFrame, user_rsp) == 144);
+    assert!(core::mem::offset_of!(InterruptFrame, user_ss) == 152);
+};
 
 const EMPTY_SYSCALL_FRAME: SyscallFrame = SyscallFrame {
     r15: 0,
@@ -254,6 +294,20 @@ unsafe impl Sync for SyscallFrameStorage {}
 
 static SAVED_SYSCALL_FRAMES: SyscallFrameStorage =
     SyscallFrameStorage(UnsafeCell::new([EMPTY_SYSCALL_FRAME; PROCESS_CAPACITY]));
+
+struct PreemptionStorage {
+    counts: UnsafeCell<[u64; PROCESS_CAPACITY]>,
+    ticks: UnsafeCell<[u64; PROCESS_CAPACITY]>,
+}
+
+// The timer IRQ is the only writer while a process is running; the block-task
+// continuation reads the selected PID only after the IRQ returned to it.
+unsafe impl Sync for PreemptionStorage {}
+
+static PREEMPTIONS: PreemptionStorage = PreemptionStorage {
+    counts: UnsafeCell::new([0; PROCESS_CAPACITY]),
+    ticks: UnsafeCell::new([0; PROCESS_CAPACITY]),
+};
 
 pub fn start_processes(
     init_image: &[u8],
@@ -461,14 +515,108 @@ pub fn close_all_files(pid: u32) -> Result<usize, ProcessError> {
     process_table_mut().close_all_files(pid)
 }
 
+pub(crate) fn preempt_from_timer(frame: &InterruptFrame, tick: u64) -> bool {
+    let pid = current_process()
+        .unwrap_or_else(|| crate::fatal("CPL3 timer interrupt has no current process"));
+    let process = process_table()
+        .snapshot(pid)
+        .unwrap_or_else(|_| crate::fatal("timer interrupt process disappeared"));
+    if process.state != ProcessState::Running
+        || frame.user_cs != USER_CODE_SELECTOR
+        || frame.user_ss != USER_DATA_SELECTOR
+        || frame.user_rip < process.image.user_memory_start
+        || frame.user_rip >= process.image.user_memory_end
+        || frame.user_rsp < crate::paging::USER_STACK_BASE
+        || frame.user_rsp > process.image.stack_top
+        || frame.user_rflags & RFLAGS_RESERVED_ONE == 0
+    {
+        crate::fatal("timer interrupt user context failed validation");
+    }
+    if process_table().next_schedulable_after(pid).is_none() {
+        return false;
+    }
+    if pending_syscall(pid).is_some() {
+        crate::fatal("running process was preempted with a pending syscall");
+    }
+    let user_rflags =
+        (frame.user_rflags & !RFLAGS_USER_CLEAR) | RFLAGS_RESERVED_ONE | RFLAGS_INTERRUPT_ENABLE;
+    let saved = SyscallFrame {
+        r15: frame.r15,
+        r14: frame.r14,
+        r13: frame.r13,
+        r12: frame.r12,
+        r11: frame.r11,
+        r10: frame.r10,
+        r9: frame.r9,
+        r8: frame.r8,
+        rbp: frame.rbp,
+        rdi: frame.rdi,
+        rsi: frame.rsi,
+        rdx: frame.rdx,
+        rcx: frame.rcx,
+        rbx: frame.rbx,
+        rax: frame.rax,
+        user_rip: frame.user_rip,
+        user_rflags,
+        user_rsp: frame.user_rsp,
+    };
+    let index = pid_index(pid);
+    // SAFETY: this IF-masked timer top half exclusively owns the running
+    // process frame and its per-PID preemption counters.
+    unsafe {
+        (*SAVED_SYSCALL_FRAMES.0.get())[index] = saved;
+        let counts = &mut *PREEMPTIONS.counts.get();
+        counts[index] = counts[index]
+            .checked_add(1)
+            .unwrap_or_else(|| crate::fatal("process preemption counter overflow"));
+        (*PREEMPTIONS.ticks.get())[index] = tick;
+    }
+    process_table_mut()
+        .mark_runnable(pid)
+        .unwrap_or_else(|_| crate::fatal("timer running-to-runnable transition failed"));
+    true
+}
+
 pub fn reap_exited_process(pid: u32) -> Option<ProcessEvent> {
+    let process = process_table()
+        .snapshot(pid)
+        .unwrap_or_else(|_| crate::fatal("exited process disappeared before reap decision"));
+    if process.state != ProcessState::Exited {
+        crate::fatal("only an exited process can reach reap decision");
+    }
+    let Some(parent) = process.parent else {
+        release_exited_process(pid);
+        return None;
+    };
+    let request = match pending_syscall(parent) {
+        Some(PendingSyscall::Wait(request)) if request.pid == parent => request,
+        _ => {
+            crate::serial::serialln(format_args!(
+                "SLOPOS-PROCESS: pid={pid} state=zombie parent={parent} child_reap=deferred"
+            ));
+            return None;
+        }
+    };
+    let exit_status = release_exited_process(pid);
+    write_wait_status(parent, request.status_address, exit_status);
+    clear_pending_syscall(parent);
+    saved_syscall_frame_mut(parent).rax = u64::from(pid);
+    process_table_mut()
+        .mark_runnable(parent)
+        .unwrap_or_else(|_| crate::fatal("waiting parent blocked-to-runnable transition failed"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-PROCESS: pid={parent} wait4 child={pid} status={exit_status} child_reaped=true"
+    ));
+    Some(run_process(parent))
+}
+
+fn release_exited_process(pid: u32) -> i32 {
     let process = process_table()
         .snapshot(pid)
         .unwrap_or_else(|_| crate::fatal("reaped process disappeared"));
     if process.state != ProcessState::Exited {
         crate::fatal("only an exited process can be reaped");
     }
-    let parent = process.parent;
     let exit_status = process
         .exit_status
         .unwrap_or_else(|| crate::fatal("exited process has no status"));
@@ -493,23 +641,13 @@ pub fn reap_exited_process(pid: u32) -> Option<ProcessEvent> {
     crate::serial::serialln(format_args!(
         "SLOPOS-PROCESS: pid={pid} state=reaped address_space_released=true frames={frames} reuse_probe={reuse_probe:#x}"
     ));
-    let parent = parent?;
-    let request = match pending_syscall(parent) {
-        Some(PendingSyscall::Wait(request)) if request.pid == parent => request,
-        _ => crate::fatal("exited child has no waiting parent"),
-    };
+    exit_status
+}
+
+fn write_wait_status(parent: u32, status_address: u64, exit_status: i32) {
     let wait_status = ((exit_status & 0xff) << 8).to_ne_bytes();
-    copy_to_user(parent, request.status_address, &wait_status)
+    copy_to_user(parent, status_address, &wait_status)
         .unwrap_or_else(|| crate::fatal("wait4 status destination became invalid"));
-    clear_pending_syscall(parent);
-    saved_syscall_frame_mut(parent).rax = u64::from(pid);
-    process_table_mut()
-        .mark_runnable(parent)
-        .unwrap_or_else(|_| crate::fatal("waiting parent blocked-to-runnable transition failed"));
-    crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={parent} wait4 child={pid} status={exit_status} child_reaped=true"
-    ));
-    Some(run_process(parent))
 }
 
 pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> ProcessEvent {
@@ -575,6 +713,30 @@ pub fn schedule_next(after_pid: u32) -> ProcessEvent {
         ProcessState::Ready | ProcessState::Runnable => run_process(pid),
         ProcessState::Running | ProcessState::Blocked | ProcessState::Exited => {
             crate::fatal("cooperative scheduler selected an invalid state")
+        }
+    }
+}
+
+pub fn schedule_after_preemption(after_pid: u32, tick: u64, count: u64) -> ProcessEvent {
+    let pid = process_table()
+        .next_schedulable_after(after_pid)
+        .unwrap_or_else(|| crate::fatal("preemptive scheduler found no runnable process"));
+    if pid == after_pid {
+        crate::fatal("timer preemption did not select a different process");
+    }
+    let process = process_table()
+        .snapshot(pid)
+        .unwrap_or_else(|_| crate::fatal("preemptive scheduler selected a missing process"));
+    if count == 1 {
+        crate::serial::serialln(format_args!(
+            "SLOPOS-SCHED: timer preempt from={after_pid} to={pid} tick={tick} preemptions={count} next_state={:?} independent_cr3=true",
+            process.state
+        ));
+    }
+    match process.state {
+        ProcessState::Ready | ProcessState::Runnable => run_process(pid),
+        ProcessState::Running | ProcessState::Blocked | ProcessState::Exited => {
+            crate::fatal("preemptive scheduler selected an invalid state")
         }
     }
 }
@@ -783,6 +945,20 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 frame.rax = LINUX_EFAULT as u64;
                 return 0;
             }
+            if let Some(child) = process_table().first_exited_child(pid) {
+                let exit_status = release_exited_process(child.pid);
+                write_wait_status(pid, frame.rsi, exit_status);
+                frame.rax = u64::from(child.pid);
+                crate::serial::serialln(format_args!(
+                    "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=61 wait4 child={} state=completed-immediate origin=cpl3 result={}",
+                    child.pid, child.pid
+                ));
+                crate::serial::serialln(format_args!(
+                    "SLOPOS-PROCESS: pid={pid} wait4 child={} status={exit_status} child_reaped=true",
+                    child.pid
+                ));
+                return 0;
+            }
             suspend_io_syscall(
                 pid,
                 frame,
@@ -826,16 +1002,25 @@ fn process_event_after_user(pid: u32) -> ProcessEvent {
             WORKER_PID => WORKER_EXPECTED_SYSCALLS,
             _ => crate::fatal("unknown process exited"),
         };
+        let preemptions = preemption_count(pid);
         if process.exit_status != Some(0)
             || process.syscall_count != expected_syscalls
             || pending_syscall(pid).is_some()
+            || preemptions == 0
         {
             crate::fatal("process returned without a successful process-table exit");
         }
         crate::serial::serialln(format_args!(
-            "SLOPOS-PROCESS: pid={pid} state=exited status=0 syscalls={expected_syscalls} retained=true kernel_return=true"
+            "SLOPOS-PROCESS: pid={pid} state=exited status=0 syscalls={expected_syscalls} preemptions={preemptions} retained=true kernel_return=true"
         ));
         return ProcessEvent::Exited { pid };
+    }
+    if process.state == ProcessState::Runnable && pending_syscall(pid).is_none() {
+        return ProcessEvent::Preempted {
+            pid,
+            tick: last_preemption_tick(pid),
+            count: preemption_count(pid),
+        };
     }
     match (
         process.state,
@@ -1052,8 +1237,20 @@ fn set_current_process(pid: Option<u32>) {
 }
 
 fn current_process() -> Option<u32> {
-    // SAFETY: only read by the IF-masked syscall entry of the active process.
+    // SAFETY: only read by IF-masked syscall/timer entry for the active process.
     unsafe { *CURRENT_PROCESS.0.get() }
+}
+
+fn preemption_count(pid: u32) -> u64 {
+    let index = pid_index(pid);
+    // SAFETY: the process is suspended in the block-task continuation.
+    unsafe { (*PREEMPTIONS.counts.get())[index] }
+}
+
+fn last_preemption_tick(pid: u32) -> u64 {
+    let index = pid_index(pid);
+    // SAFETY: the process is suspended in the block-task continuation.
+    unsafe { (*PREEMPTIONS.ticks.get())[index] }
 }
 
 fn pid_index(pid: u32) -> usize {
@@ -1077,19 +1274,21 @@ fn reset_process_state() {
             .0
             .get()
             .write([EMPTY_SYSCALL_FRAME; PROCESS_CAPACITY]);
+        PREEMPTIONS.counts.get().write([0; PROCESS_CAPACITY]);
+        PREEMPTIONS.ticks.get().write([0; PROCESS_CAPACITY]);
         CURRENT_PROCESS.0.get().write(None);
     }
 }
 
 fn process_table() -> &'static KernelProcessTable {
     // SAFETY: process execution is single-core; mutation only occurs before
-    // entry, inside the IF-masked handler, or while a process is suspended.
+    // entry, inside an IF-masked handler, or while a process is suspended.
     unsafe { &*PROCESS_TABLE.0.get() }
 }
 
 fn process_table_mut() -> &'static mut KernelProcessTable {
-    // SAFETY: the scheduler, IF-masked syscall handler, and block-task syscall
-    // completer are mutually exclusive writers.
+    // SAFETY: the scheduler, IF-masked syscall/timer handlers, and block-task
+    // syscall completer are mutually exclusive writers.
     unsafe { &mut *PROCESS_TABLE.0.get() }
 }
 
@@ -1289,6 +1488,11 @@ slopos_syscall_entry:
     sysretq
 
 slopos_user_exit:
+    jmp slopos_return_to_kernel
+
+    .global slopos_return_to_kernel
+    .type slopos_return_to_kernel, @function
+slopos_return_to_kernel:
     mov rax, [rip + slopos_user_kernel_cr3]
     mov cr3, rax
     mov rsp, [rip + slopos_user_kernel_rsp]
@@ -1299,6 +1503,7 @@ slopos_user_exit:
     pop rbx
     pop rbp
     ret
+    .size slopos_return_to_kernel, .-slopos_return_to_kernel
     .size slopos_syscall_entry, .-slopos_syscall_entry
 "#
 );

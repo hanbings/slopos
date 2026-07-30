@@ -7,9 +7,10 @@ use core::task::{Context, Poll};
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
 
-pub fn interrupt_tick() {
-    TICKS.fetch_add(1, Ordering::Relaxed);
+pub fn interrupt_tick() -> u64 {
+    let tick = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
     crate::executor::wake_task(crate::executor::TIMER_TASK);
+    tick
 }
 
 pub fn ticks() -> u64 {
