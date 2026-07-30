@@ -28,7 +28,7 @@ pub fn discover() -> slopos_pci::Inventory {
 }
 
 pub fn enable_memory_bus_master(device: slopos_pci::Device) {
-    let command = device.command | (1 << 1) | (1 << 2) | (1 << 10);
+    let command = (device.command | (1 << 1) | (1 << 2)) & !(1 << 10);
     let address = configuration_address(device.address, 0x04);
     // SAFETY: boot still runs with interrupts disabled, so the mechanism-1
     // address/data pair is exclusive. A 16-bit write changes only command,
@@ -37,8 +37,9 @@ pub fn enable_memory_bus_master(device: slopos_pci::Device) {
         outl(0x0cf8, address);
         outw(0x0cfc, command);
         outl(0x0cf8, address);
-        if inl(0x0cfc) as u16 & ((1 << 1) | (1 << 2)) != (1 << 1) | (1 << 2) {
-            crate::fatal("PCI memory or bus-master enable did not persist");
+        let active = inl(0x0cfc) as u16;
+        if active & ((1 << 1) | (1 << 2)) != (1 << 1) | (1 << 2) || active & (1 << 10) != 0 {
+            crate::fatal("PCI memory, bus-master, or INTx enable did not persist");
         }
     }
 }

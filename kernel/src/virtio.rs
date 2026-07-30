@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: 0BSD
 
 use core::arch::asm;
+use core::future::{Future, pending};
 use core::mem::size_of;
+use core::pin::Pin;
 use core::ptr;
-use core::sync::atomic::{Ordering, fence};
+use core::sync::atomic::{AtomicU64, Ordering, fence};
+use core::task::{Context, Poll};
 use slopos_pci::{Device, VirtioRegion};
 use slopos_virtio::{
     BLOCK_REQUEST_IN, BlockRequestHeader, Descriptor, block_read_descriptors, choose_queue_size,
@@ -29,27 +32,38 @@ const COMMON_QUEUE_NOTIFY_OFFSET: usize = 30;
 const COMMON_QUEUE_DESCRIPTOR: usize = 32;
 const COMMON_QUEUE_DRIVER: usize = 40;
 const COMMON_QUEUE_DEVICE: usize = 48;
-const AVAILABLE_NO_INTERRUPT: u16 = 1;
 const BLOCK_STATUS_OK: u8 = 0;
 const SECTOR_SIZE: usize = 512;
 const QUEUE_LIMIT: u16 = 8;
-const WAIT_LIMIT: usize = 100_000_000;
 
-pub struct BlockStats {
-    pub queue_size: u16,
-    pub capacity_sectors: u64,
-    pub sector_signature: [u8; 2],
+static ISR_BASE: AtomicU64 = AtomicU64::new(0);
+static INTERRUPT_COUNT: AtomicU64 = AtomicU64::new(0);
+static QUEUE_INTERRUPT_COUNT: AtomicU64 = AtomicU64::new(0);
+
+pub struct BlockDevice {
+    common_base: usize,
+    available_page: usize,
+    used_page: usize,
+    request_page: usize,
+    notify_address: usize,
+    queue_size: u16,
+    capacity_sectors: u64,
 }
 
 pub fn initialize_block(
     device: Device,
     common: VirtioRegion,
     notify: VirtioRegion,
+    isr: VirtioRegion,
     device_configuration: VirtioRegion,
-) -> BlockStats {
-    if common.length < 56 || notify.length < 2 || device_configuration.length < 8 {
+) -> BlockDevice {
+    if common.length < 56 || notify.length < 2 || isr.length < 1 || device_configuration.length < 8
+    {
         crate::fatal("virtio PCI capability region is too short");
     }
+    ISR_BASE.store(isr.base, Ordering::Release);
+    INTERRUPT_COUNT.store(0, Ordering::Relaxed);
+    QUEUE_INTERRUPT_COUNT.store(0, Ordering::Relaxed);
     crate::pci::enable_memory_bus_master(device);
     let common_base = common.base as usize;
 
@@ -153,47 +167,113 @@ pub fn initialize_block(
         }
 
         let available = available_page as *mut u16;
-        ptr::write_volatile(available, AVAILABLE_NO_INTERRUPT);
+        ptr::write_volatile(available, 0);
         ptr::write_volatile(available.add(2), 0);
-        fence(Ordering::Release);
-        ptr::write_volatile(available.add(1), 1);
-        fence(Ordering::SeqCst);
-
         let notify_offset = queue_notify_offset
             .checked_mul(u64::from(notify.notify_multiplier))
             .unwrap_or_else(|| fail(common_base, "virtio notify offset overflow"));
         if notify_offset + 2 > u64::from(notify.length) {
             fail(common_base, "virtio notify address is outside capability");
         }
-        ptr::write_volatile((notify.base + notify_offset) as *mut u16, 0);
-
-        let used_index = (used_page + 2) as *const u16;
-        let mut completed = false;
-        for _ in 0..WAIT_LIMIT {
-            if ptr::read_volatile(used_index) == 1 {
-                completed = true;
-                break;
-            }
-            spin();
-        }
-        if !completed {
-            fail(common_base, "virtio block request timed out");
-        }
-        fence(Ordering::Acquire);
-        if ptr::read_volatile(status) != BLOCK_STATUS_OK {
-            fail(common_base, "virtio block request returned an error");
-        }
-        let signature = [
-            ptr::read_volatile(data.add(510)),
-            ptr::read_volatile(data.add(511)),
-        ];
-        if signature != [0x55, 0xaa] {
-            fail(common_base, "virtio sector zero boot signature mismatch");
-        }
-        BlockStats {
+        let notify_address = (notify.base + notify_offset) as usize;
+        BlockDevice {
+            common_base,
+            available_page,
+            used_page,
+            request_page,
+            notify_address,
             queue_size,
             capacity_sectors,
-            sector_signature: signature,
+        }
+    }
+}
+
+pub fn submit(device: &BlockDevice) {
+    // SAFETY: initialize_block created this exclusive available ring and
+    // validated the mapped queue-notify address. The request is submitted once.
+    unsafe {
+        fence(Ordering::Release);
+        ptr::write_volatile((device.available_page + 2) as *mut u16, 1);
+        fence(Ordering::SeqCst);
+        ptr::write_volatile(device.notify_address as *mut u16, 0);
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VIRTIO: modern block request submitted queue={} capacity_sectors={}",
+        device.queue_size, device.capacity_sectors
+    ));
+}
+
+pub fn interrupt_top_half() {
+    let base = ISR_BASE.load(Ordering::Acquire);
+    if base == 0 {
+        return;
+    }
+    // SAFETY: initialize_block validated and published the mapped one-byte ISR
+    // capability before the IOAPIC route can be enabled.
+    let status = unsafe { ptr::read_volatile(base as *const u8) };
+    INTERRUPT_COUNT.fetch_add(1, Ordering::Relaxed);
+    if status & 1 != 0 {
+        QUEUE_INTERRUPT_COUNT.fetch_add(1, Ordering::Relaxed);
+        crate::executor::wake_task(crate::executor::BLOCK_TASK);
+    }
+}
+
+pub fn interrupt_counts() -> (u64, u64) {
+    (
+        INTERRUPT_COUNT.load(Ordering::Acquire),
+        QUEUE_INTERRUPT_COUNT.load(Ordering::Acquire),
+    )
+}
+
+pub async fn completion_task(device: BlockDevice) -> ! {
+    Completion { device: &device }.await;
+    fence(Ordering::Acquire);
+    let data = (device.request_page + size_of::<BlockRequestHeader>()) as *const u8;
+    // SAFETY: completion observed the used-ring update for this live request
+    // page, so device writes to data/status are now visible.
+    let signature = unsafe {
+        let status = data.add(SECTOR_SIZE);
+        if ptr::read_volatile(status) != BLOCK_STATUS_OK {
+            fail(device.common_base, "virtio block request returned an error");
+        }
+        [
+            ptr::read_volatile(data.add(510)),
+            ptr::read_volatile(data.add(511)),
+        ]
+    };
+    if signature != [0x55, 0xaa] {
+        fail(
+            device.common_base,
+            "virtio sector zero boot signature mismatch",
+        );
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VIRTIO: async block completion queue={} capacity_sectors={} sector0_signature={:02x}{:02x} interrupts={} queue_interrupts={}",
+        device.queue_size,
+        device.capacity_sectors,
+        signature[0],
+        signature[1],
+        INTERRUPT_COUNT.load(Ordering::Acquire),
+        QUEUE_INTERRUPT_COUNT.load(Ordering::Acquire)
+    ));
+    pending::<()>().await;
+    unreachable!()
+}
+
+struct Completion<'a> {
+    device: &'a BlockDevice,
+}
+
+impl Future for Completion<'_> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
+        // SAFETY: used_page is a live, exclusive split used-ring frame.
+        let used_index = unsafe { ptr::read_volatile((self.device.used_page + 2) as *const u16) };
+        if used_index == 1 && QUEUE_INTERRUPT_COUNT.load(Ordering::Acquire) != 0 {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
         }
     }
 }

@@ -77,11 +77,13 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         RootKind::Xsdt => "XSDT",
     };
     serialln(format_args!(
-        "SLOPOS-ACPI: {root_name} MADT validated cpus={} lapic={:#x} ioapics={} overrides={}",
+        "SLOPOS-ACPI: {root_name} MADT validated cpus={} lapic={:#x} ioapics={} overrides={} irq11={}/{}",
         platform.madt.enabled_processors,
         platform.madt.local_apic_address,
         platform.madt.io_apics().len(),
-        platform.madt.interrupt_overrides().len()
+        platform.madt.interrupt_overrides().len(),
+        platform.madt.isa_route(11).0,
+        platform.madt.isa_route(11).1
     ));
     serialln(format_args!(
         "SLOPOS-KERNEL: initrd available base={:#x} bytes={}",
@@ -201,15 +203,13 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
 
     verify_ebpf_runtime();
 
-    let block_stats =
-        virtio::initialize_block(virtio_block, virtio_common, virtio_notify, virtio_device);
-    serialln(format_args!(
-        "SLOPOS-VIRTIO: modern block queue={} capacity_sectors={} sector0_signature={:02x}{:02x}",
-        block_stats.queue_size,
-        block_stats.capacity_sectors,
-        block_stats.sector_signature[0],
-        block_stats.sector_signature[1]
-    ));
+    let block_device = virtio::initialize_block(
+        virtio_block,
+        virtio_common,
+        virtio_notify,
+        virtio_isr,
+        virtio_device,
+    );
 
     let mut framebuffer = match Framebuffer::new(boot_info.framebuffer) {
         Some(framebuffer) => framebuffer,
@@ -231,7 +231,7 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
             "SLOPOS-INPUT: keyboard enabled; mouse handshake incomplete"
         ));
     }
-    interrupts::initialize(&platform.madt);
+    interrupts::initialize(&platform.madt, virtio_block.interrupt_line);
 
     let mut desktop = Desktop::new(framebuffer.width(), framebuffer.height());
     desktop.render(&mut framebuffer);
@@ -242,9 +242,11 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         "SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready"
     ));
 
+    virtio::submit(&block_device);
     executor::run(
         desktop.run(&mut framebuffer, input),
         timer::diagnostics_task(),
+        virtio::completion_task(block_device),
     )
 }
 

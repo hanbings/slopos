@@ -8,7 +8,8 @@ use core::task::{Context, RawWaker, RawWakerVTable, Waker};
 
 pub const INPUT_TASK: usize = 0;
 pub const TIMER_TASK: usize = 1;
-const TASK_COUNT: usize = 2;
+pub const BLOCK_TASK: usize = 2;
+const TASK_COUNT: usize = 3;
 const ALL_TASKS: usize = (1 << TASK_COUNT) - 1;
 
 static READY_TASKS: AtomicUsize = AtomicUsize::new(0);
@@ -19,13 +20,15 @@ pub fn wake_task(task_id: usize) {
     }
 }
 
-pub fn run<F0, F1>(input_task: F0, timer_task: F1) -> !
+pub fn run<F0, F1, F2>(input_task: F0, timer_task: F1, block_task: F2) -> !
 where
     F0: Future,
     F1: Future,
+    F2: Future,
 {
     let mut input_task = pin!(input_task);
     let mut timer_task = pin!(timer_task);
+    let mut block_task = pin!(block_task);
     READY_TASKS.store(ALL_TASKS, Ordering::Release);
     crate::serial::serialln(format_args!(
         "SLOPOS-ASYNC: executor entered tasks={TASK_COUNT}"
@@ -39,6 +42,9 @@ where
         }
         if ready & (1 << TIMER_TASK) != 0 {
             poll_task(TIMER_TASK, timer_task.as_mut());
+        }
+        if ready & (1 << BLOCK_TASK) != 0 {
+            poll_task(BLOCK_TASK, block_task.as_mut());
         }
         wait_for_work();
     }

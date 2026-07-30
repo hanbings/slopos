@@ -13,6 +13,7 @@ const GENERAL_PROTECTION_VECTOR: usize = 13;
 const PAGE_FAULT_VECTOR: usize = 14;
 const TIMER_VECTOR: usize = 0x20;
 const KEYBOARD_VECTOR: usize = 0x21;
+const VIRTIO_VECTOR: usize = 0x2b;
 const MOUSE_VECTOR: usize = 0x2c;
 const SPURIOUS_VECTOR: usize = 0xff;
 
@@ -66,22 +67,23 @@ unsafe impl Sync for IdtStorage {}
 static IDT: IdtStorage = IdtStorage(UnsafeCell::new([IdtEntry::MISSING; 256]));
 static GDT: [u64; 3] = [0, 0x00af_9a00_0000_ffff, 0x00cf_9200_0000_ffff];
 
-pub fn initialize(madt: &MadtInfo) {
+pub fn initialize(madt: &MadtInfo, virtio_interrupt_line: u8) {
     // SAFETY: early kernel initialization runs once with interrupts disabled.
     unsafe {
         load_gdt();
         install_idt();
         configure_pit();
     }
-    let stats = crate::apic::initialize(madt);
+    let stats = crate::apic::initialize(madt, virtio_interrupt_line);
     crate::serial::serialln(format_args!(
-        "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized timer_hz=100 lapic_id={} ioapic_id={} redirections={} routes={}/{}/{}",
+        "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized timer_hz=100 lapic_id={} ioapic_id={} redirections={} routes={}/{}/{}/{}",
         stats.local_id,
         stats.io_id,
         stats.redirection_entries,
         stats.timer_gsi,
         stats.keyboard_gsi,
-        stats.mouse_gsi
+        stats.mouse_gsi,
+        stats.virtio_gsi
     ));
 }
 
@@ -146,6 +148,8 @@ unsafe fn install_idt() {
         (*entries)[TIMER_VECTOR] = IdtEntry::interrupt_gate(slopos_timer_interrupt as usize as u64);
         (*entries)[KEYBOARD_VECTOR] =
             IdtEntry::interrupt_gate(slopos_keyboard_interrupt as usize as u64);
+        (*entries)[VIRTIO_VECTOR] =
+            IdtEntry::interrupt_gate(slopos_virtio_interrupt as usize as u64);
         (*entries)[MOUSE_VECTOR] = IdtEntry::interrupt_gate(slopos_mouse_interrupt as usize as u64);
         (*entries)[SPURIOUS_VECTOR] =
             IdtEntry::interrupt_gate(slopos_spurious_interrupt as usize as u64);
@@ -183,6 +187,12 @@ extern "C" fn slopos_keyboard_handler() {
 #[unsafe(no_mangle)]
 extern "C" fn slopos_mouse_handler() {
     consume_ps2_irq();
+    crate::apic::end_of_interrupt();
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn slopos_virtio_handler() {
+    crate::virtio::interrupt_top_half();
     crate::apic::end_of_interrupt();
 }
 
@@ -245,6 +255,7 @@ unsafe extern "C" {
     fn slopos_page_fault();
     fn slopos_timer_interrupt();
     fn slopos_keyboard_interrupt();
+    fn slopos_virtio_interrupt();
     fn slopos_mouse_interrupt();
     fn slopos_spurious_interrupt();
 }
@@ -290,6 +301,7 @@ global_asm!(
 
     SLOPOS_IRQ_STUB slopos_timer_interrupt, slopos_timer_handler
     SLOPOS_IRQ_STUB slopos_keyboard_interrupt, slopos_keyboard_handler
+    SLOPOS_IRQ_STUB slopos_virtio_interrupt, slopos_virtio_handler
     SLOPOS_IRQ_STUB slopos_mouse_interrupt, slopos_mouse_handler
 
     .global slopos_spurious_interrupt

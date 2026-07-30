@@ -36,9 +36,10 @@ pub struct ApicStats {
     pub timer_gsi: u32,
     pub keyboard_gsi: u32,
     pub mouse_gsi: u32,
+    pub virtio_gsi: u32,
 }
 
-pub fn initialize(madt: &MadtInfo) -> ApicStats {
+pub fn initialize(madt: &MadtInfo, virtio_interrupt_line: u8) -> ApicStats {
     // SAFETY: CPUID is always available in the x86-64 execution mode.
     let features = unsafe { __cpuid(1) };
     if features.edx & (1 << 9) == 0 {
@@ -97,6 +98,11 @@ pub fn initialize(madt: &MadtInfo) -> ApicStats {
     route(madt, local_id, timer_gsi, timer_flags, 0x20);
     route(madt, local_id, keyboard_gsi, keyboard_flags, 0x21);
     route(madt, local_id, mouse_gsi, mouse_flags, 0x2c);
+    if virtio_interrupt_line == 0 || virtio_interrupt_line == 0xff {
+        crate::fatal("virtio PCI INTx line is invalid");
+    }
+    let (virtio_gsi, virtio_flags) = madt.isa_route(virtio_interrupt_line);
+    route(madt, local_id, virtio_gsi, virtio_flags, 0x2b);
 
     let first = *madt
         .io_apics()
@@ -109,6 +115,7 @@ pub fn initialize(madt: &MadtInfo) -> ApicStats {
         timer_gsi,
         keyboard_gsi,
         mouse_gsi,
+        virtio_gsi,
     }
 }
 

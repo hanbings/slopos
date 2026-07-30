@@ -20,10 +20,13 @@ pub async fn diagnostics_task() -> ! {
     let mut deadline = ticks() + 100;
     loop {
         SleepUntil { deadline }.await;
+        let (virtio_interrupts, virtio_queue_interrupts) = crate::virtio::interrupt_counts();
         crate::serial::serialln(format_args!(
-            "SLOPOS-ASYNC: timer future completed tick={} input_dropped={}",
+            "SLOPOS-ASYNC: timer future completed tick={} input_dropped={} virtio_interrupts={}/{}",
             ticks(),
-            crate::ps2::dropped_bytes()
+            crate::ps2::dropped_bytes(),
+            virtio_interrupts,
+            virtio_queue_interrupts
         ));
         deadline = deadline.saturating_add(500);
     }
