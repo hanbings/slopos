@@ -32,17 +32,17 @@ layout {
 }
 ```
 
-parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。8 项宿主测试覆盖配置拒绝边界、open/focus/scroll/stack/close 和稳定列宽。设计语义依据 [niri 默认配置](https://github.com/YaLTeR/niri/blob/main/resources/default-config.kdl)、[Layout 配置文档](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Layout) 与 [Design Principles](https://github.com/YaLTeR/niri/wiki/Development%3A-Design-Principles)。
+parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。8 项 layout 测试覆盖配置拒绝边界、open/focus/scroll/stack/close 和稳定列宽。设计语义依据 [niri 默认配置](https://github.com/YaLTeR/niri/blob/main/resources/default-config.kdl)、[Layout 配置文档](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Layout) 与 [Design Principles](https://github.com/YaLTeR/niri/wiki/Development%3A-Design-Principles)。
 
 当前 kernel desktop 用三个固定 surface 作为三列，Tab 沿列切换，鼠标标题栏横拖滚动 strip。尚未实现 workspace、多 output、floating/tabbed column、window rule、bind、animation、overview、IPC、live reload、Wayland surface 或普通用户 client。配置也尚未按 niri 的 `$XDG_CONFIG_HOME/niri/config.kdl` → `~/.config/niri/config.kdl` → `/etc/niri/config.kdl` 顺序从 VFS 加载。
 
 ## Waybar 式顶部栏
 
-当前画面已经使用 top bar，并按 left/center/right 三个区域显示 workspace、focused title 与 system status。这只是布局骨架；module 值仍由 kernel 直接提供。
+当前画面使用 top bar，并按 left/center/right 三个区域显示 workspace、focused title 与 system status。`assets/waybar-config.jsonc` 已实际决定 `position`、`height`、`spacing` 和三个 module array；kernel 依 array 顺序查询 module registry 并计算对齐位置。
 
-兼容目标是 Waybar 的 JSONC 模型：`position`、`height`、`spacing`、`modules-left`、`modules-center`、`modules-right`，以及按 module name 配置 format/interval。样式目标是可用 CSS 子集，而不是把 KDL 混入 bar 配置。字段与默认结构依据 [Waybar 官方 `config.jsonc`](https://github.com/Alexays/Waybar/blob/master/resources/config.jsonc)。
+JSONC parser 支持 `//` 与 `/* */` comment、trailing comma、未知 nested module option、最多 16 个 module/区域，并拒绝 duplicate top-level field、非法 position/number/module。3 项 parser 测试与 8 项 layout 测试由同一个 `make test-shell` 执行。字段与默认结构依据 [Waybar 官方 `config.jsonc`](https://github.com/Alexays/Waybar/blob/master/resources/config.jsonc)。
 
-尚未实现 JSONC/CSS parser、module registry、click/scroll action、per-output bar、tray、network/audio/battery backend 或 niri IPC module。
+当前 registry 只有 `niri/workspaces`、`niri/window`、`custom/launcher`、`network`、`cpu`、`memory`、`clock` 的固定 kernel provider。尚未消费每个 module 的 `format`/`interval` option，也没有 CSS parser、click/scroll action、per-output bar、tray、network/audio/battery backend 或 niri IPC module。parser 接受 bottom/left/right position，但 early framebuffer renderer 当前只允许 top。
 
 ## swww 式壁纸控制
 

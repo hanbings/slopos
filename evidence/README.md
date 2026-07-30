@@ -37,7 +37,7 @@ qemu-system-x86_64
 
 ELF parser 的宿主测试由 `make test-elf` 执行。10 项测试验证 ELF64 little-endian/x86-64/`ET_EXEC` header、program-header table、`PT_LOAD` data/BSS view，并拒绝 truncation、越界、`p_filesz > p_memsz`、非法 alignment/congruence、重叠 segment、W+X 与不属于 executable segment 的 entry。parser 无分配且 `no_std`；section header 与 dynamic linking 不参与当前装载。
 
-shell 状态机由 `make test-shell` 验证。8 项宿主测试覆盖 niri KDL layout 子集、无效 policy/width/color、column open 时既有 width/strip coordinate 不变、edge focus scroll、同列 vertical stack、close 与手动 scroll clamp。所有正常/interaction/page-fault/replay 日志在桌面前包含 `SLOPOS-SHELL: niri layout config loaded columns=3 gaps=16 default_width=50% center=never bar=top`；交互日志另有 titlebar drag 后的 view offset。`desktop.png` 显示初始 terminal/System 两列与右侧继续延伸的 strip，`window-moved.png` 显示 viewport 横移后的列。它不证明完整 niri、Waybar 或 swww 兼容性。
+shell 状态机由 `make test-shell` 验证。8 项 layout 测试覆盖 niri KDL、无效 policy/width/color、稳定 strip coordinate、edge scroll、vertical stack、close 与 clamp；3 项 Waybar 测试覆盖 JSONC comment/trailing comma、module ordering/defaults，以及 duplicate/invalid/overflow rejection。裸机 marker 记录 `niri_columns=3 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4`；交互日志另有 titlebar drag 后的 view offset。`desktop.png` 显示初始 terminal/System 两列与 JSONC 驱动的顶部 module 区，`window-moved.png` 显示 viewport 横移后的列。它不证明完整 niri、Waybar 或 swww 兼容性。
 
 eBPF 的宿主边界测试由 `make test-ebpf` 执行；裸机证据是 `serial.log` 中的 `SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42`。它只证明文档所列子集，不证明 map、attach point 或 Linux eBPF 兼容性。
 
