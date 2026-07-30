@@ -12,6 +12,7 @@ qemu_log="${repo_dir}/evidence/custom-config-qemu.log"
 workspace_screenshot="${repo_dir}/evidence/custom-config-workspace-click.ppm"
 action_screenshot="${repo_dir}/evidence/custom-config-on-click.ppm"
 right_action_screenshot="${repo_dir}/evidence/custom-config-on-click-right.ppm"
+middle_action_screenshot="${repo_dir}/evidence/custom-config-on-click-middle.ppm"
 runtime_dir="$(mktemp -d /tmp/slopos-custom-config.XXXXXX)"
 runtime_esp="${runtime_dir}/slopos-esp.img"
 runtime_root="${runtime_dir}/slopos-root.ext4"
@@ -61,6 +62,7 @@ sed \
     -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
     -e '/"clock": {/a\        "on-click": "status",' \
     -e '/"clock": {/a\        "on-click-right": "help",' \
+    -e '/"clock": {/a\        "on-click-middle": "swww query",' \
     "${repo_dir}/assets/waybar-config.jsonc" >"${custom_waybar}"
 custom_bytes="$(wc -c <"${custom_waybar}")"
 if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
@@ -102,8 +104,12 @@ set +e
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${right_action_screenshot}"
+    echo "mouse_button 4"
+    echo "mouse_button 0"
+    sleep 1
+    echo "screendump ${middle_action_screenshot}"
     echo "quit"
-} | timeout 14s qemu-system-x86_64 \
+} | timeout 16s qemu-system-x86_64 \
     -machine q35,accel=tcg \
     -cpu qemu64 \
     -m 256M \
@@ -175,12 +181,17 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-WAYBAR: module clicked name=clock button=right action=help accepted=true animate=false" \
     "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: module clicked name=clock button=middle action=swww query accepted=true animate=false" \
+    "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=ABOUT" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=HELP" "${serial_log}"
+grep -Fq "SLOPOS-TERMINAL: command=SWWW QUERY" "${serial_log}"
 test -s "${workspace_screenshot}"
 test -s "${action_screenshot}"
 test -s "${right_action_screenshot}"
+test -s "${middle_action_screenshot}"
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${workspace_screenshot}" \
         >"${repo_dir}/evidence/custom-config-workspace-click.png"
@@ -188,6 +199,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/custom-config-on-click.png"
     pnmtopng "${right_action_screenshot}" \
         >"${repo_dir}/evidence/custom-config-on-click-right.png"
+    pnmtopng "${middle_action_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-on-click-middle.png"
 fi
 
 set +e

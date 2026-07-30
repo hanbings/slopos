@@ -811,6 +811,8 @@ impl Desktop {
         let left_was_down = self.previous_buttons & 1 != 0;
         let right = event.buttons & 2 != 0;
         let right_was_down = self.previous_buttons & 2 != 0;
+        let middle = event.buttons & 4 != 0;
+        let middle_was_down = self.previous_buttons & 4 != 0;
         let mut animate = false;
 
         if left && !left_was_down {
@@ -826,6 +828,9 @@ impl Desktop {
             }
         } else if !right {
             self.resizing_column = false;
+        }
+        if middle && !middle_was_down {
+            animate |= self.pointer_middle_pressed();
         }
 
         if left && self.scrolling_view && event.dx != 0 {
@@ -932,6 +937,21 @@ impl Desktop {
             return false;
         };
         self.execute_bar_action(module, action, "right")
+    }
+
+    fn pointer_middle_pressed(&mut self) -> bool {
+        let Some(module) = self.bar_module_at(self.pointer_x, self.pointer_y) else {
+            return false;
+        };
+        let Some(action) = self
+            .bar
+            .module_configs
+            .get(module)
+            .and_then(|config| config.on_click_middle)
+        else {
+            return false;
+        };
+        self.execute_bar_action(module, action, "middle")
     }
 
     fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {

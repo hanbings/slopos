@@ -63,6 +63,7 @@ pub struct BarModuleConfig<'a> {
     pub max_length: Option<u16>,
     pub on_click: Option<&'a str>,
     pub on_click_right: Option<&'a str>,
+    pub on_click_middle: Option<&'a str>,
 }
 
 impl<'a> BarModuleConfig<'a> {
@@ -78,6 +79,7 @@ impl<'a> BarModuleConfig<'a> {
             max_length: None,
             on_click: None,
             on_click_right: None,
+            on_click_middle: None,
         }
     }
 }
@@ -599,6 +601,11 @@ impl<'a> JsonParser<'a> {
                             module.on_click_right = Some(self.module_action_value()?);
                             supported = true;
                         }
+                        "on-click-middle" => {
+                            mark_once(&mut fields, 1 << 9)?;
+                            module.on_click_middle = Some(self.module_action_value()?);
+                            supported = true;
+                        }
                         _ => self.skip_value()?,
                     }
                     match self.next() {
@@ -783,6 +790,7 @@ mod tests {
                     "max-length": 12,
                     "on-click": "status",
                     "on-click-right": "about",
+                    "on-click-middle": "swww query",
                     "calendar": { "mode": "month" }
                 },
             }
@@ -814,6 +822,7 @@ mod tests {
         assert_eq!(clock.max_length, Some(12));
         assert_eq!(clock.on_click, Some("status"));
         assert_eq!(clock.on_click_right, Some("about"));
+        assert_eq!(clock.on_click_middle, Some("swww query"));
     }
 
     #[test]
