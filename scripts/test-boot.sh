@@ -46,12 +46,13 @@ required_markers=(
     "SLOPOS-MM: kernel heap initialized"
     "SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42"
     "SLOPOS-PCI: mechanism1 devices="
-    "SLOPOS-VIRTIO: modern block queue=8"
+    "SLOPOS-VIRTIO: async block completion queue=8"
+    "sector0_signature=55aa interrupts=1 queue_interrupts=1"
     "SLOPOS-KERNEL: framebuffer ownership accepted"
     "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
     "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized"
     "SLOPOS-DESKTOP: interactive compositor loop entered"
-    "SLOPOS-ASYNC: executor entered tasks=2"
+    "SLOPOS-ASYNC: executor entered tasks=3"
     "SLOPOS-ASYNC: timer future completed"
 )
 
