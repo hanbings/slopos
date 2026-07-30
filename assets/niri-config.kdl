@@ -26,6 +26,8 @@ binds {
     Mod+Ctrl+C { move-column-to-workspace "config"; }
     Mod+K { focus-window-up; }
     Mod+J { focus-window-down; }
+    Mod+Ctrl+K { move-window-up; }
+    Mod+Ctrl+J { move-window-down; }
     Mod+Comma { consume-window-into-column; }
     Mod+Period { expel-window-from-column; }
     Mod+Minus { set-column-width "-10%"; }

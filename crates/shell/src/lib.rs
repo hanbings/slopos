@@ -411,6 +411,30 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         true
     }
 
+    pub fn move_window_up(&mut self) -> bool {
+        let column = &mut self.columns[self.focused_column];
+        if column.window_count == 0 || column.focused_window == 0 {
+            return false;
+        }
+        column
+            .windows
+            .swap(column.focused_window, column.focused_window - 1);
+        column.focused_window -= 1;
+        true
+    }
+
+    pub fn move_window_down(&mut self) -> bool {
+        let column = &mut self.columns[self.focused_column];
+        if column.window_count == 0 || column.focused_window + 1 >= column.window_count {
+            return false;
+        }
+        column
+            .windows
+            .swap(column.focused_window, column.focused_window + 1);
+        column.focused_window += 1;
+        true
+    }
+
     pub fn set_focused_column_width(&mut self, width: ColumnWidth) -> Result<(), LayoutError> {
         self.change_focused_column_width(ColumnWidthChange::Set(width))
             .map(|_| ())
@@ -1057,6 +1081,14 @@ mod tests {
         assert_eq!(top.width, bottom.width);
         assert!(bottom.y > top.y);
         assert_eq!(layout.focused_window(), Some(2));
+        assert!(layout.move_window_up());
+        assert_eq!(layout.focused_window(), Some(2));
+        assert!(layout.tile_rect(2).unwrap().y < layout.tile_rect(1).unwrap().y);
+        assert!(!layout.move_window_up());
+        assert!(layout.move_window_down());
+        assert_eq!(layout.focused_window(), Some(2));
+        assert!(layout.tile_rect(2).unwrap().y > layout.tile_rect(1).unwrap().y);
+        assert!(!layout.move_window_down());
         assert!(layout.focus_window_up());
         assert_eq!(layout.focused_window(), Some(1));
         assert!(layout.focus_window_down());

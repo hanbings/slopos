@@ -59,6 +59,8 @@ pub enum NiriAction<'a> {
     FocusWindowDown,
     MoveColumnLeft,
     MoveColumnRight,
+    MoveWindowUp,
+    MoveWindowDown,
     FocusWorkspaceUp,
     FocusWorkspaceDown,
     FocusWorkspacePrevious,
@@ -462,6 +464,8 @@ impl<'a> ShellConfigParser<'a> {
             "focus-window-down" => NiriAction::FocusWindowDown,
             "move-column-left" => NiriAction::MoveColumnLeft,
             "move-column-right" => NiriAction::MoveColumnRight,
+            "move-window-up" => NiriAction::MoveWindowUp,
+            "move-window-down" => NiriAction::MoveWindowDown,
             "focus-workspace-up" => NiriAction::FocusWorkspaceUp,
             "focus-workspace-down" => NiriAction::FocusWorkspaceDown,
             "focus-workspace-previous" => NiriAction::FocusWorkspacePrevious,
@@ -885,6 +889,14 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].move_column_right()
     }
 
+    pub fn move_window_up(&mut self) -> bool {
+        self.layouts[self.active].move_window_up()
+    }
+
+    pub fn move_window_down(&mut self) -> bool {
+        self.layouts[self.active].move_window_down()
+    }
+
     pub fn consume_window_into_column(&mut self) -> bool {
         self.layouts[self.active].consume_window_into_column()
     }
@@ -1023,6 +1035,8 @@ mod tests {
                 Mod+Tab { focus-workspace-previous; }
                 Mod+K { focus-window-up; }
                 Mod+J { focus-window-down; }
+                Mod+Ctrl+K { move-window-up; }
+                Mod+Ctrl+J { move-window-down; }
                 Mod+Comma { consume-window-into-column; }
                 Mod+Period { expel-window-from-column; }
                 Mod+Minus { set-column-width "-10%"; }
@@ -1046,7 +1060,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 16);
+        assert_eq!(config.bindings.len(), 18);
         assert_eq!(
             config
                 .bindings
@@ -1123,6 +1137,20 @@ mod tests {
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Character(b'J')),
             Some(NiriAction::FocusWindowDown)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::Character(b'K')
+            ),
+            Some(NiriAction::MoveWindowUp)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::Character(b'J')
+            ),
+            Some(NiriAction::MoveWindowDown)
         );
         assert_eq!(
             config

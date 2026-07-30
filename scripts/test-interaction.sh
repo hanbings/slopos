@@ -72,6 +72,11 @@ monitor_type() {
     echo "sendkey meta_l-comma 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-column-stacked.ppm"
+    echo "sendkey meta_l-ctrl-k 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-window-moved-up.ppm"
+    echo "sendkey meta_l-ctrl-j 50"
+    sleep 1
     echo "sendkey meta_l-k 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-window-focus-up.ppm"
@@ -243,6 +248,8 @@ grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30
 grep -Fq "SLOPOS-SWWW: clear color=1A2B3C output=*" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=move-window-up changed=true workspace=1 name=main focused=1" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=move-window-down changed=true workspace=1 name=main focused=1" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-window-up changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-window-down changed=true workspace=1 name=main focused=1" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=expel-window-from-column changed=true workspace=1 name=main focused=0" "${serial_log}"
@@ -286,6 +293,7 @@ test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
 test -s "${repo_dir}/evidence/niri-column-stacked.ppm"
+test -s "${repo_dir}/evidence/niri-window-moved-up.ppm"
 test -s "${repo_dir}/evidence/niri-window-focus-up.ppm"
 test -s "${repo_dir}/evidence/niri-column-expelled.ppm"
 test -s "${repo_dir}/evidence/window-moved.ppm"
@@ -313,6 +321,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-cleared.png"
     pnmtopng "${repo_dir}/evidence/niri-column-stacked.ppm" \
         >"${repo_dir}/evidence/niri-column-stacked.png"
+    pnmtopng "${repo_dir}/evidence/niri-window-moved-up.ppm" \
+        >"${repo_dir}/evidence/niri-window-moved-up.png"
     pnmtopng "${repo_dir}/evidence/niri-window-focus-up.ppm" \
         >"${repo_dir}/evidence/niri-window-focus-up.png"
     pnmtopng "${repo_dir}/evidence/niri-column-expelled.ppm" \

@@ -226,7 +226,7 @@ sed -i 's/\r$//' \
 restore_clean_artifacts
 trap - EXIT
 clean_hash="$(sha256sum "${root_image}" | awk '{print $1}')"
-if [[ "${clean_hash}" != "618552914b5264fd0e07bbfd76ab97fdcb01bd667f716334ea33d210d75a42fd" ]]; then
+if [[ "${clean_hash}" != "ebbd469f239b2855d59099827f4a4ca323ba7c331ba5ffbd17cc92a93df04057" ]]; then
     echo "journal replay cleanup did not restore the reproducible root image" >&2
     exit 1
 fi
