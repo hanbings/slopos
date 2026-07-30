@@ -4,7 +4,7 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=236424
+SLOPOS-UEFI: kernel file loaded bytes=236632
 SLOPOS-UEFI: kernel mapped 0x4000000..0x4025000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: Boot Services exited descriptors=117
@@ -26,7 +26,7 @@ SLOPOS-DESKTOP: interactive compositor loop entered windows=3
 SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
 SLOPOS-ASYNC: executor entered tasks=3
 SLOPOS-VIRTIO: modern block queue ready size=8 capacity_sectors=524288 flush=true
-SLOPOS-EXT4: journal recovery replayed sequence=1 start=1 target_block=98 escaped=false home_readback=true next_sequence=2 records_cleared=true recovery=false
+SLOPOS-EXT4: journal recovery replayed sequence=1 start=1 tags=5 first_target_block=0 escaped=false home_readback=true next_sequence=2 records_cleared=true recovery=false
 SLOPOS-EXT4: superblock valid label=SLOPOS_ROOT block_size=4096 blocks=65536 inodes=32 groups=2 features=0x103c/0x22c2/0x46b
 SLOPOS-EXT4: root directory valid group_inode_table=37 inode=2 extent_block=39 entries=5 etc_inode=13 lost_found_inode=11 metadata_checksums=group/inode/directory
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -68,9 +68,9 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: allocation journal transactions valid inode=25 block=99 bitmap_block=33 group_descriptor_block=1 inode_table_block=38 size=4096/8192/4096 extent_blocks=1/2/1 checksums=superblock/group/bitmap/inode transactions=2 sequences=2/3 final_sequence=4 test_sequence_rewound=true restored=true
-SLOPOS-FS: block cache entries=8 hits=72 misses=54 batched_pairs=1 invalidations=12
-SLOPOS-VIRTIO: bounded block sequence complete requests=330 max_in_flight=2 interrupts=329 queue_interrupts=329
-SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=329/329
-SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=329/329
-SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=329/329
-SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=329/329
+SLOPOS-FS: block cache entries=8 hits=70 misses=56 batched_pairs=1 invalidations=13
+SLOPOS-VIRTIO: bounded block sequence complete requests=348 max_in_flight=2 interrupts=347 queue_interrupts=347
+SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=347/347
+SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=347/347
+SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=347/347
+SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=347/347
