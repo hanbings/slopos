@@ -79,12 +79,29 @@ for logical_block in 1 3 5 7; do
         "${image}" >/dev/null 2>&1
 done
 # e2fsprogs 1.47.2 can reuse a punched data block as the new depth-1 extent
-# leaf without persisting its allocation bit. Resolve the leaf from the image
-# instead of coupling this repair to the sizes of earlier files.
-extent_leaf="$(
-    "${debugfs}" -R "stat /usr/share/slopos/deep-extent.bin" "${image}" 2>/dev/null \
-        | sed -n 's/.*(ETB0):\([0-9][0-9]*\).*/\1/p'
-)"
+# leaf without persisting its allocation bit. It can also clear the allocation
+# bits for the first punched runs before persisting their inode extent removal.
+# Reissuing one missing punch makes that interrupted mutation converge; stop as
+# soon as the depth-1 tree exists because punching an existing hole again can
+# create an unrelated orphan transaction.
+extent_stat="$("${debugfs}" -R "stat /usr/share/slopos/deep-extent.bin" "${image}" 2>/dev/null)"
+if [[ "${extent_stat}" != *"(ETB0):"* ]]; then
+    for retry_block in 1 3 5 7 1 3 5 7; do
+        "${debugfs}" \
+            -w \
+            -R "punch /usr/share/slopos/deep-extent.bin ${retry_block} ${retry_block}" \
+            "${image}" >/dev/null 2>&1
+        extent_stat="$(
+            "${debugfs}" -R "stat /usr/share/slopos/deep-extent.bin" "${image}" 2>/dev/null
+        )"
+        if [[ "${extent_stat}" == *"(ETB0):"* ]]; then
+            break
+        fi
+    done
+fi
+# Resolve the final leaf from the image instead of coupling the allocation-bit
+# repair to the sizes of earlier files.
+extent_leaf="$(sed -n 's/.*(ETB0):\([0-9][0-9]*\).*/\1/p' <<<"${extent_stat}")"
 if [[ ! "${extent_leaf}" =~ ^[0-9]+$ ]]; then
     echo "failed to resolve the depth-1 extent leaf" >&2
     exit 1
