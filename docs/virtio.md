@@ -18,7 +18,7 @@
 
 共享 `slopos-virtio` crate 的 4 项宿主测试覆盖 split-ring byte layout、power-of-two queue size、可偏移 block-read chain，以及 device-readable write/data-free flush chain。实现遵守 [OASIS VirtIO 1.3 block device operation](https://docs.oasis-open.org/virtio/virtio/v1.3/virtio-v1.3.html#x1-3080006) 的 request type、512-byte transfer 和 descriptor direction 约束。
 
-文件系统以一个双块 cache prefetch 实际同时发布两个请求；VFS partial-write、JBD2 record/state 和 active transaction probes 均串行使用 write/flush。8-entry cache 最终记录 62 hit/51 miss/4 invalidation；所有 direct journal/state I/O 绕过 cache。裸机 `make test-boot` 验证 120 个请求由 119 次 INTx/ISR/Future completion 唤醒完成。当前 root disk 为 256 MiB，即 524288 个 512-byte sector。
+文件系统以一个双块 cache prefetch 实际同时发布两个请求；VFS partial-write、JBD2 record/state 和 active data/metadata transaction probes 均串行使用 write/flush。8-entry cache 最终记录 64 hit/54 miss/5 invalidation；所有 direct journal/state I/O 绕过 cache。裸机 `make test-boot` 验证 193 个请求由 192 次 INTx/ISR/Future completion 唤醒完成。当前 root disk 为 256 MiB，即 524288 个 512-byte sector。
 
 q35 的 slot 3 INTA 映射到 PIRQ H。当前 OVMF 仍把 PIRQ H 路由到 legacy IRQ11，MADT 对 IRQ11 指定 GSI 11、flags 13；内核按这一 firmware route 配置 active-high level entry。请求必须在 entry unmask 之后提交，否则完成边沿可能在接管期间丢失。
 
