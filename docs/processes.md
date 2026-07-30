@@ -1,9 +1,10 @@
 # 首个用户进程、process table 与 fast syscall
 
-当前内核在中断子系统初始化后、桌面启动前同步运行 PID 1 probe。它的目标是验证一条最小但真实的 ELF→process table→x86-64 privilege/syscall boundary，而不是模拟用户态日志：
+当前内核在中断子系统初始化、ext4 root mount 与 journal recovery 后，由 block task 同步运行 PID 1 probe。它的目标是验证一条最小但真实的 VFS ELF→process table→x86-64 privilege/syscall boundary，而不是模拟用户态日志：
 
 - 以独立 `slopos-elf` crate 校验 little-endian x86-64 `ET_EXEC`、program-header geometry、`PT_LOAD` range/alignment/overlap/W^X 与 executable entry；
-- 由 `userspace/init` 生成独立 4848-byte Rust ELF，由 UEFI 从 `/slopos/init.elf` 读入并经 BootInfo v2 交给 kernel；
+- 由 `userspace/init` 生成独立 4848-byte Rust ELF；rootfs builder 把它安装为 `/sbin/slop-init`，kernel 的 ext4 path walker 从 inode 23 跨两个逻辑块读取全部 bytes；
+- UEFI 仍从 ESP `/slopos/init.elf` 读入 BootInfo v2 校验副本；kernel 要求 root VFS image 与该副本逐字节一致，差异会停止启动；
 - 从 ELF file offset `0x1000` 复制 66-byte `PT_LOAD`，剩余 code page 保持为零；
 - 把 image/CR3/entry/stack/user range 插入容量 4 的 `slopos-process` 表，按 `Ready → Running → Exited` 转换 PID 1，保留 exit status 与 syscall count；
 - 每个 slot 自带独立、容量 8 的 `slopos-vfs::FileDescriptorTable`；4 项宿主测试覆盖 PID/parent/capacity、非法转换、exit/reap，以及两个进程各自取得 fd 3 且 offset 互不影响；
@@ -19,9 +20,9 @@
 
 `STAR=0x10000800000000` 与当前 GDT 对应：SYSCALL 使用 kernel CS/SS `0x08/0x10`，64-bit SYSRET 生成 user CS/SS `0x23/0x1b`。`LSTAR` 指向 kernel ELF 内的 assembly entry；每次 QEMU 启动都核验 MSR readback。`FMASK` 确保 fast entry 在启用 Rust stack 前没有 IRQ/trace/direction-flag 窗口；返回前再清 user IOPL/NT/RF/VM 并恢复 reserved bit 与 IF。IDT 不再暴露 DPL3 vector `0x80`。
 
-ELF 已与 kernel 分离，但仍来自 FAT ESP/BootInfo，loader 当前只接受一个固定单页 R+X layout，尚未从 root VFS 按路径启动任意 executable。process table 与每进程 fd ownership 已存在，但当前同步 probe 仍只有一个实际 running process，fd 1 仍由 syscall handler 特判，尚未连接 root ext4 descriptor。现阶段没有：
+ELF 已与 kernel 分离，实际执行 bytes 来自 root VFS 的固定路径 `/sbin/slop-init`；ESP/BootInfo 副本目前仍是强制相等的启动信任锚，因此这不是任意路径的通用 `exec`。process table 与每进程 fd ownership 已存在，但当前同步 probe 仍只有一个实际 running process，fd 1 仍由 syscall handler 特判，尚未连接 root ext4 descriptor。现阶段没有：
 
-- 多 `PT_LOAD` page mapping、VFS `exec`、动态链接、`argv`/`envp` 或 auxiliary vector；
+- 任意路径/多 `PT_LOAD` page mapping、动态链接、`argv`/`envp` 或 auxiliary vector；
 - 通用 `copy_from_user`/`copy_to_user`、VFS read/write/open/close syscall；
 - scheduler、preemption、context switch、wait/kill/signal/TLS；
 - PID reuse policy、credential、引用计数或物理 frame/page-table 回收；

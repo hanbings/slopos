@@ -9,7 +9,7 @@
 - 每个 descriptor 保存 filesystem/node identity、file size、offset 和 read/write access mode；
 - bounded read/write window、成功后 offset advance、absolute seek 与 close。
 
-内核当前建立容量 4 的 namespace，把 ext4 注册为 filesystem 1 并挂到 `/`；容量 8 的 fd table 为 `/etc/./slopos/../slopos/system.conf` 分配只读 fd 3。裸机测试将规范化后的相对 component 交给 ext4，使用 17-byte request 分五次读完 inode 18 的 76-byte 文件，再 seek 到 offset 7 读取 11 bytes，最后 close。关闭后的 fd 3 会被复用于 inode 29 的 `ReadWrite` descriptor；它 seek 到 offset 123，写入 73 bytes，通过同一 fd 读回边界内容，再恢复原始 bytes。
+内核当前建立容量 4 的 namespace，把 ext4 注册为 filesystem 1 并挂到 `/`。mount/recovery 后，block task 先经同一个 component walker 打开 inode 23 的 `/sbin/slop-init`，跨两个逻辑块读出 4848 bytes，与 BootInfo 保留的引导副本完全匹配后把这份 VFS bytes 交给 ELF/process loader。容量 8 的 fd table 再为 `/etc/./slopos/../slopos/system.conf` 分配只读 fd 3；裸机测试使用 17-byte request 分五次读完 inode 18 的 76-byte 文件，seek 到 offset 7 读取 11 bytes，最后 close。关闭后的 fd 3 会被复用于 inode 31 的 `ReadWrite` descriptor；它 seek 到 offset 123，写入 73 bytes，通过同一 fd 读回边界内容，再恢复原始 bytes。
 
 `make test-vfs` 的 5 项宿主测试覆盖路径规范化、root/`/mnt`/`/mnt/data` 最长挂载匹配、fd offset 生命周期、EOF growth，以及 `ReadOnly`/`WriteOnly`/`ReadWrite` 权限错误。`make test-boot` 验证同一状态机驱动真实 ext4 cache 与 virtio DMA。
 
@@ -24,4 +24,4 @@ ext4 mount 后，block task 还用可失败的 component walker 按 user/system/
 - 只有 regular-file read/原位 write/seek/close，没有 directory fd、stat、dup、poll、mmap、owner/mode 权限或文件增长；
 - PID 1 的 `SYSCALL/SYSRETQ` fast path 只处理固定 stdout write/exit，尚未连接这些 fd；
 - fd write 可覆写已有 initialized block；在 descriptor 位于 EOF 时还可取得 append window，由 ext4 五-home transaction 分配一个连续 block，随后更新 node size/offset并经同一 fd 读回。truncate probe 把 offset/size 与 block metadata 一起恢复。当前只支持单块增长；create/unlink 也仍未抽象为通用 VFS namespace API。
-- create transaction checkpoint 后，path walker 将新 inode 30 转为 `FileNode`，固定表复用读写 fd 3，空文件 read 返回 EOF；close 后才执行 unlink transaction。它证明 ext4 namespace mutation 与 descriptor 生命周期相接，但尚未抽象为可复用 VFS create/unlink API。
+- create transaction checkpoint 后，path walker 将新 inode 32 转为 `FileNode`，固定表复用读写 fd 3，空文件 read 返回 EOF；close 后才执行 unlink transaction。它证明 ext4 namespace mutation 与 descriptor 生命周期相接，但尚未抽象为可复用 VFS create/unlink API。
