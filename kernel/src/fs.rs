@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: 0BSD
 
 use core::future::pending;
+use core::ptr;
 use slopos_ext4::{
     DIRECTORY_ENTRY_DIRECTORY, DIRECTORY_ENTRY_REGULAR_FILE, DirectoryBlock, Extent,
     GroupDescriptor, Inode, ROOT_INODE, SUPERBLOCK_SIZE, Superblock, validate_path_component,
@@ -11,6 +12,7 @@ use crate::virtio::BlockDevice;
 const SUPERBLOCK_SECTOR: u64 = 2;
 const SECTOR_SIZE: u64 = 512;
 const BLOCK_SIZE: usize = 4096;
+const CACHE_ENTRY_COUNT: usize = 8;
 const EXPECTED_RELEASE: &[u8] = include_bytes!("../../rootfs/etc/slopos-release");
 const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/slopos/system.conf");
 const RELEASE_PATH: [&[u8]; 2] = [b"etc", b"slopos-release"];
@@ -23,7 +25,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         device.queue_size(),
         device.capacity_sectors()
     ));
-    let mount = ReadOnlyMount::mount(&mut device).await;
+    let mut mount = ReadOnlyMount::mount(&mut device).await;
     let superblock = &mount.superblock;
     let volume_name = core::str::from_utf8(superblock.volume_name())
         .unwrap_or_else(|_| device.fail("ext4 volume label is not UTF-8"));
@@ -93,6 +95,10 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         "SLOPOS-EXT4: multiblock file valid inode={} inode_group={multiblock_group} bytes={multiblock_bytes} logical_blocks=2 path=/usr/share/slopos/multiblock.bin",
         multiblock.inode.number,
     ));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-FS: block cache entries={CACHE_ENTRY_COUNT} hits={} misses={}",
+        mount.cache.hits, mount.cache.misses
+    ));
     let (interrupts, queue_interrupts) = crate::virtio::interrupt_counts();
     crate::serial::serialln(format_args!(
         "SLOPOS-VIRTIO: async block sequence complete requests={} interrupts={interrupts} queue_interrupts={queue_interrupts}",
@@ -105,6 +111,7 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
 struct ReadOnlyMount {
     superblock: Superblock,
     group0: GroupDescriptor,
+    cache: BlockCache,
 }
 
 impl ReadOnlyMount {
@@ -115,16 +122,23 @@ impl ReadOnlyMount {
         if superblock.block_size as usize != BLOCK_SIZE {
             device.fail("ext4 mount requires a 4096-byte block size");
         }
-        let group0 = read_group_descriptor(device, &superblock, 0).await;
-        Self { superblock, group0 }
+        let mut cache = BlockCache::new();
+        let group0 = read_group_descriptor(device, &superblock, 0, &mut cache).await;
+        Self {
+            superblock,
+            group0,
+            cache,
+        }
     }
 
-    async fn probe_root(&self, device: &mut BlockDevice) -> RootProbe {
+    async fn probe_root(&mut self, device: &mut BlockDevice) -> RootProbe {
         let inode = self.read_inode(device, ROOT_INODE).await;
         let extent = self.directory_extent(device, &inode);
-        let sector = block_to_sector(device, &self.superblock, extent.physical_block);
-        device.read(sector, BLOCK_SIZE).await;
-        let directory = DirectoryBlock::parse(device.data(BLOCK_SIZE), &inode, &self.superblock)
+        let block = self
+            .cache
+            .read_block(device, &self.superblock, extent.physical_block)
+            .await;
+        let directory = DirectoryBlock::parse(block, &inode, &self.superblock)
             .unwrap_or_else(|_| device.fail("ext4 root directory validation failed"));
         let etc = directory
             .find(b"etc")
@@ -145,7 +159,7 @@ impl ReadOnlyMount {
         }
     }
 
-    async fn open_file(&self, device: &mut BlockDevice, components: &[&[u8]]) -> ReadOnlyFile {
+    async fn open_file(&mut self, device: &mut BlockDevice, components: &[&[u8]]) -> ReadOnlyFile {
         let inode = self.resolve_path(device, components).await;
         if !inode.is_regular_file() {
             device.fail("ext4 open target is not a regular file");
@@ -153,7 +167,7 @@ impl ReadOnlyMount {
         ReadOnlyFile { inode }
     }
 
-    async fn resolve_path(&self, device: &mut BlockDevice, components: &[&[u8]]) -> Inode {
+    async fn resolve_path(&mut self, device: &mut BlockDevice, components: &[&[u8]]) -> Inode {
         if components.is_empty() {
             device.fail("ext4 path has no components");
         }
@@ -163,11 +177,12 @@ impl ReadOnlyMount {
                 device.fail("ext4 path component is invalid");
             }
             let extent = self.directory_extent(device, &current);
-            let sector = block_to_sector(device, &self.superblock, extent.physical_block);
-            device.read(sector, BLOCK_SIZE).await;
-            let directory =
-                DirectoryBlock::parse(device.data(BLOCK_SIZE), &current, &self.superblock)
-                    .unwrap_or_else(|_| device.fail("ext4 path directory is invalid"));
+            let block = self
+                .cache
+                .read_block(device, &self.superblock, extent.physical_block)
+                .await;
+            let directory = DirectoryBlock::parse(block, &current, &self.superblock)
+                .unwrap_or_else(|_| device.fail("ext4 path directory is invalid"));
             let entry = directory
                 .find(component)
                 .unwrap_or_else(|| device.fail("ext4 path component was not found"));
@@ -185,7 +200,7 @@ impl ReadOnlyMount {
         current
     }
 
-    async fn read_inode(&self, device: &mut BlockDevice, inode_number: u32) -> Inode {
+    async fn read_inode(&mut self, device: &mut BlockDevice, inode_number: u32) -> Inode {
         let group_index = self
             .superblock
             .inode_group(inode_number)
@@ -193,30 +208,28 @@ impl ReadOnlyMount {
         let group = if group_index == 0 {
             self.group0
         } else {
-            read_group_descriptor(device, &self.superblock, group_index).await
+            read_group_descriptor(device, &self.superblock, group_index, &mut self.cache).await
         };
         let location = self
             .superblock
             .inode_location(inode_number, &group)
             .unwrap_or_else(|_| device.fail("ext4 inode location is invalid"));
-        let sector = block_to_sector(device, &self.superblock, location.block);
-        device.read(sector, BLOCK_SIZE).await;
+        let block = self
+            .cache
+            .read_block(device, &self.superblock, location.block)
+            .await;
         let offset = location.offset as usize;
         let end = offset + usize::from(self.superblock.inode_size);
         if end > BLOCK_SIZE {
             device.fail("ext4 inode crosses the read block");
         }
-        Inode::parse(
-            &device.data(BLOCK_SIZE)[offset..end],
-            inode_number,
-            &self.superblock,
-        )
-        .unwrap_or_else(|_| device.fail("ext4 inode validation failed"))
+        Inode::parse(&block[offset..end], inode_number, &self.superblock)
+            .unwrap_or_else(|_| device.fail("ext4 inode validation failed"))
     }
 
     async fn read_file_block<'a>(
-        &self,
-        device: &'a mut BlockDevice,
+        &'a mut self,
+        device: &mut BlockDevice,
         file: &ReadOnlyFile,
         logical_block: u32,
     ) -> &'a [u8] {
@@ -240,12 +253,14 @@ impl ReadOnlyMount {
         if physical_block >= self.superblock.block_count {
             device.fail("ext4 regular file block is outside the filesystem");
         }
-        let sector = block_to_sector(device, &self.superblock, physical_block);
-        device.read(sector, BLOCK_SIZE).await;
+        let block = self
+            .cache
+            .read_block(device, &self.superblock, physical_block)
+            .await;
         let byte_offset = u64::from(logical_block) * u64::from(self.superblock.block_size);
         let remaining = file.inode.size - byte_offset;
         let length = remaining.min(u64::from(self.superblock.block_size)) as usize;
-        &device.data(BLOCK_SIZE)[..length]
+        &block[..length]
     }
 
     fn directory_extent(&self, device: &BlockDevice, inode: &Inode) -> Extent {
@@ -275,27 +290,104 @@ struct RootProbe {
     lost_and_found_inode: u32,
 }
 
+#[derive(Clone, Copy)]
+struct CacheEntry {
+    block: u64,
+    frame: usize,
+    valid: bool,
+}
+
+impl CacheEntry {
+    const EMPTY: Self = Self {
+        block: 0,
+        frame: 0,
+        valid: false,
+    };
+}
+
+struct BlockCache {
+    entries: [CacheEntry; CACHE_ENTRY_COUNT],
+    next_victim: usize,
+    hits: u64,
+    misses: u64,
+}
+
+impl BlockCache {
+    fn new() -> Self {
+        let mut entries = [CacheEntry::EMPTY; CACHE_ENTRY_COUNT];
+        for entry in &mut entries {
+            let frame = crate::memory::allocate_frame()
+                .unwrap_or_else(|| crate::fatal("out of frames for filesystem block cache"));
+            // SAFETY: the allocator returned an exclusive identity-mapped frame.
+            unsafe { ptr::write_bytes(frame as *mut u8, 0, BLOCK_SIZE) };
+            entry.frame = frame as usize;
+        }
+        Self {
+            entries,
+            next_victim: 0,
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    async fn read_block<'a>(
+        &'a mut self,
+        device: &mut BlockDevice,
+        superblock: &Superblock,
+        block: u64,
+    ) -> &'a [u8] {
+        if let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.valid && entry.block == block)
+        {
+            self.hits += 1;
+            return self.entry_bytes(index);
+        }
+
+        let sector = block_to_sector(device, superblock, block);
+        device.read(sector, BLOCK_SIZE).await;
+        let victim = self.next_victim;
+        self.next_victim = (self.next_victim + 1) % CACHE_ENTRY_COUNT;
+        let frame = self.entries[victim].frame;
+        // SAFETY: source is the completed device buffer and destination is the
+        // exclusive cache frame for this victim entry; both span one block.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                device.data(BLOCK_SIZE).as_ptr(),
+                frame as *mut u8,
+                BLOCK_SIZE,
+            )
+        };
+        self.entries[victim].block = block;
+        self.entries[victim].valid = true;
+        self.misses += 1;
+        self.entry_bytes(victim)
+    }
+
+    fn entry_bytes(&self, index: usize) -> &[u8] {
+        // SAFETY: every cache entry owns a permanently live 4 KiB frame.
+        unsafe { core::slice::from_raw_parts(self.entries[index].frame as *const u8, BLOCK_SIZE) }
+    }
+}
+
 async fn read_group_descriptor(
     device: &mut BlockDevice,
     superblock: &Superblock,
     group_index: u32,
+    cache: &mut BlockCache,
 ) -> GroupDescriptor {
     let location = superblock
         .group_descriptor_location(group_index)
         .unwrap_or_else(|_| device.fail("ext4 group descriptor location is invalid"));
-    let sector = block_to_sector(device, superblock, location.block);
-    device.read(sector, BLOCK_SIZE).await;
+    let block = cache.read_block(device, superblock, location.block).await;
     let offset = location.offset as usize;
     let end = offset + usize::from(superblock.descriptor_size);
     if end > BLOCK_SIZE {
         device.fail("ext4 group descriptor crosses the read block");
     }
-    let descriptor = GroupDescriptor::parse(
-        &device.data(BLOCK_SIZE)[offset..end],
-        group_index,
-        superblock,
-    )
-    .unwrap_or_else(|_| device.fail("ext4 group descriptor validation failed"));
+    let descriptor = GroupDescriptor::parse(&block[offset..end], group_index, superblock)
+        .unwrap_or_else(|_| device.fail("ext4 group descriptor validation failed"));
     if group_index != 0 {
         crate::serial::serialln(format_args!(
             "SLOPOS-EXT4: group descriptor valid group={group_index} inode_table={}",
