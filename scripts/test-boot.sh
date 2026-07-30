@@ -6,12 +6,23 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${repo_dir}/target/slopos-esp.img"
 root_image="${repo_dir}/target/slopos-root.ext4"
-ovmf_vars="${repo_dir}/target/OVMF_VARS_4M.test.fd"
 serial_log="${repo_dir}/evidence/serial.log"
 debug_log="${repo_dir}/evidence/uefi-debugcon.log"
 qemu_log="${repo_dir}/evidence/qemu-test.log"
+runtime_dir="$(mktemp -d /tmp/slopos-boot.XXXXXX)"
+runtime_image="${runtime_dir}/slopos-esp.img"
+runtime_root_image="${runtime_dir}/slopos-root.ext4"
+ovmf_vars="${runtime_dir}/OVMF_VARS_4M.fd"
+
+cleanup() {
+    unlink "${runtime_image}" "${runtime_root_image}" "${ovmf_vars}" 2>/dev/null || true
+    rmdir "${runtime_dir}" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 mkdir -p "${repo_dir}/evidence"
+cp --reflink=auto --sparse=always "${image}" "${runtime_image}"
+cp --reflink=auto --sparse=always "${root_image}" "${runtime_root_image}"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "${ovmf_vars}"
 
 set +e
@@ -21,8 +32,8 @@ timeout 10s qemu-system-x86_64 \
     -m 256M \
     -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd" \
     -drive "if=pflash,format=raw,file=${ovmf_vars}" \
-    -drive "if=virtio,format=raw,file=${image}" \
-    -drive "if=virtio,format=raw,file=${root_image}" \
+    -drive "if=virtio,format=raw,file=${runtime_image}" \
+    -drive "if=virtio,format=raw,file=${runtime_root_image}" \
     -serial "file:${serial_log}" \
     -debugcon "file:${debug_log}" \
     -global isa-debugcon.iobase=0x402 \
@@ -83,6 +94,7 @@ required_markers=(
     "SLOPOS-SYSCALL: pid=1 abi=x86_64 trap=int80 nr=60 exit status=0 cpl=3"
     "SLOPOS-PROCESS: pid=1 exited status=0 syscalls=2 kernel_return=true"
     "SLOPOS-SHELL: config loaded niri_columns=3 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4"
+    "SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry=1024x768 image=/usr/share/backgrounds/slopos-aurora.ppm transition=simple step=32 fps=30"
     "SLOPOS-DESKTOP: interactive compositor loop entered"
     "SLOPOS-ASYNC: executor entered tasks=3"
     "SLOPOS-ASYNC: timer future completed"
