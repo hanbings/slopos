@@ -1292,6 +1292,7 @@ impl Desktop {
             NiriAction::MoveColumnRight => self.workspaces.move_column_right(),
             NiriAction::FocusWorkspaceUp => self.workspaces.focus_workspace_up(),
             NiriAction::FocusWorkspaceDown => self.workspaces.focus_workspace_down(),
+            NiriAction::FocusWorkspacePrevious => self.workspaces.focus_workspace_previous(),
             NiriAction::FocusWorkspace(reference) => {
                 let workspace = self.resolve_workspace_reference(reference);
                 self.workspaces
@@ -1534,6 +1535,7 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::MoveColumnRight => "move-column-right",
         NiriAction::FocusWorkspaceUp => "focus-workspace-up",
         NiriAction::FocusWorkspaceDown => "focus-workspace-down",
+        NiriAction::FocusWorkspacePrevious => "focus-workspace-previous",
         NiriAction::FocusWorkspace(_) => "focus-workspace",
         NiriAction::MoveColumnToWorkspaceUp => "move-column-to-workspace-up",
         NiriAction::MoveColumnToWorkspaceDown => "move-column-to-workspace-down",

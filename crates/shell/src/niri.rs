@@ -59,6 +59,7 @@ pub enum NiriAction<'a> {
     MoveColumnRight,
     FocusWorkspaceUp,
     FocusWorkspaceDown,
+    FocusWorkspacePrevious,
     FocusWorkspace(WorkspaceReference<'a>),
     MoveColumnToWorkspaceUp,
     MoveColumnToWorkspaceDown,
@@ -457,6 +458,7 @@ impl<'a> ShellConfigParser<'a> {
             "move-column-right" => NiriAction::MoveColumnRight,
             "focus-workspace-up" => NiriAction::FocusWorkspaceUp,
             "focus-workspace-down" => NiriAction::FocusWorkspaceDown,
+            "focus-workspace-previous" => NiriAction::FocusWorkspacePrevious,
             "focus-workspace" => NiriAction::FocusWorkspace(self.parse_workspace_reference()?),
             "move-column-to-workspace-up" => NiriAction::MoveColumnToWorkspaceUp,
             "move-column-to-workspace-down" => NiriAction::MoveColumnToWorkspaceDown,
@@ -764,6 +766,7 @@ pub struct WorkspaceSet<const WORKSPACES: usize, const COLUMNS: usize, const WIN
     layouts: [ScrollLayout<COLUMNS, WINDOWS>; WORKSPACES],
     count: usize,
     active: usize,
+    previous: usize,
 }
 
 impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
@@ -785,6 +788,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             }),
             count,
             active: 0,
+            previous: 0,
         })
     }
 
@@ -798,6 +802,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
 
     pub const fn active(&self) -> usize {
         self.active
+    }
+
+    pub const fn previous(&self) -> usize {
+        self.previous
     }
 
     pub fn config(&self) -> LayoutConfig {
@@ -872,15 +880,21 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         if self.active == 0 {
             return false;
         }
-        self.active -= 1;
-        true
+        self.focus_workspace(self.active - 1).unwrap_or(false)
     }
 
     pub fn focus_workspace_down(&mut self) -> bool {
         if self.active + 1 >= self.count {
             return false;
         }
-        self.active += 1;
+        self.focus_workspace(self.active + 1).unwrap_or(false)
+    }
+
+    pub fn focus_workspace_previous(&mut self) -> bool {
+        if self.previous == self.active || self.previous >= self.count {
+            return false;
+        }
+        core::mem::swap(&mut self.active, &mut self.previous);
         true
     }
 
@@ -889,7 +903,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             return Err(WorkspaceError::InvalidWorkspace);
         }
         let changed = workspace != self.active;
-        self.active = workspace;
+        if changed {
+            self.previous = self.active;
+            self.active = workspace;
+        }
         Ok(changed)
     }
 
@@ -909,6 +926,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active]
             .close_window(window)
             .map_err(WorkspaceError::Layout)?;
+        self.previous = self.active;
         self.active = workspace;
         Ok(true)
     }
@@ -933,6 +951,7 @@ mod tests {
                 Mod+Ctrl+2 { move-column-to-workspace 2; }
                 Mod+C { focus-workspace "config"; }
                 Mod+Ctrl+M { move-column-to-workspace "main"; }
+                Mod+Tab { focus-workspace-previous; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
                 Mod+Q { close-window; }
@@ -954,7 +973,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 11);
+        assert_eq!(config.bindings.len(), 12);
         assert_eq!(
             config
                 .bindings
@@ -1013,6 +1032,12 @@ mod tests {
             Some(NiriAction::MoveColumnToWorkspace(WorkspaceReference::Name(
                 "main"
             )))
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Tab),
+            Some(NiriAction::FocusWorkspacePrevious)
         );
         assert_eq!(
             config
@@ -1104,8 +1129,14 @@ mod tests {
         assert_eq!(workspaces.focused_window(), Some(10));
         assert!(workspaces.move_focused_to_workspace(1).unwrap());
         assert_eq!(workspaces.active(), 1);
+        assert_eq!(workspaces.previous(), 0);
         assert_eq!(workspaces.focused_window(), Some(10));
         assert!(workspaces.tile_rect(10).is_ok());
+        assert!(workspaces.focus_workspace_previous());
+        assert_eq!(workspaces.active(), 0);
+        assert_eq!(workspaces.previous(), 1);
+        assert!(workspaces.focus_workspace_previous());
+        assert_eq!(workspaces.active(), 1);
         assert!(workspaces.focus_workspace_up());
         assert_eq!(workspaces.active(), 0);
         assert_eq!(workspaces.focused_window(), Some(20));

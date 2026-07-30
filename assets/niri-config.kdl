@@ -21,6 +21,7 @@ binds {
     Mod+Ctrl+3 { move-column-to-workspace 3; }
     Mod+M { focus-workspace "main"; }
     Mod+C { focus-workspace "config"; }
+    Mod+Tab { focus-workspace-previous; }
     Mod+Ctrl+M { move-column-to-workspace "main"; }
     Mod+Ctrl+C { move-column-to-workspace "config"; }
     Mod+Minus { set-column-width "-10%"; }

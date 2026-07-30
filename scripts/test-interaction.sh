@@ -119,6 +119,11 @@ monitor_type() {
     echo "screendump ${repo_dir}/evidence/niri-move-workspace-name.ppm"
     echo "sendkey meta_l-ctrl-m 50"
     sleep 1
+    echo "sendkey meta_l-tab 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-workspace-previous.ppm"
+    echo "sendkey meta_l-tab 50"
+    sleep 1
     echo "mouse_move -22 -64"
     sleep 1
     echo "mouse_button 1"
@@ -245,6 +250,8 @@ grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=c
 grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=config" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=main" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-previous changed=true workspace=2 name=config focused=2" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-previous changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=608 delta=96 gesture=mod-right-drag" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=512 delta=-96 gesture=mod-right-drag" "${serial_log}"
 grep -Fq \
@@ -269,6 +276,7 @@ test -s "${repo_dir}/evidence/niri-workspace-number.ppm"
 test -s "${repo_dir}/evidence/niri-move-workspace-number.ppm"
 test -s "${repo_dir}/evidence/niri-workspace-name.ppm"
 test -s "${repo_dir}/evidence/niri-move-workspace-name.ppm"
+test -s "${repo_dir}/evidence/niri-workspace-previous.ppm"
 test -s "${repo_dir}/evidence/waybar-workspace-click.ppm"
 test -s "${repo_dir}/evidence/workspace-config.ppm"
 test -s "${repo_dir}/evidence/wallpaper-only.ppm"
@@ -299,6 +307,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-workspace-name.png"
     pnmtopng "${repo_dir}/evidence/niri-move-workspace-name.ppm" \
         >"${repo_dir}/evidence/niri-move-workspace-name.png"
+    pnmtopng "${repo_dir}/evidence/niri-workspace-previous.ppm" \
+        >"${repo_dir}/evidence/niri-workspace-previous.png"
     pnmtopng "${repo_dir}/evidence/waybar-workspace-click.ppm" \
         >"${repo_dir}/evidence/waybar-workspace-click.png"
     pnmtopng "${repo_dir}/evidence/workspace-config.ppm" \

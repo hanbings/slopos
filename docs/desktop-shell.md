@@ -58,6 +58,7 @@ binds {
     Mod+Ctrl+3 { move-column-to-workspace 3; }
     Mod+C { focus-workspace "config"; }
     Mod+Ctrl+M { move-column-to-workspace "main"; }
+    Mod+Tab { focus-workspace-previous; }
     Mod+Minus { set-column-width "-10%"; }
     Mod+Equal { set-column-width "+10%"; }
     Mod+Q { close-window; }
@@ -84,11 +85,11 @@ layout {
 }
 ```
 
-parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。workspace 状态机为每个 workspace 保留独立 column strip；named workspace 后附加一个空 workspace。window rule 按出现顺序叠加，后匹配规则可覆盖先前的 `open-on-workspace`。bind chord 支持 `Mod`、`Ctrl`、`Shift`、`Alt` 与方向键、PageUp/PageDown、Return、Tab、Escape、单字符；当前 action 集为 focus column/workspace、同 strip 左右重排列、move column to workspace、`set-column-width` 与 close window。`focus-workspace`/`move-column-to-workspace` 可取 1..255 的一基索引或已声明 workspace 名称；索引超过当前固定数量时按 niri 的 best-effort 习惯指向末尾空 workspace，名称则在整份 KDL parse 完成后校验，因而可引用稍后声明的 workspace，但不存在/空/过长名称会让原子配置发布失败。列宽参数当前接受整数像素或 `1%..100%`，可用前缀 `+`/`-` 表示相对调整；尚不接受小数参数。
+parser 也接受 `fixed N`、空 `default-column-width {}`、小数 gap、`#rrggbb`/`#rrggbbaa`，并跳过 full config 中尚未消费的其他 top-level/nested node。workspace 状态机为每个 workspace 保留独立 column strip；named workspace 后附加一个空 workspace，并保存 previous 索引。window rule 按出现顺序叠加，后匹配规则可覆盖先前的 `open-on-workspace`。bind chord 支持 `Mod`、`Ctrl`、`Shift`、`Alt` 与方向键、PageUp/PageDown、Return、Tab、Escape、单字符；当前 action 集为 focus column/workspace、`focus-workspace-previous`、同 strip 左右重排列、move column to workspace、`set-column-width` 与 close window。相对、索引、名称 focus 及跨 workspace 移列都会保存旧 active；previous 动作交换两个索引，所以可连续往返。`focus-workspace`/`move-column-to-workspace` 可取 1..255 的一基索引或已声明 workspace 名称；索引超过当前固定数量时按 niri 的 best-effort 习惯指向末尾空 workspace，名称则在整份 KDL parse 完成后校验，因而可引用稍后声明的 workspace，但不存在/空/过长名称会让原子配置发布失败。列宽参数当前接受整数像素或 `1%..100%`，可用前缀 `+`/`-` 表示相对调整；尚不接受小数参数。
 
 10 项 layout 测试和 3 项 workspace/bind/rule 测试覆盖配置拒绝边界、open/focus/scroll/stack/close、绝对/相对列宽、列重排、workspace switch/move 与规则顺序。设计语义依据 [niri 默认配置](https://github.com/YaLTeR/niri/blob/main/resources/default-config.kdl)、[Layout 配置文档](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Layout)、[Key Bindings](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Key-Bindings) 与 [Window Rules](https://github.com/YaLTeR/niri/wiki/Configuration%3A-Window-Rules)。
 
-当前 kernel desktop 用三个固定 surface 演示这些行为：Terminal/System 位于 `main`，Config 的 `app-id` 规则把它放到 `config`；顶部 workspace module 显示 active index。PS/2 parser 跟踪 Super/Ctrl/Shift/Alt 与扩展方向键，使 KDL bind 实际驱动桌面。交互回归用 `Mod+Equal` 把 Terminal 从 512 px 放大至 614 px并截图，再以 `Mod+Minus` 恢复 512 px；随后用 `Mod+Shift+Right` 把整列从 x=16 重排至 x=496并截图，再以 `Mod+Shift+Left` 恢复；Super+右键横拖把列从 512 px 放大至 608 px并恢复；`Mod+2/1` 与 `Mod+C/M` 分别按索引/名称切入 `config/main`，`Mod+Ctrl+3/1` 与 `Mod+Ctrl+C/M` 分别按索引/名称把 Terminal 整列移出再移回；最后还点击顶部数字 `2`/`1` 往返。niri 配置已按上述 user/system/fallback 顺序从 VFS 加载，并能整套原子重读；尚未实现动态 workspace 创建/销毁、完整 niri action/XKB 命名、multi-output、floating/tabbed column、复杂 match、animation、overview、IPC、自动文件监听、Wayland surface 或普通用户 client。
+当前 kernel desktop 用三个固定 surface 演示这些行为：Terminal/System 位于 `main`，Config 的 `app-id` 规则把它放到 `config`；顶部 workspace module 显示 active index。PS/2 parser 跟踪 Super/Ctrl/Shift/Alt 与扩展方向键，使 KDL bind 实际驱动桌面。交互回归用 `Mod+Equal` 把 Terminal 从 512 px 放大至 614 px并截图，再以 `Mod+Minus` 恢复 512 px；随后用 `Mod+Shift+Right` 把整列从 x=16 重排至 x=496并截图，再以 `Mod+Shift+Left` 恢复；Super+右键横拖把列从 512 px 放大至 608 px并恢复；`Mod+2/1` 与 `Mod+C/M` 分别按索引/名称切入 `config/main`，`Mod+Ctrl+3/1` 与 `Mod+Ctrl+C/M` 分别按索引/名称把 Terminal 整列移出再移回；连续两次 `Mod+Tab` 又在 `config/main` 间往返；最后还点击顶部数字 `2`/`1` 往返。niri 配置已按上述 user/system/fallback 顺序从 VFS 加载，并能整套原子重读；尚未实现动态 workspace 创建/销毁、完整 niri action/XKB 命名、multi-output、floating/tabbed column、复杂 match、animation、overview、IPC、自动文件监听、Wayland surface 或普通用户 client。
 
 ## Waybar 式顶部栏
 
