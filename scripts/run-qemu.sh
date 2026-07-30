@@ -5,11 +5,12 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${repo_dir}/target/slopos-esp.img"
+root_image="${repo_dir}/target/slopos-root.ext4"
 ovmf_code="/usr/share/OVMF/OVMF_CODE_4M.fd"
 ovmf_vars="${repo_dir}/target/OVMF_VARS_4M.fd"
 
-if [[ ! -f "${image}" ]]; then
-    echo "missing ${image}; run 'make image' first" >&2
+if [[ ! -f "${image}" || ! -f "${root_image}" ]]; then
+    echo "missing SlopOS disk image; run 'make image' first" >&2
     exit 1
 fi
 if [[ ! -f "${ovmf_code}" ]]; then
@@ -27,6 +28,7 @@ exec qemu-system-x86_64 \
     -drive "if=pflash,format=raw,readonly=on,file=${ovmf_code}" \
     -drive "if=pflash,format=raw,file=${ovmf_vars}" \
     -drive "if=virtio,format=raw,file=${image}" \
+    -drive "if=virtio,format=raw,file=${root_image}" \
     -serial "file:${repo_dir}/evidence/serial.log" \
     -debugcon "file:${repo_dir}/evidence/uefi-debugcon.log" \
     -global isa-debugcon.iobase=0x402 \

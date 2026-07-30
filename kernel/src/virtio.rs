@@ -7,6 +7,7 @@ use core::pin::Pin;
 use core::ptr;
 use core::sync::atomic::{AtomicU64, Ordering, fence};
 use core::task::{Context, Poll};
+use slopos_ext4::{SUPERBLOCK_SIZE, Superblock};
 use slopos_pci::{Device, VirtioRegion};
 use slopos_virtio::{
     BLOCK_REQUEST_IN, BlockRequestHeader, Descriptor, block_read_descriptors, choose_queue_size,
@@ -33,7 +34,7 @@ const COMMON_QUEUE_DESCRIPTOR: usize = 32;
 const COMMON_QUEUE_DRIVER: usize = 40;
 const COMMON_QUEUE_DEVICE: usize = 48;
 const BLOCK_STATUS_OK: u8 = 0;
-const SECTOR_SIZE: usize = 512;
+const SUPERBLOCK_SECTOR: u64 = 2;
 const QUEUE_LIMIT: u16 = 8;
 
 static ISR_BASE: AtomicU64 = AtomicU64::new(0);
@@ -146,12 +147,12 @@ pub fn initialize_block(
             BlockRequestHeader {
                 request_type: BLOCK_REQUEST_IN,
                 reserved: 0,
-                sector: 0,
+                sector: SUPERBLOCK_SECTOR,
             },
         );
         let data = (request_page + size_of::<BlockRequestHeader>()) as *mut u8;
-        ptr::write_bytes(data, 0, SECTOR_SIZE);
-        let status = data.add(SECTOR_SIZE);
+        ptr::write_bytes(data, 0, SUPERBLOCK_SIZE);
+        let status = data.add(SUPERBLOCK_SIZE);
         ptr::write_volatile(status, 0xff);
 
         let descriptors = descriptor_page as *mut Descriptor;
@@ -159,7 +160,7 @@ pub fn initialize_block(
             request_page as u64,
             size_of::<BlockRequestHeader>() as u32,
             data as u64,
-            SECTOR_SIZE as u32,
+            SUPERBLOCK_SIZE as u32,
             status as u64,
         );
         for (index, descriptor) in chain.into_iter().enumerate() {
@@ -231,30 +232,33 @@ pub async fn completion_task(device: BlockDevice) -> ! {
     let data = (device.request_page + size_of::<BlockRequestHeader>()) as *const u8;
     // SAFETY: completion observed the used-ring update for this live request
     // page, so device writes to data/status are now visible.
-    let signature = unsafe {
-        let status = data.add(SECTOR_SIZE);
+    let bytes = unsafe {
+        let status = data.add(SUPERBLOCK_SIZE);
         if ptr::read_volatile(status) != BLOCK_STATUS_OK {
             fail(device.common_base, "virtio block request returned an error");
         }
-        [
-            ptr::read_volatile(data.add(510)),
-            ptr::read_volatile(data.add(511)),
-        ]
+        core::slice::from_raw_parts(data, SUPERBLOCK_SIZE)
     };
-    if signature != [0x55, 0xaa] {
-        fail(
-            device.common_base,
-            "virtio sector zero boot signature mismatch",
-        );
-    }
+    let superblock = Superblock::parse(bytes)
+        .unwrap_or_else(|_| fail(device.common_base, "ext4 superblock validation failed"));
+    let volume_name = core::str::from_utf8(superblock.volume_name())
+        .unwrap_or_else(|_| fail(device.common_base, "ext4 volume label is not UTF-8"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-VIRTIO: async block completion queue={} capacity_sectors={} sector0_signature={:02x}{:02x} interrupts={} queue_interrupts={}",
+        "SLOPOS-VIRTIO: async block completion queue={} capacity_sectors={} sector=2 bytes={} interrupts={} queue_interrupts={}",
         device.queue_size,
         device.capacity_sectors,
-        signature[0],
-        signature[1],
+        SUPERBLOCK_SIZE,
         INTERRUPT_COUNT.load(Ordering::Acquire),
         QUEUE_INTERRUPT_COUNT.load(Ordering::Acquire)
+    ));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: superblock valid label={volume_name} block_size={} blocks={} inodes={} features={:#x}/{:#x}/{:#x}",
+        superblock.block_size,
+        superblock.block_count,
+        superblock.inode_count,
+        superblock.feature_compat,
+        superblock.feature_incompat,
+        superblock.feature_read_only_compat
     ));
     pending::<()>().await;
     unreachable!()

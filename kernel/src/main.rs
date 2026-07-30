@@ -95,9 +95,14 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         fatal("PCI inventory capacity exhausted");
     }
     let virtio_count = pci_inventory.virtio_devices().count();
-    let virtio_block = *pci_inventory
-        .find_virtio_block()
-        .unwrap_or_else(|| fatal("QEMU virtio block device was not enumerated"));
+    let mut virtio_blocks = pci_inventory.virtio_blocks();
+    let esp_block = *virtio_blocks
+        .next()
+        .unwrap_or_else(|| fatal("QEMU ESP block device was not enumerated"));
+    let root_block = *virtio_blocks
+        .next()
+        .unwrap_or_else(|| fatal("QEMU ext4 root block device was not enumerated"));
+    let virtio_block = root_block;
     let virtio_common = virtio_block
         .virtio_region(1)
         .unwrap_or_else(|| fatal("virtio common configuration is missing"));
@@ -111,14 +116,18 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
         .virtio_region(4)
         .unwrap_or_else(|| fatal("virtio device configuration is missing"));
     serialln(format_args!(
-        "SLOPOS-PCI: mechanism1 devices={} virtio={} block={:02x}:{:02x}.{} id={:04x} caps={:#x}",
+        "SLOPOS-PCI: mechanism1 devices={} virtio={} esp={:02x}:{:02x}.{} root={:02x}:{:02x}.{} id={:04x} caps={:#x} irq={}",
         pci_inventory.len(),
         virtio_count,
-        virtio_block.address.bus,
-        virtio_block.address.device,
-        virtio_block.address.function,
+        esp_block.address.bus,
+        esp_block.address.device,
+        esp_block.address.function,
+        root_block.address.bus,
+        root_block.address.device,
+        root_block.address.function,
         virtio_block.device_id,
-        virtio_block.virtio_capability_mask
+        virtio_block.virtio_capability_mask,
+        virtio_block.interrupt_line
     ));
     serialln(format_args!(
         "SLOPOS-PCI: bars={:08x}/{:08x}/{:08x}/{:08x}/{:08x}/{:08x} regions={:#x}/{:#x}/{:#x}/{:#x}",

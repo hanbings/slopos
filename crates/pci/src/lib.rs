@@ -183,6 +183,12 @@ impl Inventory {
             .find(|device| device.is_virtio_block())
     }
 
+    pub fn virtio_blocks(&self) -> impl Iterator<Item = &Device> {
+        self.devices()
+            .iter()
+            .filter(|device| device.is_virtio_block())
+    }
+
     fn push(&mut self, device: Device) {
         if self.count == MAX_DEVICES {
             self.overflowed = true;

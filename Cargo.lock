@@ -29,12 +29,17 @@ name = "slopos-ebpf"
 version = "0.1.0"
 
 [[package]]
+name = "slopos-ext4"
+version = "0.1.0"
+
+[[package]]
 name = "slopos-kernel"
 version = "0.1.0"
 dependencies = [
  "slopos-acpi",
  "slopos-boot-protocol",
  "slopos-ebpf",
+ "slopos-ext4",
  "slopos-pci",
  "slopos-virtio",
 ]

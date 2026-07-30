@@ -14,5 +14,6 @@ path = "src/main.rs"
 slopos-acpi = { path = "../crates/acpi" }
 slopos-boot-protocol = { path = "../crates/boot-protocol" }
 slopos-ebpf = { path = "../ebpf" }
+slopos-ext4 = { path = "../crates/ext4" }
 slopos-pci = { path = "../crates/pci" }
 slopos-virtio = { path = "../crates/virtio" }
