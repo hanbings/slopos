@@ -43,6 +43,6 @@ ext4 parser 测试由 `make test-ext4` 执行。裸机日志证明 4096-byte blo
 
 `write-probe.bin` 是 inode 25 / physical block 98。裸机日志证明 `ReadWrite` fd 3 在 offset 123 两次处理 73-byte payload，ext4 层执行两次整块 read-modify-write、两次 flush、两次 cache invalidation 及 flush 后 fd 读回，随后恢复原始全 `P` 内容。固定 metadata 后，e2fsprogs 1.47.2 镜像 SHA-256 为 `4aeb38e91e7436b303569e9bd48145e01458dcc513f8db230f20b90a5d4a1fe2`；启动测试后的 hash 相同且 `e2fsck -fn` 通过。这只证明已分配数据块的有界原位写，不证明 ext4 metadata/journal 写路径。
 
-JBD2 宿主测试解析 big-endian v2 superblock，并拒绝 truncation、非法 geometry 和未知 feature。裸机 marker 证明 journal inode 8 的单一 extent 从 physical block 32801 开始，superblock 报告 4096 blocks、first 1、sequence 1、start 0、users 1、零 feature words，UUID 与 ext4 匹配。它不证明 journal clean、transaction replay 或 commit。
+JBD2 宿主测试解析 big-endian v2 superblock，并拒绝 truncation、非法 geometry 和未知 feature；另有 round-trip/corruption 测试覆盖单 target descriptor、data escape/restore 和 commit header。裸机 marker 证明 journal inode 8 的单一 extent 从 physical block 32801 开始，superblock 报告 4096 blocks、first 1、sequence 1、start 0、users 1、零 feature words，UUID 与 ext4 匹配。它不证明 journal clean、磁盘 transaction replay 或 commit。
 
 VFS 宿主测试由 `make test-vfs` 执行。4 项测试覆盖 path/mount/fd offset 与 access mode。裸机 `SLOPOS-VFS` marker 证明 normalized absolute path 经 root mount 解析到 filesystem 1，为 inode 16 分配 fd 3，以 5 个 chunk 读取 76 bytes，并在 offset 7 再读取 11 bytes；关闭后复用 fd 3，以读写模式完成 inode 25 的 73-byte write/read/restore。mount/fd table 当前仍只是 block task 局部的固定容量状态。

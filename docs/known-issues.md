@@ -6,7 +6,7 @@
 - framebuffer 渲染是全屏重绘，没有 damage tracking、double buffering 或 virtio-gpu。
 - 所有窗口和工具都在 ring 0，共享同一地址空间。
 - 配置窗口只修改内存主题，不解析或持久化声明式配置。
-- `initrd.slp` 仍不是文件系统；独立 ext4 disk 已有 kernel-internal mount/file API，能跨 group 定位 inode、走 checksummed extent tree、零填充 hole、扫描跨块线性目录、跟随单段最终 fast symlink，并通过 fd read-modify-write 已分配的完整数据块。JBD2 目前只解析生成镜像的无 feature superblock/geometry，没有 transaction scan/replay/write。VFS 仍是 block task 局部 root mount/fd table；没有文件增长、allocation/metadata write、通用权限或 btrfs。
+- `initrd.slp` 仍不是文件系统；独立 ext4 disk 已有 kernel-internal mount/file API，能跨 group 定位 inode、走 checksummed extent tree、零填充 hole、扫描跨块线性目录、跟随单段最终 fast symlink，并通过 fd read-modify-write 已分配的完整数据块。JBD2 目前能解析 superblock 并在内存编码单块 transaction，但没有 transaction scan/replay、磁盘 commit/checkpoint 或 `needs_recovery` 管理。VFS 仍是 block task 局部 root mount/fd table；没有文件增长、allocation/metadata write、通用权限或 btrfs。
 - 已有 frame allocator、自有 early page table 与 bump heap，但没有回收、用户地址空间、进程、用户态或 syscall。
 - 当前页表为 early identity map，使用 2 MiB RWX huge page；尚未施加 W^X、NX、user/supervisor 或细粒度 kernel section 权限。
 - 当前内核固定加载到物理 64 MiB；切换自有页表前的最早期初始化仍依赖 OVMF 留下的 identity mapping。

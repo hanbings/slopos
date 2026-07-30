@@ -10,7 +10,7 @@
 | 异步内核 | 部分实现 | 三任务 `Future` executor、task-ready bit queue、RawWaker、PIT timer、PS/2 input 与 virtio block INTx→waker→completion 已在 QEMU 运行；动态 task arena、timer wheel、locks、cancellation、通用 backpressure 和 SMP 尚未实现。 |
 | 进程/线程/调度 | 尚未实现 | 当前只有一个内核执行流；没有用户态、地址空间或 preemption。 |
 | 内存管理 | 部分实现 | kernel 解析 firmware descriptor stride，建立 frame allocator、自有四级页表并切换 CR3，建立 1 MiB kernel bump heap；frame/heap 读回与真实 vector-14 diagnostic 已验证。没有 user address space、细粒度页权限、COW 或 demand paging。 |
-| ext4/btrfs 文件系统 | 部分实现 | 双 group 镜像与 8-entry cache；QEMU 读取 depth-1 extent、hole、跨块目录/fast symlink，完成 fd 原位 data write，并校验 inode 8/JBD2 superblock 几何与 UUID。只有已分配 block write 和 journal parser，无 allocation/metadata transaction/replay，btrfs 未实现。 |
+| ext4/btrfs 文件系统 | 部分实现 | 双 group 镜像与 8-entry cache；QEMU 读取 depth-1 extent、hole、跨块目录/fast symlink，完成 fd 原位 data write，并校验 inode 8/JBD2 superblock。宿主可 round-trip 单块 journal transaction；仍无磁盘 commit/checkpoint、allocation/metadata update/replay，btrfs 未实现。 |
 | VFS 与文件描述符 | 部分实现 | `no_std` path/mount/fd crate 有 4 项宿主测试；QEMU 把 ext4 挂到 `/`，以 fd 3 分块读/seek，再复用读写 fd 3 在 offset 123 覆写/读回/恢复 73 bytes。仍是 block task 局部、root-only、固定 file size 状态，不是每进程 POSIX VFS。 |
 | 设备与驱动 | 部分实现 | GOP、COM1、QEMU debugcon、PS/2 键鼠可用；校验 XSDT/MADT，自有 GDT/IDT、xAPIC/IOAPIC、100 Hz PIT；PCI/modern virtio-blk 支持 read/write/flush，54 个请求由 53 次 INTx 唤醒完成。没有通用 descriptor allocator、MSI-X、其他设备类或 application processor。 |
 | 图形系统与 Wayland | 部分实现 | framebuffer renderer 和早期 window manager 可用；所有 Wayland wire/object/global/xdg 功能尚未实现。 |
@@ -34,7 +34,7 @@
 - 最后成功 ACPI 单元测试：2026-07-30，`make test-acpi`，3 项。
 - 最后成功 PCI 单元测试：2026-07-30，`make test-pci`，3 项。
 - 最后成功 virtio 单元测试：2026-07-30，`make test-virtio`，4 项。
-- 最后成功 ext4 单元测试：2026-07-30，`make test-ext4`，15 项。
+- 最后成功 ext4 单元测试：2026-07-30，`make test-ext4`，17 项。
 - 最后成功 VFS 单元测试：2026-07-30，`make test-vfs`，4 项。
 - 已验证的 kernel entry：`0x04000000`。
 - 已验证 GOP mode：1024×768，stride 1024。

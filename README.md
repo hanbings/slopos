@@ -48,7 +48,7 @@ make test-page-fault
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 15 项测试覆盖 superblock/group/inode/extent/directory/symlink/JBD2 parser，`make test-vfs` 检查绝对路径、mount-prefix、fd offset 和 access mode。`make test-boot` 在 OVMF 中验证上述硬件路径、54 次 virtio 请求及 53 次 INTx completion、flush 后读回、journal 几何、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 17 项测试覆盖 superblock/group/inode/extent/directory/symlink/JBD2 parser 与单块 transaction 编码，`make test-vfs` 检查绝对路径、mount-prefix、fd offset 和 access mode。`make test-boot` 在 OVMF 中验证上述硬件路径、54 次 virtio 请求及 53 次 INTx completion、flush 后读回、journal 几何、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 键鼠事件；`make test-page-fault` 核验 vector 14、RIP、error code 和 CR2。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；拖动标题栏、拖动右下角、点击红色 `X` 和任务栏按钮分别用于移动、缩放、关闭和恢复窗口。
 
