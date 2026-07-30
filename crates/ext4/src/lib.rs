@@ -727,6 +727,32 @@ impl Inode {
     }
 }
 
+pub fn set_inode_size(
+    bytes: &mut [u8],
+    inode_number: u32,
+    superblock: &Superblock,
+    size: u64,
+) -> Result<(), ParseError> {
+    let inode_size = usize::from(superblock.inode_size);
+    Inode::parse(bytes, inode_number, superblock)?;
+    if bytes.len() < inode_size {
+        return Err(ParseError::Truncated);
+    }
+    let inode = &mut bytes[..inode_size];
+    write_u32(inode, 4, size as u32)?;
+    write_u32(inode, 108, (size >> 32) as u32)?;
+    if superblock.has_metadata_checksums() {
+        let generation = read_u32(inode, 100)?;
+        let checksum = inode_checksum(inode, inode_number, generation, superblock)?;
+        inode[124..126].copy_from_slice(&(checksum as u16).to_le_bytes());
+        if inode.len() > 131 && read_u16(inode, 128)? >= 4 {
+            inode[130..132].copy_from_slice(&((checksum >> 16) as u16).to_le_bytes());
+        }
+    }
+    Inode::parse(inode, inode_number, superblock)?;
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Extent {
     pub logical_block: u32,
@@ -1623,6 +1649,32 @@ mod tests {
         assert_eq!(
             Inode::parse(&inode, ROOT_INODE, &superblock),
             Err(ParseError::InvalidChecksum)
+        );
+    }
+
+    #[test]
+    fn updates_inode_size_and_restores_metadata_checksum() {
+        let superblock = Superblock::parse(&valid_superblock()).unwrap();
+        let original = valid_root_inode(&superblock);
+        let mut inode = original;
+
+        set_inode_size(&mut inode, ROOT_INODE, &superblock, 0x1_0000_1000).unwrap();
+        let parsed = Inode::parse(&inode, ROOT_INODE, &superblock).unwrap();
+        assert_eq!(parsed.size, 0x1_0000_1000);
+        assert_ne!(inode[124..126], original[124..126]);
+
+        set_inode_size(&mut inode, ROOT_INODE, &superblock, 4096).unwrap();
+        assert_eq!(inode, original);
+
+        let mut corrupted = original;
+        corrupted[60] ^= 1;
+        assert_eq!(
+            set_inode_size(&mut corrupted, ROOT_INODE, &superblock, 2048),
+            Err(ParseError::InvalidChecksum)
+        );
+        assert_eq!(
+            set_inode_size(&mut inode[..125], ROOT_INODE, &superblock, 2048),
+            Err(ParseError::Truncated)
         );
     }
 
