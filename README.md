@@ -4,7 +4,7 @@ SlopOS 是一个从零实现、以 Rust 为主要语言、面向 x86-64 UEFI/QEM
 
 当前仓库已经有一个可重复启动的早期系统，而不是完成版操作系统：0BSD Rust UEFI 加载器会从 FAT ESP 读取并解析独立的 ELF64 内核，取得 ACPI RSDP 与 GOP，加载 bootstrap image 和独立 Rust PID 1 ELF，取得最终 memory map，调用 `ExitBootServices`，再把控制权交给 SlopOS 内核。内核接管串口、GOP framebuffer 与 PS/2 键鼠，先运行一个有独立 CR3 的 CPL3 PID 1 probe，再进入早期交互桌面。
 
-PID 1 由 `userspace/init` 独立构建为 `/slopos/init.elf`，UEFI loader 通过 BootInfo v2 传给 kernel。它使用独立 user code/stack page、GDT user segments、TSS `RSP0` privilege stack 与 DPL3 trap gate。`no_std` ELF crate 严格校验 ELF64/x86-64/`ET_EXEC` 和 `PT_LOAD`，按 `p_filesz` 复制 executable 并从 ELF entry 进入。程序按 Linux x86-64 的寄存器和编号约定发出 `write(1, ..., 18)` 与 `exit(0)`；kernel 对用户 pointer 先做已验证 `PT_LOAD` 范围检查，再核对 payload、返回值和调用顺序，最后恢复 kernel CR3/stack。trap 暂用 `int 0x80`；尚无 `SYSCALL/SYSRET`、调度或通用 syscall 层。
+PID 1 由 `userspace/init` 独立构建为 `/slopos/init.elf`，UEFI loader 通过 BootInfo v2 传给 kernel。它使用独立 user code/stack page、GDT user segments 与 supervisor kernel map；`no_std` ELF crate 严格校验 ELF64/x86-64/`ET_EXEC` 和 `PT_LOAD`，按 `p_filesz` 复制 executable 并从 ELF entry 进入。容量 4 的固定 process table 保存 image/context、`Ready → Running → Exited`、exit status、syscall count 与容量 8 的每进程 fd 表。程序按 Linux x86-64 寄存器和编号约定发出真实 `SYSCALL`；kernel 经 CPUID 检查并配置/readback `EFER/STAR/LSTAR/FMASK`，对 user RIP/RSP/pointer 做 process-range 校验，`write(1, ..., 18)` 由 `SYSRETQ` 返回，`exit(0)` 恢复 kernel CR3/stack。尚无 scheduler、VFS syscall 或通用 `copy_from_user`。
 
 内核还会在启动时通过一个独立的 eBPF verifier 执行内建测试程序；当前只是无动态分配、前向控制流的安全子集，并不声称兼容 Linux eBPF。
 
@@ -51,6 +51,7 @@ make image
 make test-acpi
 make test-ebpf
 make test-elf
+make test-process
 make test-shell
 make test-pci
 make test-virtio
@@ -63,7 +64,7 @@ make test-journal-replay
 make run
 ```
 
-`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-elf` 的 10 项测试覆盖 ELF64 header、`PT_LOAD`、BSS、范围/对齐/重叠/W^X 与 entry validation，`make test-shell` 的 25 项测试覆盖 niri KDL workspace/bind/rule、Waybar JSONC option/format 与 CSS、swww CLI/daemon/PNM/transition 和滚动平铺状态机，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode 与 EOF growth。`make test-boot` 在 OVMF 中验证 ELF→CPL3 enter/trap/exit、niri/Waybar/swww 的 VFS 配置、上述硬件路径、451 次 virtio 请求及 450 次 INTx completion、fd overwrite/append/truncate、active transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 命令，验证桌面配置 generation 2 的原子重载与非法 CSS 回滚、swww Sunset 换图、center transition、query、kill/restart、niri viewport 横拖、`Mod+Q` 与 `Mod+Down`，并确认 window rule 把 Config 放入 named workspace；`make test-page-fault` 在用户进程退出并恢复 kernel CR3 后核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、495 次请求/494 次 completion、桌面继续运行和宿主 fsck。
+`make test-acpi` 在宿主运行 RSDP/XSDT/MADT parser 的构造表测试，`make test-ebpf` 运行 verifier/interpreter 边界测试，`make test-elf` 的 10 项测试覆盖 ELF64 header、`PT_LOAD`、BSS、范围/对齐/重叠/W^X 与 entry validation，`make test-process` 的 4 项测试覆盖 PID/capacity、生命周期、reap 与每进程 fd isolation，`make test-shell` 的 25 项测试覆盖 niri KDL workspace/bind/rule、Waybar JSONC option/format 与 CSS、swww CLI/daemon/PNM/transition 和滚动平铺状态机，`make test-pci` 运行 PCI multifunction/capability 枚举测试，`make test-virtio` 检查 split-ring layout 及 read/write/flush descriptor chain，`make test-ext4` 的 28 项测试覆盖 superblock/group/inode/extent/directory/symlink、block/inode allocation、目录项 mutation、多 tag JBD2 records 和 recovery/state 更新，`make test-vfs` 的 5 项测试检查绝对路径、mount-prefix、fd offset/access mode 与 EOF growth。`make test-boot` 在 OVMF 中验证 ELF→process table→CPL3→SYSCALL/SYSRETQ→exit、niri/Waybar/swww 的 VFS 配置、上述硬件路径、451 次 virtio 请求及 450 次 INTx completion、fd overwrite/append/truncate、active transaction、IRQ、async timer 和桌面循环。`make test-interaction` 注入真实 PS/2 命令，验证桌面配置 generation 2 的原子重载与非法 CSS 回滚、swww Sunset 换图、center transition、query、kill/restart、niri viewport 横拖、`Mod+Q` 与 `Mod+Down`，并确认 window rule 把 Config 放入 named workspace；`make test-page-fault` 在用户进程退出并恢复 kernel CR3 后核验 vector 14、RIP、error code 和 CR2；`make test-journal-replay` 对五 tag allocation transaction 生成 committed/未 checkpoint 的 dirty disk，再以普通 kernel 重启验证 mount-time replay、495 次请求/494 次 completion、桌面继续运行和宿主 fsck。
 
 `make run` 打开 QEMU 图形窗口。桌面中可以直接输入命令；`RELOAD` 重读四份 VFS 配置，Tab 或 `Mod+左右` 沿 column strip 切换焦点，`Mod+上下` 切换 workspace，`Mod+Shift+上下` 移动 focused column，`Mod+Q` 或红色 `X` 关闭 tiled window，横拖标题栏滚动 viewport。
 
@@ -79,7 +80,7 @@ make run
 
 - [架构和启动协议](docs/architecture.md)
 - [niri/Waybar/swww 桌面兼容边界](docs/desktop-shell.md)
-- [首个用户进程与 syscall trap](docs/processes.md)
+- [首个用户进程、process table 与 fast syscall](docs/processes.md)
 - [逐子系统完成度](docs/status.md)
 - [异步内核设计状态](docs/async-kernel.md)
 - [ACPI 与 APIC 中断路径](docs/acpi-apic.md)
