@@ -18,7 +18,7 @@ use slopos_ext4::{
 };
 use slopos_vfs::{
     AbsolutePath, AccessMode, FIRST_FILE_DESCRIPTOR, FileDescriptorTable, FileNode, MountTable,
-    ReadWindow,
+    ReadWindow, WriteWindow,
 };
 
 use crate::virtio::BlockDevice;
@@ -30,7 +30,7 @@ const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
 const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
 const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
-const ALLOCATION_PROBE_BLOCK: u64 = 110;
+const ALLOCATION_PROBE_BLOCK: u64 = 111;
 const CREATE_TRANSACTION_BLOCKS: usize = 5;
 const CREATE_PROBE_INODE: u32 = 32;
 const CREATE_PROBE_NAME: &[u8] = b"create-probe";
@@ -698,6 +698,9 @@ async fn load_and_run_init(
             crate::process::ProcessEvent::Read(request) => {
                 complete_process_read(mount, device, &open_files, request).await
             }
+            crate::process::ProcessEvent::Write(request) => {
+                complete_process_write(mount, device, &open_files, request).await
+            }
             crate::process::ProcessEvent::Close(request) => {
                 complete_process_close(&mut open_files, request)
             }
@@ -729,11 +732,15 @@ async fn complete_process_openat(
     };
     let inode = file.inode.number;
     let size = file.inode.size;
-    let fd = match crate::process::open_file(FileNode {
-        filesystem_id: resolution.filesystem_id,
-        node_id: u64::from(inode),
-        size,
-    }) {
+    let access_mode = request.access_mode();
+    let fd = match crate::process::open_file(
+        FileNode {
+            filesystem_id: resolution.filesystem_id,
+            node_id: u64::from(inode),
+            size,
+        },
+        access_mode,
+    ) {
         Ok(fd) => fd,
         Err(_) => return crate::process::resume_probe(LINUX_EMFILE, None),
     };
@@ -744,8 +751,13 @@ async fn complete_process_openat(
     }
     open_files[slot] = Some(file);
     let display = core::str::from_utf8(request.path()).unwrap_or("<non-utf8>");
+    let access = match access_mode {
+        AccessMode::ReadOnly => "readonly",
+        AccessMode::WriteOnly => "writeonly",
+        AccessMode::ReadWrite => "readwrite",
+    };
     crate::serial::serialln(format_args!(
-        "SLOPOS-VFS: process open complete pid=1 fd={fd} inode={inode} bytes={size} access=readonly async=true path={display}"
+        "SLOPOS-VFS: process open complete pid=1 fd={fd} inode={inode} bytes={size} access={access} async=true path={display}"
     ));
     crate::process::resume_probe(i64::from(fd), None)
 }
@@ -787,6 +799,41 @@ async fn complete_process_read(
         request.fd, file.inode.number, window.offset, request.requested
     ));
     crate::process::resume_probe(bytes as i64, Some(&output[..bytes]))
+}
+
+async fn complete_process_write(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    open_files: &[Option<Ext4File>; PROCESS_FILE_CAPACITY],
+    request: crate::process::WriteRequest,
+) -> crate::process::ProcessEvent {
+    let input = request.input();
+    let window = match crate::process::write_window(request.fd, input.len()) {
+        Ok(window) => window,
+        Err(_) => return crate::process::resume_probe(LINUX_EBADF, None),
+    };
+    let Some(slot) = process_file_slot(request.fd) else {
+        return crate::process::resume_probe(LINUX_EBADF, None);
+    };
+    let Some(file) = open_files[slot].as_ref() else {
+        return crate::process::resume_probe(LINUX_EBADF, None);
+    };
+    if window.node.filesystem_id != ROOT_FILESYSTEM_ID
+        || window.node.node_id != u64::from(file.inode.number)
+    {
+        device.fail("process VFS write vnode does not match backing file");
+    }
+    let bytes = write_process_file_range(mount, device, file, window, input).await;
+    crate::process::advance_fd(request.fd, bytes)
+        .unwrap_or_else(|_| device.fail("process VFS write offset advance failed"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-VFS: process write complete pid=1 fd={} inode={} offset={} requested={} bytes={bytes} async=true flushed=true",
+        request.fd,
+        file.inode.number,
+        window.offset,
+        input.len()
+    ));
+    crate::process::resume_probe(bytes as i64, None)
 }
 
 fn complete_process_close(
@@ -840,6 +887,48 @@ async fn read_process_file_range(
         let length = (window.length - copied).min(block.len() - block_offset);
         output[copied..copied + length]
             .copy_from_slice(&block[block_offset..block_offset + length]);
+        copied += length;
+    }
+    copied
+}
+
+async fn write_process_file_range(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    file: &Ext4File,
+    window: WriteWindow,
+    input: &[u8],
+) -> usize {
+    if input.len() < window.length {
+        device.fail("process VFS input buffer is shorter than write window");
+    }
+    let block_size = u64::try_from(BLOCK_SIZE)
+        .unwrap_or_else(|_| device.fail("process VFS block size conversion failed"));
+    let mut block_buffer = [0u8; BLOCK_SIZE];
+    let mut copied = 0usize;
+    while copied < window.length {
+        let absolute_offset = window
+            .offset
+            .checked_add(
+                u64::try_from(copied)
+                    .unwrap_or_else(|_| device.fail("process VFS write offset conversion failed")),
+            )
+            .unwrap_or_else(|| device.fail("process VFS write offset overflow"));
+        let logical_block = u32::try_from(absolute_offset / block_size)
+            .unwrap_or_else(|_| device.fail("process VFS writable block index overflow"));
+        let block_offset = usize::try_from(absolute_offset % block_size)
+            .unwrap_or_else(|_| device.fail("process VFS write block offset conversion failed"));
+        let block = mount.read_file_block(device, file, logical_block).await;
+        if block.len() != BLOCK_SIZE {
+            device.fail("process VFS partial-block EOF writes are unsupported");
+        }
+        block_buffer.copy_from_slice(block);
+        let length = (window.length - copied).min(BLOCK_SIZE - block_offset);
+        block_buffer[block_offset..block_offset + length]
+            .copy_from_slice(&input[copied..copied + length]);
+        mount
+            .overwrite_existing_file_block(device, file, logical_block, &block_buffer)
+            .await;
         copied += length;
     }
     copied

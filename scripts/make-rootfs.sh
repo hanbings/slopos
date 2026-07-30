@@ -78,11 +78,18 @@ for logical_block in 1 3 5 7; do
         -R "punch /usr/share/slopos/deep-extent.bin ${logical_block} ${logical_block}" \
         "${image}" >/dev/null 2>&1
 done
-# e2fsprogs 1.47.2 can allocate the new depth-1 extent leaf from the first
-# punched block without persisting the corresponding allocation counters.
-# Reasserting the deterministic leaf allocation repairs the bitmap/count
-# checksums and makes a freshly zeroed image pass fsck.
-"${debugfs}" -w -R "setb 96" "${image}" >/dev/null 2>&1
+# e2fsprogs 1.47.2 can reuse a punched data block as the new depth-1 extent
+# leaf without persisting its allocation bit. Resolve the leaf from the image
+# instead of coupling this repair to the sizes of earlier files.
+extent_leaf="$(
+    "${debugfs}" -R "stat /usr/share/slopos/deep-extent.bin" "${image}" 2>/dev/null \
+        | sed -n 's/.*(ETB0):\([0-9][0-9]*\).*/\1/p'
+)"
+if [[ ! "${extent_leaf}" =~ ^[0-9]+$ ]]; then
+    echo "failed to resolve the depth-1 extent leaf" >&2
+    exit 1
+fi
+"${debugfs}" -w -R "setb ${extent_leaf}" "${image}" >/dev/null 2>&1
 
 # mke2fs -d intentionally preserves source ownership and inode timestamps.
 # Normalize every populated inode so a fresh checkout under another uid/umask

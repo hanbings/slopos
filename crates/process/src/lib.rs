@@ -6,6 +6,21 @@ use slopos_vfs::{AccessMode, FileDescriptorTable, FileNode, ReadWindow, VfsError
 
 pub type ProcessId = u32;
 
+pub const MAX_INITIAL_ARGUMENTS: usize = 16;
+pub const MAX_INITIAL_ENVIRONMENT: usize = 16;
+pub const LINUX_AUXV_PAIRS: usize = 9;
+
+const LINUX_AT_NULL: u64 = 0;
+const LINUX_AT_PAGESZ: u64 = 6;
+const LINUX_AT_ENTRY: u64 = 9;
+const LINUX_AT_UID: u64 = 11;
+const LINUX_AT_EUID: u64 = 12;
+const LINUX_AT_GID: u64 = 13;
+const LINUX_AT_EGID: u64 = 14;
+const LINUX_AT_SECURE: u64 = 23;
+const LINUX_AT_EXECFN: u64 = 31;
+const INITIAL_STACK_ALIGNMENT: usize = 16;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProcessState {
     Ready,
@@ -17,9 +32,30 @@ pub enum ProcessState {
 pub struct ProcessImage {
     pub address_space_root: u64,
     pub entry: u64,
+    pub stack_pointer: u64,
     pub stack_top: u64,
     pub user_memory_start: u64,
     pub user_memory_end: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InitialStackLayout {
+    pub stack_pointer: u64,
+    pub argument_count: usize,
+    pub environment_count: usize,
+    pub auxiliary_pairs: usize,
+    pub used_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InitialStackError {
+    MissingExecutableName,
+    TooManyArguments,
+    TooManyEnvironmentEntries,
+    EmptyString,
+    EmbeddedNull,
+    AddressOverflow,
+    StackTooSmall,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +98,7 @@ impl<const FDS: usize> ProcessSlot<FDS> {
             image: ProcessImage {
                 address_space_root: 0,
                 entry: 0,
+                stack_pointer: 0,
                 stack_top: 0,
                 user_memory_start: 0,
                 user_memory_end: 0,
@@ -223,6 +260,13 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
             .map_err(ProcessError::Vfs)
     }
 
+    pub fn seek_fd(&mut self, pid: ProcessId, fd: u32, offset: u64) -> Result<(), ProcessError> {
+        self.live_slot_mut(pid)?
+            .descriptors
+            .seek(fd, offset)
+            .map_err(ProcessError::Vfs)
+    }
+
     pub fn close_fd(&mut self, pid: ProcessId, fd: u32) -> Result<(), ProcessError> {
         self.live_slot_mut(pid)?
             .descriptors
@@ -289,12 +333,159 @@ impl<const N: usize, const FDS: usize> Default for ProcessTable<N, FDS> {
     }
 }
 
+pub fn build_linux_initial_stack(
+    stack: &mut [u8],
+    stack_base: u64,
+    arguments: &[&[u8]],
+    environment: &[&[u8]],
+    entry: u64,
+    page_size: u64,
+) -> Result<InitialStackLayout, InitialStackError> {
+    if arguments.is_empty() {
+        return Err(InitialStackError::MissingExecutableName);
+    }
+    if arguments.len() > MAX_INITIAL_ARGUMENTS {
+        return Err(InitialStackError::TooManyArguments);
+    }
+    if environment.len() > MAX_INITIAL_ENVIRONMENT {
+        return Err(InitialStackError::TooManyEnvironmentEntries);
+    }
+    let stack_top = stack_base
+        .checked_add(u64::try_from(stack.len()).map_err(|_| InitialStackError::AddressOverflow)?)
+        .ok_or(InitialStackError::AddressOverflow)?;
+    let mut argument_pointers = [0u64; MAX_INITIAL_ARGUMENTS];
+    let mut environment_pointers = [0u64; MAX_INITIAL_ENVIRONMENT];
+    let mut cursor = stack.len();
+
+    for index in (0..environment.len()).rev() {
+        environment_pointers[index] =
+            push_initial_string(stack, stack_base, &mut cursor, environment[index])?;
+    }
+    for index in (0..arguments.len()).rev() {
+        argument_pointers[index] =
+            push_initial_string(stack, stack_base, &mut cursor, arguments[index])?;
+    }
+
+    let table_words = 1usize
+        .checked_add(arguments.len())
+        .and_then(|words| words.checked_add(1))
+        .and_then(|words| words.checked_add(environment.len()))
+        .and_then(|words| words.checked_add(1))
+        .and_then(|words| words.checked_add(LINUX_AUXV_PAIRS * 2))
+        .ok_or(InitialStackError::StackTooSmall)?;
+    let table_bytes = table_words
+        .checked_mul(core::mem::size_of::<u64>())
+        .ok_or(InitialStackError::StackTooSmall)?;
+    let table_unaligned = cursor
+        .checked_sub(table_bytes)
+        .ok_or(InitialStackError::StackTooSmall)?;
+    let table_start = table_unaligned & !(INITIAL_STACK_ALIGNMENT - 1);
+    let stack_pointer = stack_base
+        .checked_add(u64::try_from(table_start).map_err(|_| InitialStackError::AddressOverflow)?)
+        .ok_or(InitialStackError::AddressOverflow)?;
+    if stack_pointer & (INITIAL_STACK_ALIGNMENT as u64 - 1) != 0 || stack_pointer >= stack_top {
+        return Err(InitialStackError::StackTooSmall);
+    }
+
+    let auxiliary = [
+        (LINUX_AT_PAGESZ, page_size),
+        (LINUX_AT_ENTRY, entry),
+        (LINUX_AT_UID, 0),
+        (LINUX_AT_EUID, 0),
+        (LINUX_AT_GID, 0),
+        (LINUX_AT_EGID, 0),
+        (LINUX_AT_SECURE, 0),
+        (LINUX_AT_EXECFN, argument_pointers[0]),
+        (LINUX_AT_NULL, 0),
+    ];
+    let mut word = 0usize;
+    write_initial_word(stack, table_start, &mut word, arguments.len() as u64)?;
+    for pointer in &argument_pointers[..arguments.len()] {
+        write_initial_word(stack, table_start, &mut word, *pointer)?;
+    }
+    write_initial_word(stack, table_start, &mut word, 0)?;
+    for pointer in &environment_pointers[..environment.len()] {
+        write_initial_word(stack, table_start, &mut word, *pointer)?;
+    }
+    write_initial_word(stack, table_start, &mut word, 0)?;
+    for (kind, value) in auxiliary {
+        write_initial_word(stack, table_start, &mut word, kind)?;
+        write_initial_word(stack, table_start, &mut word, value)?;
+    }
+    if word != table_words {
+        return Err(InitialStackError::StackTooSmall);
+    }
+
+    Ok(InitialStackLayout {
+        stack_pointer,
+        argument_count: arguments.len(),
+        environment_count: environment.len(),
+        auxiliary_pairs: LINUX_AUXV_PAIRS,
+        used_bytes: stack.len() - table_start,
+    })
+}
+
+fn push_initial_string(
+    stack: &mut [u8],
+    stack_base: u64,
+    cursor: &mut usize,
+    value: &[u8],
+) -> Result<u64, InitialStackError> {
+    if value.is_empty() {
+        return Err(InitialStackError::EmptyString);
+    }
+    if value.contains(&0) {
+        return Err(InitialStackError::EmbeddedNull);
+    }
+    let length = value
+        .len()
+        .checked_add(1)
+        .ok_or(InitialStackError::StackTooSmall)?;
+    *cursor = cursor
+        .checked_sub(length)
+        .ok_or(InitialStackError::StackTooSmall)?;
+    let end = cursor
+        .checked_add(value.len())
+        .ok_or(InitialStackError::StackTooSmall)?;
+    stack
+        .get_mut(*cursor..end)
+        .ok_or(InitialStackError::StackTooSmall)?
+        .copy_from_slice(value);
+    *stack.get_mut(end).ok_or(InitialStackError::StackTooSmall)? = 0;
+    stack_base
+        .checked_add(u64::try_from(*cursor).map_err(|_| InitialStackError::AddressOverflow)?)
+        .ok_or(InitialStackError::AddressOverflow)
+}
+
+fn write_initial_word(
+    stack: &mut [u8],
+    table_start: usize,
+    word: &mut usize,
+    value: u64,
+) -> Result<(), InitialStackError> {
+    let offset = word
+        .checked_mul(core::mem::size_of::<u64>())
+        .and_then(|offset| table_start.checked_add(offset))
+        .ok_or(InitialStackError::StackTooSmall)?;
+    let end = offset
+        .checked_add(core::mem::size_of::<u64>())
+        .ok_or(InitialStackError::StackTooSmall)?;
+    stack
+        .get_mut(offset..end)
+        .ok_or(InitialStackError::StackTooSmall)?
+        .copy_from_slice(&value.to_le_bytes());
+    *word += 1;
+    Ok(())
+}
+
 fn validate_image(image: ProcessImage) -> Result<(), ProcessError> {
     if image.address_space_root == 0
         || image.address_space_root & 0xfff != 0
         || image.user_memory_start >= image.user_memory_end
         || image.entry < image.user_memory_start
         || image.entry >= image.user_memory_end
+        || image.stack_pointer <= image.user_memory_end
+        || image.stack_pointer > image.stack_top
         || image.stack_top <= image.user_memory_end
     {
         return Err(ProcessError::InvalidImage);
@@ -309,6 +500,7 @@ mod tests {
     const IMAGE: ProcessImage = ProcessImage {
         address_space_root: 0x1000,
         entry: 0x4000_0000,
+        stack_pointer: 0x4000_1f00,
         stack_top: 0x4000_2000,
         user_memory_start: 0x4000_0000,
         user_memory_end: 0x4000_0100,
@@ -329,6 +521,111 @@ mod tests {
         let mut empty = ProcessTable::<1, 1>::new();
         assert_eq!(empty.spawn(None, invalid), Err(ProcessError::InvalidImage));
         assert_eq!(empty.spawn(Some(99), IMAGE), Err(ProcessError::NotFound));
+    }
+
+    #[test]
+    fn builds_aligned_linux_initial_stack_with_arguments_environment_and_auxv() {
+        let mut stack = [0u8; 512];
+        let layout = build_linux_initial_stack(
+            &mut stack,
+            0x4000_1000,
+            &[b"/sbin/slop-init", b"--system"],
+            &[
+                b"SLOPOS_SESSION=desktop",
+                b"XDG_CURRENT_DESKTOP=SlopOS",
+                b"WAYLAND_DISPLAY=wayland-0",
+            ],
+            IMAGE.entry,
+            4096,
+        )
+        .unwrap();
+        assert_eq!(layout.stack_pointer & 15, 0);
+        assert_eq!(layout.argument_count, 2);
+        assert_eq!(layout.environment_count, 3);
+        assert_eq!(layout.auxiliary_pairs, LINUX_AUXV_PAIRS);
+        assert!(layout.used_bytes < stack.len());
+
+        let table_offset = usize::try_from(layout.stack_pointer - 0x4000_1000).unwrap();
+        let mut words = [0u64; 26];
+        for (word, bytes) in words.iter_mut().zip(stack[table_offset..].chunks_exact(8)) {
+            *word = u64::from_le_bytes(bytes.try_into().unwrap());
+        }
+        assert_eq!(words[0], 2);
+        assert_eq!(stack_string(&stack, words[1]), b"/sbin/slop-init");
+        assert_eq!(stack_string(&stack, words[2]), b"--system");
+        assert_eq!(words[3], 0);
+        assert_eq!(stack_string(&stack, words[4]), b"SLOPOS_SESSION=desktop");
+        assert_eq!(
+            stack_string(&stack, words[5]),
+            b"XDG_CURRENT_DESKTOP=SlopOS"
+        );
+        assert_eq!(stack_string(&stack, words[6]), b"WAYLAND_DISPLAY=wayland-0");
+        assert_eq!(words[7], 0);
+        assert_eq!(
+            &words[8..26],
+            &[
+                LINUX_AT_PAGESZ,
+                4096,
+                LINUX_AT_ENTRY,
+                IMAGE.entry,
+                LINUX_AT_UID,
+                0,
+                LINUX_AT_EUID,
+                0,
+                LINUX_AT_GID,
+                0,
+                LINUX_AT_EGID,
+                0,
+                LINUX_AT_SECURE,
+                0,
+                LINUX_AT_EXECFN,
+                words[1],
+                LINUX_AT_NULL,
+                0,
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_or_oversized_linux_initial_stacks() {
+        let mut stack = [0u8; 128];
+        assert_eq!(
+            build_linux_initial_stack(&mut stack, 0x1000, &[], &[], IMAGE.entry, 4096),
+            Err(InitialStackError::MissingExecutableName)
+        );
+        assert_eq!(
+            build_linux_initial_stack(
+                &mut stack,
+                0x1000,
+                &[b"/sbin/slop-init", b""],
+                &[],
+                IMAGE.entry,
+                4096,
+            ),
+            Err(InitialStackError::EmptyString)
+        );
+        assert_eq!(
+            build_linux_initial_stack(
+                &mut stack,
+                0x1000,
+                &[b"/sbin/slop\0init"],
+                &[],
+                IMAGE.entry,
+                4096,
+            ),
+            Err(InitialStackError::EmbeddedNull)
+        );
+        assert_eq!(
+            build_linux_initial_stack(
+                &mut [0u8; 64],
+                0x1000,
+                &[b"/sbin/slop-init"],
+                &[b"SLOPOS_SESSION=desktop"],
+                IMAGE.entry,
+                4096,
+            ),
+            Err(InitialStackError::StackTooSmall)
+        );
     }
 
     #[test]
@@ -368,6 +665,12 @@ mod tests {
         table.advance_fd(first, first_fd, 6).unwrap();
         assert_eq!(table.read_window(first, first_fd, 4).unwrap().offset, 6);
         assert_eq!(table.read_window(second, second_fd, 4).unwrap().offset, 0);
+        table.seek_fd(first, first_fd, 2).unwrap();
+        assert_eq!(table.read_window(first, first_fd, 4).unwrap().offset, 2);
+        assert_eq!(
+            table.seek_fd(first, first_fd, 17),
+            Err(ProcessError::Vfs(VfsError::InvalidOffset))
+        );
         table.close_fd(first, first_fd).unwrap();
         assert_eq!(
             table.read_window(first, first_fd, 1),
@@ -393,5 +696,15 @@ mod tests {
             ),
             Err(ProcessError::InvalidState)
         );
+    }
+
+    fn stack_string(stack: &[u8], pointer: u64) -> &[u8] {
+        let start = usize::try_from(pointer - 0x4000_1000).unwrap();
+        let end = stack[start..]
+            .iter()
+            .position(|byte| *byte == 0)
+            .map(|length| start + length)
+            .unwrap();
+        &stack[start..end]
     }
 }

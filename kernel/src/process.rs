@@ -4,28 +4,39 @@ use core::arch::x86_64::__cpuid;
 use core::arch::{asm, global_asm};
 use core::cell::UnsafeCell;
 use core::ptr;
-use slopos_process::{ProcessError, ProcessImage, ProcessState, ProcessTable};
-use slopos_vfs::{AccessMode, FileNode, ReadWindow};
+use slopos_process::{
+    ProcessError, ProcessImage, ProcessState, ProcessTable, build_linux_initial_stack,
+};
+use slopos_vfs::{AccessMode, FileNode, ReadWindow, VfsError, WriteWindow};
 
 const PID: u32 = 1;
 const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
-const PROCESS_EXPECTED_SYSCALLS: u64 = 5;
+const PROCESS_EXPECTED_SYSCALLS: u64 = 15;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
 const LINUX_AT_FDCWD: u64 = (-100i64) as u64;
 const LINUX_O_RDONLY: u64 = 0;
+const LINUX_O_RDWR: u64 = 2;
 const LINUX_SYS_READ: u64 = 0;
 const USER_STDOUT: u64 = 1;
 const LINUX_SYS_WRITE: u64 = 1;
 const LINUX_SYS_CLOSE: u64 = 3;
+const LINUX_SYS_LSEEK: u64 = 8;
 const LINUX_SYS_EXIT: u64 = 60;
 const LINUX_SYS_OPENAT: u64 = 257;
+const LINUX_SEEK_SET: u64 = 0;
 const LINUX_EBADF: i64 = -9;
 const LINUX_EFAULT: i64 = -14;
 const LINUX_EINVAL: i64 = -22;
 const LINUX_ENAMETOOLONG: i64 = -36;
 const USER_MESSAGE: &[u8] = b"SLOPOS user write\n";
+const INIT_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-init", b"--system"];
+const INIT_ENVIRONMENT: &[&[u8]] = &[
+    b"SLOPOS_SESSION=desktop",
+    b"XDG_CURRENT_DESKTOP=SlopOS",
+    b"WAYLAND_DISPLAY=wayland-0",
+];
 const PAGE_SIZE: u64 = 4096;
 const IA32_EFER: u32 = 0xc000_0080;
 const IA32_STAR: u32 = 0xc000_0081;
@@ -74,11 +85,16 @@ static USER_MAPPING: UserMappingStorage = UserMappingStorage(UnsafeCell::new(Non
 pub struct OpenAtRequest {
     path: [u8; PROCESS_SYSCALL_PATH_CAPACITY],
     path_length: usize,
+    access_mode: AccessMode,
 }
 
 impl OpenAtRequest {
     pub fn path(&self) -> &[u8] {
         &self.path[..self.path_length]
+    }
+
+    pub fn access_mode(&self) -> AccessMode {
+        self.access_mode
     }
 }
 
@@ -90,6 +106,19 @@ pub struct ReadRequest {
 }
 
 #[derive(Clone, Copy)]
+pub struct WriteRequest {
+    pub fd: u32,
+    input: [u8; PROCESS_SYSCALL_IO_CAPACITY],
+    input_length: usize,
+}
+
+impl WriteRequest {
+    pub fn input(&self) -> &[u8] {
+        &self.input[..self.input_length]
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct CloseRequest {
     pub fd: u32,
 }
@@ -98,6 +127,7 @@ pub struct CloseRequest {
 enum PendingSyscall {
     OpenAt(OpenAtRequest),
     Read(ReadRequest),
+    Write(WriteRequest),
     Close(CloseRequest),
 }
 
@@ -105,6 +135,7 @@ enum PendingSyscall {
 pub enum ProcessEvent {
     OpenAt(OpenAtRequest),
     Read(ReadRequest),
+    Write(WriteRequest),
     Close(CloseRequest),
     Exited,
 }
@@ -190,18 +221,35 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
     }
     let address_space =
         crate::paging::create_user_address_space(segment.data(), segment.memory_size());
+    let stack_base = crate::paging::USER_STACK_TOP - PAGE_SIZE;
+    // SAFETY: create_user_address_space returned a fresh, zeroed physical
+    // stack frame that remains identity-mapped by the kernel and is not yet
+    // reachable by user mode.
+    let stack = unsafe {
+        core::slice::from_raw_parts_mut(address_space.stack_frame as *mut u8, PAGE_SIZE as usize)
+    };
+    let initial_stack = build_linux_initial_stack(
+        stack,
+        stack_base,
+        INIT_ARGUMENTS,
+        INIT_ENVIRONMENT,
+        elf.entry(),
+        PAGE_SIZE,
+    )
+    .unwrap_or_else(|_| crate::fatal("boot user initial stack construction failed"));
     set_user_mapping(UserMapping {
         code_frame: address_space.code_frame,
         stack_frame: address_space.stack_frame,
         code_start: crate::paging::USER_CODE_BASE,
         code_end: crate::paging::USER_CODE_BASE + segment.memory_size(),
-        stack_start: crate::paging::USER_STACK_TOP - PAGE_SIZE,
+        stack_start: stack_base,
         stack_end: crate::paging::USER_STACK_TOP,
     });
     clear_pending_syscall();
     let image = ProcessImage {
         address_space_root: address_space.root,
         entry: elf.entry(),
+        stack_pointer: initial_stack.stack_pointer,
         stack_top: crate::paging::USER_STACK_TOP,
         user_memory_start: crate::paging::USER_CODE_BASE,
         user_memory_end: crate::paging::USER_CODE_BASE + segment.memory_size(),
@@ -228,6 +276,14 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
         address_space.code_frame,
         address_space.stack_frame
     ));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-PROCESS: pid={PID} initial_stack abi=linux-x86_64 rsp={:#x} aligned=16 argc={} argv0=/sbin/slop-init envc={} auxv_pairs={} bytes={}",
+        initial_stack.stack_pointer,
+        initial_stack.argument_count,
+        initial_stack.environment_count,
+        initial_stack.auxiliary_pairs,
+        initial_stack.used_bytes
+    ));
     configure_fast_syscall();
     process_table_mut()
         .mark_running(PID)
@@ -235,25 +291,29 @@ pub fn start_probe(user_image: &[u8], source: &str, path: &str) -> ProcessEvent 
     // SAFETY: the process page table maps a validated one-page program and
     // stack under user permissions; GDT, TSS and syscall MSRs are live.
     unsafe {
-        slopos_enter_user(
-            address_space.root,
-            elf.entry(),
-            crate::paging::USER_STACK_TOP,
-        );
+        slopos_enter_user(address_space.root, elf.entry(), initial_stack.stack_pointer);
     }
     process_event_after_user()
 }
 
-pub fn open_file(node: FileNode) -> Result<u32, ProcessError> {
-    process_table_mut().open_file(PID, node, AccessMode::ReadOnly)
+pub fn open_file(node: FileNode, access_mode: AccessMode) -> Result<u32, ProcessError> {
+    process_table_mut().open_file(PID, node, access_mode)
 }
 
 pub fn read_window(fd: u32, requested: usize) -> Result<ReadWindow, ProcessError> {
     process_table().read_window(PID, fd, requested)
 }
 
+pub fn write_window(fd: u32, requested: usize) -> Result<WriteWindow, ProcessError> {
+    process_table().write_window(PID, fd, requested)
+}
+
 pub fn advance_fd(fd: u32, length: usize) -> Result<(), ProcessError> {
     process_table_mut().advance_fd(PID, fd, length)
+}
+
+pub fn seek_fd(fd: u32, offset: u64) -> Result<(), ProcessError> {
+    process_table_mut().seek_fd(PID, fd, offset)
 }
 
 pub fn close_fd(fd: u32) -> Result<(), ProcessError> {
@@ -281,7 +341,7 @@ pub fn resume_probe(result: i64, read_output: Option<&[u8]>) -> ProcessEvent {
                     .unwrap_or_else(|| crate::fatal("read completion user buffer became invalid"));
             }
         }
-        PendingSyscall::OpenAt(_) | PendingSyscall::Close(_) => {
+        PendingSyscall::OpenAt(_) | PendingSyscall::Write(_) | PendingSyscall::Close(_) => {
             if read_output.is_some() {
                 crate::fatal("non-read completion carried output bytes");
             }
@@ -327,11 +387,19 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
         .unwrap_or_else(|_| crate::fatal("syscall process accounting failed"));
     match frame.rax {
         LINUX_SYS_OPENAT => {
-            if frame.rdi != LINUX_AT_FDCWD || frame.rdx != LINUX_O_RDONLY || frame.r10 != 0 {
+            if frame.rdi != LINUX_AT_FDCWD || frame.r10 != 0 {
                 frame.rax = LINUX_EINVAL as u64;
                 return 0;
             }
-            let request = match copy_user_path(frame.rsi) {
+            let access_mode = match frame.rdx {
+                LINUX_O_RDONLY => AccessMode::ReadOnly,
+                LINUX_O_RDWR => AccessMode::ReadWrite,
+                _ => {
+                    frame.rax = LINUX_EINVAL as u64;
+                    return 0;
+                }
+            };
+            let request = match copy_user_path(frame.rsi, access_mode) {
                 Ok(request) => request,
                 Err(errno) => {
                     frame.rax = errno as u64;
@@ -341,7 +409,8 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             let display = core::str::from_utf8(request.path()).unwrap_or("<non-utf8>");
             suspend_syscall(frame, PendingSyscall::OpenAt(request));
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path={display} origin=cpl3"
+                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags={} path={display} origin=cpl3",
+                frame.rdx
             ));
             2
         }
@@ -375,26 +444,50 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             2
         }
         LINUX_SYS_WRITE => {
-            if frame.rdi != USER_STDOUT {
+            if frame.rdi == USER_STDOUT {
+                if frame.rdx != USER_MESSAGE.len() as u64 {
+                    frame.rax = LINUX_EINVAL as u64;
+                    return 0;
+                }
+                let message = user_bytes(frame.rsi, USER_MESSAGE.len())
+                    .unwrap_or_else(|| crate::fatal("user write range is outside PT_LOAD memory"));
+                if message != USER_MESSAGE {
+                    crate::fatal("user write syscall payload is invalid");
+                }
+                frame.rax = USER_MESSAGE.len() as u64;
+                crate::serial::serialln(format_args!(
+                    "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes={} origin=cpl3 result={}",
+                    USER_MESSAGE.len(),
+                    USER_MESSAGE.len()
+                ));
+                return 0;
+            }
+            let Ok(fd) = u32::try_from(frame.rdi) else {
                 frame.rax = LINUX_EBADF as u64;
                 return 0;
-            }
-            if frame.rdx != USER_MESSAGE.len() as u64 {
-                frame.rax = LINUX_EINVAL as u64;
+            };
+            let requested = usize::try_from(frame.rdx)
+                .unwrap_or(usize::MAX)
+                .min(PROCESS_SYSCALL_IO_CAPACITY);
+            if requested == 0 {
+                frame.rax = 0;
                 return 0;
             }
-            let message = user_bytes(frame.rsi, USER_MESSAGE.len())
-                .unwrap_or_else(|| crate::fatal("user write range is outside PT_LOAD memory"));
-            if message != USER_MESSAGE {
-                crate::fatal("user write syscall payload is invalid");
-            }
-            frame.rax = USER_MESSAGE.len() as u64;
+            let Some(input) = user_bytes(frame.rsi, requested) else {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            };
+            let mut request = WriteRequest {
+                fd,
+                input: [0; PROCESS_SYSCALL_IO_CAPACITY],
+                input_length: requested,
+            };
+            request.input[..requested].copy_from_slice(input);
+            suspend_syscall(frame, PendingSyscall::Write(request));
             crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes={} origin=cpl3 result={}",
-                USER_MESSAGE.len(),
-                USER_MESSAGE.len()
+                "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd={fd} requested={requested} origin=cpl3"
             ));
-            0
+            2
         }
         LINUX_SYS_CLOSE => {
             let Ok(fd) = u32::try_from(frame.rdi) else {
@@ -406,6 +499,32 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd={fd} origin=cpl3"
             ));
             2
+        }
+        LINUX_SYS_LSEEK => {
+            let Ok(fd) = u32::try_from(frame.rdi) else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            if frame.rdx != LINUX_SEEK_SET || frame.rsi > i64::MAX as u64 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            match seek_fd(fd, frame.rsi) {
+                Ok(()) => {
+                    frame.rax = frame.rsi;
+                    crate::serial::serialln(format_args!(
+                        "SLOPOS-SYSCALL: pid={PID} abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd={fd} offset={} whence=0 async=false",
+                        frame.rsi
+                    ));
+                }
+                Err(ProcessError::Vfs(VfsError::BadFileDescriptor)) => {
+                    frame.rax = LINUX_EBADF as u64;
+                }
+                Err(_) => {
+                    frame.rax = LINUX_EINVAL as u64;
+                }
+            }
+            0
         }
         LINUX_SYS_EXIT => {
             if frame.rdi > u64::from(u8::MAX) {
@@ -448,6 +567,7 @@ fn process_event_after_user() -> ProcessEvent {
     {
         PendingSyscall::OpenAt(request) => ProcessEvent::OpenAt(request),
         PendingSyscall::Read(request) => ProcessEvent::Read(request),
+        PendingSyscall::Write(request) => ProcessEvent::Write(request),
         PendingSyscall::Close(request) => ProcessEvent::Close(request),
     }
 }
@@ -464,10 +584,11 @@ fn suspend_syscall(frame: &SyscallFrame, request: PendingSyscall) {
     }
 }
 
-fn copy_user_path(address: u64) -> Result<OpenAtRequest, i64> {
+fn copy_user_path(address: u64, access_mode: AccessMode) -> Result<OpenAtRequest, i64> {
     let mut request = OpenAtRequest {
         path: [0; PROCESS_SYSCALL_PATH_CAPACITY],
         path_length: 0,
+        access_mode,
     };
     for index in 0..PROCESS_SYSCALL_PATH_CAPACITY {
         let index = u64::try_from(index).map_err(|_| LINUX_EFAULT)?;
