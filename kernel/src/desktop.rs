@@ -1602,6 +1602,10 @@ impl Desktop {
             NiriAction::SwitchFocusBetweenFloatingAndTiling => {
                 self.workspaces.switch_focus_between_floating_and_tiling()
             }
+            NiriAction::MoveWindowToFloating => self.workspaces.move_focused_window_to_floating(),
+            NiriAction::MoveWindowToTiling => self.workspaces.move_focused_window_to_tiling(),
+            NiriAction::FocusFloating => self.workspaces.focus_floating(),
+            NiriAction::FocusTiling => self.workspaces.focus_tiling(),
             NiriAction::SwitchPresetColumnWidth => self.workspaces.switch_preset_column_width(),
             NiriAction::SwitchPresetColumnWidthBack => {
                 self.workspaces.switch_preset_column_width_back()
@@ -1847,17 +1851,45 @@ impl Desktop {
             ));
         }
         if changed
-            && matches!(action, NiriAction::SwitchFocusBetweenFloatingAndTiling)
+            && matches!(
+                action,
+                NiriAction::MoveWindowToFloating | NiriAction::MoveWindowToTiling
+            )
             && let Some(window) = self.positioned_window(self.active)
         {
             serialln(format_args!(
-                "SLOPOS-DESKTOP: layer focus switched layer={} kind={} layout=niri",
+                "SLOPOS-DESKTOP: window layer moved action={} kind={} layer={} x={} y={} width={} height={} layout=niri",
+                action_name(action),
+                title(window.kind),
                 if self.workspaces.focused_window_is_floating() {
                     "floating"
                 } else {
                     "tiling"
                 },
-                title(window.kind)
+                window.x,
+                window.y,
+                window.width,
+                window.height
+            ));
+        }
+        if changed
+            && matches!(
+                action,
+                NiriAction::SwitchFocusBetweenFloatingAndTiling
+                    | NiriAction::FocusFloating
+                    | NiriAction::FocusTiling
+            )
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: layer focus switched layer={} kind={} layout=niri action={}",
+                if self.workspaces.focused_window_is_floating() {
+                    "floating"
+                } else {
+                    "tiling"
+                },
+                title(window.kind),
+                action_name(action)
             ));
         }
         serialln(format_args!(
@@ -2079,6 +2111,10 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::SwitchFocusBetweenFloatingAndTiling => {
             "switch-focus-between-floating-and-tiling"
         }
+        NiriAction::MoveWindowToFloating => "move-window-to-floating",
+        NiriAction::MoveWindowToTiling => "move-window-to-tiling",
+        NiriAction::FocusFloating => "focus-floating",
+        NiriAction::FocusTiling => "focus-tiling",
         NiriAction::SwitchPresetColumnWidth => "switch-preset-column-width",
         NiriAction::SwitchPresetColumnWidthBack => "switch-preset-column-width-back",
         NiriAction::SwitchPresetWindowHeight => "switch-preset-window-height",

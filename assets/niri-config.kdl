@@ -35,6 +35,10 @@ binds {
     Mod+W { toggle-column-tabbed-display; }
     Mod+V { toggle-window-floating; }
     Mod+Shift+V { switch-focus-between-floating-and-tiling; }
+    Mod+Alt+V { move-window-to-floating; }
+    Mod+Ctrl+V { move-window-to-tiling; }
+    Mod+Alt+G { focus-floating; }
+    Mod+Alt+T { focus-tiling; }
     Mod+Minus { set-column-width "-10%"; }
     Mod+Equal { set-column-width "+10%"; }
     Mod+Shift+Minus { set-window-height "-10%"; }

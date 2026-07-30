@@ -77,6 +77,10 @@ pub enum NiriAction<'a> {
     ToggleColumnTabbedDisplay,
     ToggleWindowFloating,
     SwitchFocusBetweenFloatingAndTiling,
+    MoveWindowToFloating,
+    MoveWindowToTiling,
+    FocusFloating,
+    FocusTiling,
     SwitchPresetColumnWidth,
     SwitchPresetColumnWidthBack,
     SwitchPresetWindowHeight,
@@ -524,6 +528,10 @@ impl<'a> ShellConfigParser<'a> {
             "switch-focus-between-floating-and-tiling" => {
                 NiriAction::SwitchFocusBetweenFloatingAndTiling
             }
+            "move-window-to-floating" => NiriAction::MoveWindowToFloating,
+            "move-window-to-tiling" => NiriAction::MoveWindowToTiling,
+            "focus-floating" => NiriAction::FocusFloating,
+            "focus-tiling" => NiriAction::FocusTiling,
             "switch-preset-column-width" => NiriAction::SwitchPresetColumnWidth,
             "switch-preset-column-width-back" => NiriAction::SwitchPresetColumnWidthBack,
             "switch-preset-window-height" => NiriAction::SwitchPresetWindowHeight,
@@ -1427,20 +1435,15 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
 
     pub fn toggle_focused_window_floating(&mut self) -> bool {
         if self.focused_window_is_floating() {
-            let Some(window) = self.floating[self.active].focused_window() else {
-                return false;
-            };
-            let entry = self.floating[self.active]
-                .remove(window)
-                .expect("focused floating window is present");
-            if self.layouts[self.active].open_window(window).is_err() {
-                self.floating[self.active]
-                    .add_entry(entry)
-                    .expect("removed floating window has capacity to roll back");
-                return false;
-            }
-            self.floating_active[self.active] = false;
-            return true;
+            self.move_focused_window_to_tiling()
+        } else {
+            self.move_focused_window_to_floating()
+        }
+    }
+
+    pub fn move_focused_window_to_floating(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
         }
         let Some(window) = self.layouts[self.active].focused_window() else {
             return false;
@@ -1461,11 +1464,47 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         true
     }
 
+    pub fn move_focused_window_to_tiling(&mut self) -> bool {
+        if !self.focused_window_is_floating() {
+            return false;
+        }
+        let Some(window) = self.floating[self.active].focused_window() else {
+            return false;
+        };
+        let entry = self.floating[self.active]
+            .remove(window)
+            .expect("focused floating window is present");
+        if self.layouts[self.active].open_window(window).is_err() {
+            self.floating[self.active]
+                .add_entry(entry)
+                .expect("removed floating window has capacity to roll back");
+            return false;
+        }
+        self.floating_active[self.active] = false;
+        true
+    }
+
     pub fn switch_focus_between_floating_and_tiling(&mut self) -> bool {
         if self.layouts[self.active].is_empty() || self.floating[self.active].is_empty() {
             return false;
         }
         self.floating_active[self.active] = !self.floating_active[self.active];
+        true
+    }
+
+    pub fn focus_floating(&mut self) -> bool {
+        if self.floating[self.active].is_empty() || self.floating_layer_is_active() {
+            return false;
+        }
+        self.floating_active[self.active] = true;
+        true
+    }
+
+    pub fn focus_tiling(&mut self) -> bool {
+        if self.layouts[self.active].is_empty() || !self.floating_layer_is_active() {
+            return false;
+        }
+        self.floating_active[self.active] = false;
         true
     }
 
@@ -1801,6 +1840,10 @@ mod tests {
                 Mod+W { toggle-column-tabbed-display; }
                 Mod+V { toggle-window-floating; }
                 Mod+Shift+V { switch-focus-between-floating-and-tiling; }
+                Mod+Alt+V { move-window-to-floating; }
+                Mod+Ctrl+V { move-window-to-tiling; }
+                Mod+Alt+G { focus-floating; }
+                Mod+Alt+T { focus-tiling; }
                 Mod+Minus { set-column-width "-10%"; }
                 Mod+Equal { set-column-width "640"; }
                 Mod+Shift+Minus { set-window-height "-10%"; }
@@ -1836,7 +1879,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 35);
+        assert_eq!(config.bindings.len(), 39);
         assert_eq!(
             config
                 .bindings
@@ -2045,6 +2088,34 @@ mod tests {
             Some(NiriAction::SwitchFocusBetweenFloatingAndTiling)
         );
         assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::ALT),
+                BindingKey::Character(b'V')
+            ),
+            Some(NiriAction::MoveWindowToFloating)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::Character(b'V')
+            ),
+            Some(NiriAction::MoveWindowToTiling)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::ALT),
+                BindingKey::Character(b'G')
+            ),
+            Some(NiriAction::FocusFloating)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::ALT),
+                BindingKey::Character(b'T')
+            ),
+            Some(NiriAction::FocusTiling)
+        );
+        assert_eq!(
             config
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Minus),
@@ -2168,6 +2239,11 @@ mod tests {
         assert!(workspaces.switch_focus_between_floating_and_tiling());
         assert_eq!(workspaces.focused_window(), Some(2));
         assert!(!workspaces.focused_window_is_floating());
+        assert!(!workspaces.focus_tiling());
+        assert!(workspaces.focus_floating());
+        assert!(!workspaces.focus_floating());
+        assert_eq!(workspaces.focused_window(), Some(1));
+        assert!(workspaces.focus_tiling());
         assert!(workspaces.switch_focus_between_floating_and_tiling());
         assert_eq!(workspaces.focused_window(), Some(1));
 
@@ -2193,10 +2269,16 @@ mod tests {
         assert_eq!(workspaces.active(), 1);
         assert!(workspaces.focused_window_is_floating());
         assert!(workspaces.window_is_floating(1));
-        assert!(workspaces.toggle_focused_window_floating());
+        assert!(workspaces.move_focused_window_to_tiling());
+        assert!(!workspaces.move_focused_window_to_tiling());
         assert!(!workspaces.focused_window_is_floating());
         assert!(!workspaces.window_is_floating(1));
         assert_eq!(workspaces.tile_rect(1).unwrap().y, 56);
+
+        assert!(workspaces.move_focused_window_to_floating());
+        assert!(!workspaces.move_focused_window_to_floating());
+        assert!(workspaces.toggle_focused_window_floating());
+        assert!(!workspaces.window_is_floating(1));
 
         workspaces.open_floating_window(1, 3).unwrap();
         workspaces.focus_window(3).unwrap();
