@@ -45,6 +45,7 @@ required_markers=(
     "SLOPOS-MM: CR3 switched"
     "SLOPOS-MM: kernel heap initialized"
     "SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42"
+    "SLOPOS-PCI: mechanism1 devices="
     "SLOPOS-KERNEL: framebuffer ownership accepted"
     "SLOPOS-INPUT: PS/2 keyboard and mouse IRQ queue armed"
     "SLOPOS-INTERRUPT: GDT IDT LAPIC IOAPIC PIT initialized"
