@@ -41,8 +41,16 @@ cp "${repo_dir}/assets/waybar-config.jsonc" "${staging_dir}/etc/slopos/waybar.js
 cp "${repo_dir}/assets/waybar-style.css" "${staging_dir}/etc/slopos/waybar.css"
 cp "${repo_dir}/assets/swww.env" "${staging_dir}/etc/slopos/swww.env"
 mkdir -p "${staging_dir}/usr/share/slopos"
-dd if=/dev/zero bs=1024 count=6 status=none \
-    | tr '\000' 'Z' >"${staging_dir}/usr/share/slopos/multiblock.bin"
+wallpaper_probe="${staging_dir}/usr/share/slopos/vfs-wallpaper.ppm"
+cp "${repo_dir}/assets/wallpapers/aurora.ppm" "${wallpaper_probe}"
+printf '\n#' >>"${wallpaper_probe}"
+wallpaper_bytes="$(stat -c '%s' "${wallpaper_probe}")"
+if (( wallpaper_bytes >= 6144 )); then
+    echo "VFS wallpaper probe leaves no room for a trailing PNM comment" >&2
+    exit 1
+fi
+dd if=/dev/zero bs=1 count="$((6144 - wallpaper_bytes))" status=none \
+    | tr '\000' 'P' >>"${wallpaper_probe}"
 dd if=/dev/zero bs=4096 count=9 status=none \
     | tr '\000' 'D' >"${staging_dir}/usr/share/slopos/deep-extent.bin"
 dd if=/dev/zero bs=4096 count=1 status=none \

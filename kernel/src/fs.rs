@@ -47,7 +47,7 @@ const EXPECTED_RELEASE: &[u8] = include_bytes!("../../rootfs/etc/slopos-release"
 const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/slopos/system.conf");
 const RELEASE_PATH: [&[u8]; 2] = [b"etc", b"slopos-release"];
 const CONFIGURATION_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"system.conf"];
-const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"multiblock.bin"];
+const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"vfs-wallpaper.ppm"];
 const DEEP_EXTENT_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"deep-extent.bin"];
 const CROSS_BLOCK_PATH: [&[u8]; 5] = [b"usr", b"share", b"slopos", b"large-directory", b"tail-29"];
 const SYMLINK_PATH: [&[u8]; 2] = [b"etc", b"current-release"];
@@ -77,6 +77,7 @@ struct UserProcessRuntime {
 enum BlockRuntimeEvent {
     Desktop(slopos_desktop_protocol::DesktopServiceEvent),
     Reload { inject_invalid: bool },
+    Wallpaper,
 }
 
 struct NextBlockRuntimeEvent {
@@ -97,6 +98,9 @@ impl Future for NextBlockRuntimeEvent {
             return Poll::Ready(BlockRuntimeEvent::Reload {
                 inject_invalid: crate::desktop_config::take_invalid_reload_request(),
             });
+        }
+        if crate::wallpaper_file::request_ready() {
+            return Poll::Ready(BlockRuntimeEvent::Wallpaper);
         }
         Poll::Pending
     }
@@ -305,22 +309,24 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
     mount
         .prefetch_file_pair(&mut device, &multiblock, 0, 1)
         .await;
-    let mut multiblock_bytes = 0usize;
-    for logical_block in 0..2 {
-        let bytes = mount
-            .read_file_block(&mut device, &multiblock, logical_block)
-            .await;
-        if bytes.iter().any(|byte| *byte != b'Z') {
-            device.fail("ext4 multiblock file content mismatch");
-        }
-        multiblock_bytes += bytes.len();
+    let first_wallpaper_block = mount.read_file_block(&mut device, &multiblock, 0).await;
+    if first_wallpaper_block.len() != BLOCK_SIZE || !first_wallpaper_block.starts_with(b"P3") {
+        device.fail("ext4 multiblock P3 wallpaper header mismatch");
     }
+    let first_wallpaper_block_length = first_wallpaper_block.len();
+    let second_wallpaper_block = mount.read_file_block(&mut device, &multiblock, 1).await;
+    if second_wallpaper_block.len() != 2048
+        || second_wallpaper_block.iter().any(|byte| *byte != b'P')
+    {
+        device.fail("ext4 multiblock P3 wallpaper comment padding mismatch");
+    }
+    let multiblock_bytes = first_wallpaper_block_length + second_wallpaper_block.len();
     let multiblock_group = mount
         .superblock
         .inode_group(multiblock.inode.number)
         .unwrap_or_else(|_| device.fail("ext4 multiblock inode group is invalid"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: multiblock file valid inode={} inode_group={multiblock_group} bytes={multiblock_bytes} logical_blocks=2 path=/usr/share/slopos/multiblock.bin",
+        "SLOPOS-EXT4: multiblock file valid inode={} inode_group={multiblock_group} bytes={multiblock_bytes} logical_blocks=2 format=P3 comment_padding=valid path=/usr/share/slopos/vfs-wallpaper.ppm",
         multiblock.inode.number,
     ));
 
@@ -708,6 +714,11 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
             BlockRuntimeEvent::Reload { inject_invalid } => {
                 load_and_publish_desktop_config(&mut mount, &mut device, false, inject_invalid)
                     .await;
+            }
+            BlockRuntimeEvent::Wallpaper => {
+                let request = crate::wallpaper_file::take_request()
+                    .unwrap_or_else(|| device.fail("swww VFS request signal lost its payload"));
+                load_and_publish_wallpaper(&mut mount, &mut device, request).await;
             }
         }
     }
@@ -1251,6 +1262,97 @@ async fn load_and_publish_desktop_config(
             config_error_name(error),
             crate::desktop_config::current_generation()
         )),
+    }
+}
+
+async fn load_and_publish_wallpaper(
+    mount: &mut Ext4Mount,
+    device: &mut BlockDevice,
+    request: crate::wallpaper_file::WallpaperFileRequest,
+) {
+    let generation = request.generation();
+    let requested = request.request_path();
+    let resolved = request.resolved_path();
+    let path = match AbsolutePath::parse(request.resolved_path_bytes()) {
+        Ok(path) if path.component_count() != 0 => path,
+        _ => {
+            crate::wallpaper_file::publish_error(
+                request,
+                crate::wallpaper_file::WallpaperFileError::InvalidPath,
+            );
+            wallpaper_file_rejected(generation, requested, resolved, "invalid-path");
+            return;
+        }
+    };
+    let Some(file) = mount.try_open_file(device, path.components()).await else {
+        crate::wallpaper_file::publish_error(
+            request,
+            crate::wallpaper_file::WallpaperFileError::NotFound,
+        );
+        wallpaper_file_rejected(generation, requested, resolved, "not-found");
+        return;
+    };
+    let size = usize::try_from(file.inode.size).unwrap_or(usize::MAX);
+    if size == 0 {
+        crate::wallpaper_file::publish_error(
+            request,
+            crate::wallpaper_file::WallpaperFileError::InvalidPpm,
+        );
+        wallpaper_file_rejected(generation, requested, resolved, "invalid-ppm");
+        return;
+    }
+    if size > crate::wallpaper_file::WALLPAPER_FILE_CAPACITY {
+        crate::wallpaper_file::publish_error(
+            request,
+            crate::wallpaper_file::WallpaperFileError::FileTooLarge,
+        );
+        wallpaper_file_rejected(generation, requested, resolved, "file-size");
+        return;
+    }
+
+    let mut writer = crate::wallpaper_file::begin_result(request);
+    let mut copied = 0usize;
+    let mut logical_block = 0u32;
+    while copied < size {
+        let bytes = mount.read_file_block(device, &file, logical_block).await;
+        let length = bytes.len().min(size - copied);
+        if length == 0 || !writer.write(&bytes[..length]) {
+            writer.publish_error(crate::wallpaper_file::WallpaperFileError::FileTooLarge);
+            wallpaper_file_rejected(generation, requested, resolved, "file-size");
+            return;
+        }
+        copied += length;
+        logical_block += 1;
+    }
+    match writer.publish() {
+        Ok(published) => crate::serial::serialln(format_args!(
+            "SLOPOS-SWWW-VFS: load published generation={published} request={requested} resolved={resolved} inode={} bytes={copied} blocks={logical_block} format=P3 async=true",
+            file.inode.number
+        )),
+        Err(error) => wallpaper_file_rejected(
+            generation,
+            requested,
+            resolved,
+            wallpaper_file_error_name(error),
+        ),
+    }
+}
+
+fn wallpaper_file_rejected(generation: u64, requested: &str, resolved: &str, error: &str) {
+    crate::serial::serialln(format_args!(
+        "SLOPOS-SWWW-VFS: load rejected generation={generation} request={requested} resolved={resolved} error={error} retained=previous"
+    ));
+}
+
+const fn wallpaper_file_error_name(
+    error: crate::wallpaper_file::WallpaperFileError,
+) -> &'static str {
+    match error {
+        crate::wallpaper_file::WallpaperFileError::InvalidPath => "invalid-path",
+        crate::wallpaper_file::WallpaperFileError::NotFound => "not-found",
+        crate::wallpaper_file::WallpaperFileError::FileTooLarge => "file-size",
+        crate::wallpaper_file::WallpaperFileError::InvalidUtf8 => "invalid-utf8",
+        crate::wallpaper_file::WallpaperFileError::InvalidPpm => "invalid-ppm",
     }
 }
 

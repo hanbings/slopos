@@ -7,11 +7,12 @@ use crate::ps2::{Controller, DesktopEvent, InputEvent, Key, KeyEvent, KeyModifie
 use crate::serial::serialln;
 use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
-    BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers, NiriAction,
-    NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle, SwwwCommand, SwwwDaemonError,
-    SwwwDefaults, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference, WorkspaceSet,
-    format_bar_text, parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
-    parse_swww_environment, parse_waybar_config, parse_waybar_style, transition_pixel,
+    BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers, ImgRequest,
+    NiriAction, NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle, SwwwCommand,
+    SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle,
+    WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout, parse_niri_shell_config,
+    parse_ppm, parse_swww_command, parse_swww_environment, parse_waybar_config, parse_waybar_style,
+    transition_pixel,
 };
 
 const WINDOW_COUNT: usize = 3;
@@ -54,6 +55,9 @@ pub struct Desktop {
     bar_style: WaybarStyle<'static>,
     swww_defaults: SwwwDefaults,
     wallpaper: WallpaperDaemon,
+    wallpaper_current_image: Option<PpmImage<'static>>,
+    wallpaper_previous_image: Option<PpmImage<'static>>,
+    wallpaper_generation: u64,
     active: usize,
     pointer_x: i32,
     pointer_y: i32,
@@ -167,6 +171,9 @@ impl Desktop {
             bar_style,
             swww_defaults,
             wallpaper,
+            wallpaper_current_image: None,
+            wallpaper_previous_image: None,
+            wallpaper_generation: 0,
             active: 0,
             pointer_x: width / 2,
             pointer_y: height / 2,
@@ -218,8 +225,12 @@ impl Desktop {
 
     pub async fn run(&mut self, framebuffer: &mut Framebuffer, mut input: Controller) -> ! {
         loop {
-            match crate::ps2::next_desktop_event(self.config_generation, self.service_generation)
-                .await
+            match crate::ps2::next_desktop_event(
+                self.config_generation,
+                self.service_generation,
+                self.wallpaper_generation,
+            )
+            .await
             {
                 DesktopEvent::ConfigUpdate(sources) => {
                     self.apply_config_update(sources);
@@ -228,6 +239,20 @@ impl Desktop {
                 DesktopEvent::ServiceUpdate(snapshot) => {
                     self.apply_service_update(snapshot);
                     self.render(framebuffer);
+                }
+                DesktopEvent::WallpaperUpdate(update) => {
+                    let generation = update.generation();
+                    let (animate, applied) = self.apply_wallpaper_file_update(update);
+                    if animate {
+                        self.animate_wallpaper(framebuffer);
+                    } else {
+                        self.render(framebuffer);
+                    }
+                    self.wallpaper_generation = generation;
+                    crate::wallpaper_file::acknowledge(generation, applied);
+                    serialln(format_args!(
+                        "SLOPOS-SWWW-VFS: result acknowledged generation={generation} renderer=desktop active_image={applied}"
+                    ));
                 }
                 DesktopEvent::Input(byte) => {
                     if let Some(event) = input.consume(byte) {
@@ -273,18 +298,15 @@ impl Desktop {
                 .clear_color()
                 .unwrap_or(self.workspaces.config().background_color),
         );
-        let Some(current_path) = self.wallpaper.current_image() else {
+        if self.wallpaper.current_image().is_none() {
             return;
-        };
-        let current = wallpaper_asset(current_path)
-            .unwrap_or_else(|| crate::fatal("swww current image left embedded registry"));
-        let previous = self
-            .wallpaper
-            .previous_image()
-            .and_then(wallpaper_asset)
-            .unwrap_or(current);
+        }
+        let current = self
+            .wallpaper_current_image
+            .unwrap_or_else(|| crate::fatal("swww current image bytes are unavailable"));
+        let previous = self.wallpaper_previous_image.unwrap_or(current);
         if previous.width() != current.width() || previous.height() != current.height() {
-            crate::fatal("swww embedded transition dimensions differ");
+            crate::fatal("swww transition image dimensions differ");
         }
         let (destination_x, destination_y, scale) = wallpaper_destination(
             self.wallpaper.transition().resize,
@@ -339,6 +361,7 @@ impl Desktop {
                 .set_progress(self.wallpaper.progress().saturating_add(sampled_step));
         }
         self.wallpaper.finish_transition();
+        self.wallpaper_previous_image = None;
         serialln(format_args!(
             "SLOPOS-SWWW: transition complete type={} step={} fps={} frames={}",
             transition.kind.name(),
@@ -485,8 +508,9 @@ impl Desktop {
             .unwrap_or_else(|_| crate::fatal("desktop service wallpaper command is invalid")) else {
                 crate::fatal("desktop service wallpaper command changed kind");
             };
-            self.wallpaper
-                .apply(request)
+            let image = wallpaper_asset(request.path)
+                .unwrap_or_else(|| crate::fatal("desktop service wallpaper asset disappeared"));
+            self.apply_wallpaper_image(request, image)
                 .unwrap_or_else(|_| crate::fatal("desktop service wallpaper policy failed"));
             serialln(format_args!(
                 "SLOPOS-SWWW: policy applied owner_pid={} image={} output=SLOPOS-1 transition={} step={} fps={}",
@@ -507,6 +531,85 @@ impl Desktop {
             AURORA_PATH
         ));
         crate::desktop_service::acknowledge_applied(snapshot.generation);
+    }
+
+    fn apply_wallpaper_image(
+        &mut self,
+        mut request: ImgRequest<'_>,
+        image: PpmImage<'static>,
+    ) -> Result<(), SwwwDaemonError> {
+        let previous = self.wallpaper_current_image;
+        if previous.is_some_and(|previous| {
+            previous.width() != image.width() || previous.height() != image.height()
+        }) && request.transition.kind != TransitionType::None
+        {
+            serialln(format_args!(
+                "SLOPOS-SWWW: transition fallback requested={} applied=none reason=dimension-change new={}x{}",
+                request.transition.kind.name(),
+                image.width(),
+                image.height()
+            ));
+            request.transition.kind = TransitionType::None;
+            request.transition.step = u8::MAX;
+        }
+        self.wallpaper.apply(request)?;
+        self.wallpaper_previous_image = previous;
+        self.wallpaper_current_image = Some(image);
+        if !self.wallpaper.transition_active() {
+            self.wallpaper_previous_image = None;
+        }
+        Ok(())
+    }
+
+    fn apply_wallpaper_file_update(
+        &mut self,
+        update: crate::wallpaper_file::WallpaperFileUpdate,
+    ) -> (bool, bool) {
+        match update {
+            crate::wallpaper_file::WallpaperFileUpdate::Ready(source) => {
+                let image = parse_ppm(source.image)
+                    .unwrap_or_else(|_| crate::fatal("published swww VFS PPM became invalid"));
+                let request = ImgRequest {
+                    path: source.request_path,
+                    output: source.output,
+                    transition: source.transition,
+                };
+                match self.apply_wallpaper_image(request, image) {
+                    Ok(()) => {
+                        self.set_response("SWWW VFS IMAGE APPLIED");
+                        serialln(format_args!(
+                            "SLOPOS-SWWW: image={} resolved={} source=vfs output={} transition={} step={} fps={}",
+                            source.request_path,
+                            source.resolved_path,
+                            source.output.unwrap_or("*"),
+                            self.wallpaper.transition().kind.name(),
+                            self.wallpaper.transition().step,
+                            self.wallpaper.transition().fps
+                        ));
+                        (self.wallpaper.transition_active(), true)
+                    }
+                    Err(error) => {
+                        self.set_response(swww_error(error));
+                        (false, false)
+                    }
+                }
+            }
+            crate::wallpaper_file::WallpaperFileUpdate::Failed {
+                request_path,
+                resolved_path,
+                error,
+                ..
+            } => {
+                self.set_response(wallpaper_file_error_response(error));
+                serialln(format_args!(
+                    "SLOPOS-SWWW: image={} resolved={} source=vfs applied=false error={}",
+                    request_path,
+                    resolved_path,
+                    wallpaper_file_error_name(error)
+                ));
+                (false, false)
+            }
+        }
     }
 
     fn apply_config_update(&mut self, sources: crate::desktop_config::DesktopConfigSources) {
@@ -1208,20 +1311,20 @@ impl Desktop {
             match parse_swww_command(command, self.swww_defaults) {
                 Ok(SwwwCommand::Daemon) => match self.wallpaper.start() {
                     Ok(()) => {
+                        self.wallpaper_current_image = None;
+                        self.wallpaper_previous_image = None;
                         self.set_response("SWWW DAEMON STARTED");
                         serialln(format_args!("SLOPOS-SWWW: daemon started"));
                     }
                     Err(error) => self.set_response(swww_error(error)),
                 },
                 Ok(SwwwCommand::Img(request)) => {
-                    if wallpaper_asset(request.path).is_none() {
-                        self.set_response("SWWW IMAGE NOT IN EMBEDDED PNM REGISTRY");
-                    } else {
-                        match self.wallpaper.apply(request) {
+                    if let Some(image) = wallpaper_asset(request.path) {
+                        match self.apply_wallpaper_image(request, image) {
                             Ok(()) => {
                                 self.set_response("SWWW IMAGE APPLIED");
                                 serialln(format_args!(
-                                    "SLOPOS-SWWW: image={} output={} transition={} step={} fps={}",
+                                    "SLOPOS-SWWW: image={} output={} transition={} step={} fps={} source=embedded",
                                     request.path,
                                     request.output.unwrap_or("*"),
                                     self.wallpaper.transition().kind.name(),
@@ -1232,10 +1335,33 @@ impl Desktop {
                             }
                             Err(error) => self.set_response(swww_error(error)),
                         }
+                    } else if !self.wallpaper.is_running() {
+                        self.set_response(swww_error(SwwwDaemonError::NotRunning));
+                    } else if request.output.is_some_and(|output| {
+                        output != "*" && !output.eq_ignore_ascii_case("SLOPOS-1")
+                    }) {
+                        self.set_response(swww_error(SwwwDaemonError::UnknownOutput));
+                    } else {
+                        match crate::wallpaper_file::request(request) {
+                            Ok(generation) => {
+                                self.set_response("SWWW VFS IMAGE LOAD REQUESTED");
+                                serialln(format_args!(
+                                    "SLOPOS-SWWW-VFS: load requested generation={generation} request={} output={} transition={} step={} fps={} async=true",
+                                    request.path,
+                                    request.output.unwrap_or("*"),
+                                    request.transition.kind.name(),
+                                    request.transition.step,
+                                    request.transition.fps
+                                ));
+                            }
+                            Err(error) => self.set_response(wallpaper_file_request_error(error)),
+                        }
                     }
                 }
                 Ok(SwwwCommand::Clear(request)) => match self.wallpaper.clear(request) {
                     Ok(()) => {
+                        self.wallpaper_current_image = None;
+                        self.wallpaper_previous_image = None;
                         self.set_response("SWWW COLOR APPLIED");
                         serialln(format_args!(
                             "SLOPOS-SWWW: clear color={:06X} output={}",
@@ -1273,6 +1399,8 @@ impl Desktop {
                 },
                 Ok(SwwwCommand::Kill) => match self.wallpaper.kill() {
                     Ok(()) => {
+                        self.wallpaper_current_image = None;
+                        self.wallpaper_previous_image = None;
                         self.set_response("SWWW DAEMON STOPPED");
                         serialln(format_args!("SLOPOS-SWWW: daemon stopped"));
                     }
@@ -2058,5 +2186,40 @@ fn swww_error(error: SwwwDaemonError) -> &'static str {
         SwwwDaemonError::InvalidTransition => "SWWW TRANSITION IS INVALID",
         SwwwDaemonError::UnknownOutput => "SWWW OUTPUT IS UNKNOWN",
         SwwwDaemonError::NoImage => "SWWW OUTPUT HAS NO IMAGE",
+    }
+}
+
+fn wallpaper_file_request_error(
+    error: crate::wallpaper_file::WallpaperFileRequestError,
+) -> &'static str {
+    match error {
+        crate::wallpaper_file::WallpaperFileRequestError::Busy => "SWWW VFS IMAGE LOAD IS BUSY",
+        crate::wallpaper_file::WallpaperFileRequestError::InvalidPath => {
+            "SWWW VFS IMAGE PATH IS INVALID"
+        }
+    }
+}
+
+const fn wallpaper_file_error_response(
+    error: crate::wallpaper_file::WallpaperFileError,
+) -> &'static str {
+    match error {
+        crate::wallpaper_file::WallpaperFileError::InvalidPath => "SWWW VFS IMAGE PATH IS INVALID",
+        crate::wallpaper_file::WallpaperFileError::NotFound => "SWWW VFS IMAGE NOT FOUND",
+        crate::wallpaper_file::WallpaperFileError::FileTooLarge => "SWWW VFS IMAGE EXCEEDS 8K",
+        crate::wallpaper_file::WallpaperFileError::InvalidUtf8 => "SWWW VFS IMAGE IS NOT ASCII P3",
+        crate::wallpaper_file::WallpaperFileError::InvalidPpm => "SWWW VFS IMAGE P3 IS INVALID",
+    }
+}
+
+const fn wallpaper_file_error_name(
+    error: crate::wallpaper_file::WallpaperFileError,
+) -> &'static str {
+    match error {
+        crate::wallpaper_file::WallpaperFileError::InvalidPath => "invalid-path",
+        crate::wallpaper_file::WallpaperFileError::NotFound => "not-found",
+        crate::wallpaper_file::WallpaperFileError::FileTooLarge => "file-size",
+        crate::wallpaper_file::WallpaperFileError::InvalidUtf8 => "invalid-utf8",
+        crate::wallpaper_file::WallpaperFileError::InvalidPpm => "invalid-ppm",
     }
 }

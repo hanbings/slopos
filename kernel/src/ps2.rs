@@ -8,6 +8,7 @@ use core::task::{Context, Poll};
 
 use crate::desktop_config::DesktopConfigSources;
 use crate::desktop_service::DesktopServiceSnapshot;
+use crate::wallpaper_file::WallpaperFileUpdate;
 
 const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64;
@@ -74,6 +75,7 @@ pub enum DesktopEvent {
     Input(RawInputByte),
     ConfigUpdate(DesktopConfigSources),
     ServiceUpdate(DesktopServiceSnapshot),
+    WallpaperUpdate(WallpaperFileUpdate),
 }
 
 pub struct Controller {
@@ -250,10 +252,15 @@ pub fn enqueue_interrupt_byte(mouse: bool, value: u8) {
     crate::executor::wake_task(crate::executor::INPUT_TASK);
 }
 
-pub async fn next_desktop_event(config_generation: u64, service_generation: u64) -> DesktopEvent {
+pub async fn next_desktop_event(
+    config_generation: u64,
+    service_generation: u64,
+    wallpaper_generation: u64,
+) -> DesktopEvent {
     NextDesktopEvent {
         config_generation,
         service_generation,
+        wallpaper_generation,
     }
     .await
 }
@@ -265,6 +272,7 @@ pub fn dropped_bytes() -> u64 {
 struct NextDesktopEvent {
     config_generation: u64,
     service_generation: u64,
+    wallpaper_generation: u64,
 }
 
 impl Future for NextDesktopEvent {
@@ -276,6 +284,9 @@ impl Future for NextDesktopEvent {
         }
         if let Some(snapshot) = crate::desktop_service::latest_after(self.service_generation) {
             return Poll::Ready(DesktopEvent::ServiceUpdate(snapshot));
+        }
+        if let Some(update) = crate::wallpaper_file::latest_after(self.wallpaper_generation) {
+            return Poll::Ready(DesktopEvent::WallpaperUpdate(update));
         }
         let tail = QUEUE_TAIL.load(Ordering::Relaxed);
         if tail == QUEUE_HEAD.load(Ordering::Acquire) {

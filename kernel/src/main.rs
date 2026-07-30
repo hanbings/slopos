@@ -22,6 +22,7 @@ mod ps2;
 mod serial;
 mod timer;
 mod virtio;
+mod wallpaper_file;
 
 use core::arch::asm;
 use core::panic::PanicInfo;

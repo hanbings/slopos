@@ -154,7 +154,7 @@ VFS 中选中的 CSS 使用 Waybar 同样的 GTK CSS selector 命名；仓库默
 
 `crates/shell` 已提供无分配 swww 风格 CLI parser 与 `WallpaperDaemon` 状态机。kernel 启动 daemon 状态机但不选择图片；PID 2 的首个有效 desktop policy commit 才等价选择 `swww img /usr/share/backgrounds/slopos-aurora.ppm`。后续控制仍由 kernel 图形 monitor 接受带或不带 `swww` 前缀的命令：
 
-- `img <path>` 设置图片，可选 output；
+- `img <path>` 设置图片，可选 output；两个兼容短名继续命中 bootstrap asset，其余绝对路径由 root VFS 读取，相对路径当前以 `/usr/share/slopos/` 为基准；
 - `clear [RRGGBB]` 设置六位十六进制纯色，省略颜色时为黑色，也可选 `--outputs/-o`；
 - `query` 返回 output geometry 与当前 image；
 - `kill` 停止 daemon；
@@ -163,6 +163,8 @@ VFS 中选中的 CSS 使用 Waybar 同样的 GTK CSS selector 命名；仓库默
 - VFS 中发现的 environment 文件以同名 `SWWW_TRANSITION*` 变量提供 boot/reload 默认值，仓库默认源是 `assets/swww.env`；
 - `none`、`simple`、`fade`、`left/right/top/bottom`、`center/outer`、`any/random` transition。
 
-两个 12×8 P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。renderer 实际把 current/previous image 逐像素 blend 或 mask 到 GOP；纯色状态则直接填充 framebuffer，并让 `query` 以 `0xRRGGBB` 报告当前值。交互测试通过 PS/2 输入切到 Sunset，完成 5 个 center 采样帧，由 `query` 读回 `SLOPOS-1`、1024×768 和当前路径，再验证 kill/restart、`none` 重设、`clear 1a2b3c`、纯色 query 与恢复图片。7 项 swww/PNM、21 项 niri layout/shell、7 项 Waybar JSONC/CSS 与 5 项 desktop commit/event protocol 测试，共 40 项。
+两个 12×8 bootstrap P3/PNM asset 在启动时完整校验 header、尺寸、max value、component 范围和精确 pixel 数。非 registry 路径则进入独立的 8 KiB 双 bank broker：desktop task 发布原始/规范化路径、output 与已解析 transition generation，block task 通过 ext4 walker 异步读齐一个或两个 block，完成 UTF-8 与同一 P3 parser 校验后唤醒 desktop；renderer 完成 transition 后才 acknowledge，因此 block task 不会覆写仍被 current/previous image 引用的 bank。失败结果占用非 active bank，不改变当前图片。
 
-命令与 transition 语义依据 [swww 官方 README](https://github.com/LGFae/swww) 与 [`swww-clear(1)`](https://raw.githubusercontent.com/LGFae/swww/main/doc/swww-clear.1.scd)。初始 environment/hash/image policy 已由用户进程提交，environment 默认值也参与后续四文件 VFS 原子重载；daemon state 和 image decode/render 仍在 kernel，而不是常驻用户进程或 Unix socket。也没有 Wayland layer-shell、多 output、从 VFS 解码任意图片路径、PNG/JPEG/GIF decode、animated image cache、frame callback/timing、transition position/bezier/wave/grow 或 damage tracking。同步 framebuffer renderer 为限制最坏 CPU 时间，会把极小 step 最多采样成 17 帧，因此不声称二进制或动画时序完全兼容 swww。
+renderer 把同尺寸 current/previous image 逐像素 blend 或 mask 到 GOP；不同尺寸的 bounded P3 仍会加载，但 transition 明确回退为 `none`。纯色状态直接填充 framebuffer，并让 `query` 以 `0xRRGGBB` 报告当前值。交互测试先切到 embedded Sunset 并完成 5 个 center 采样帧，再以 `/usr/share/slopos/vfs-wallpaper.ppm` 跨 inode 30 的两个 block 读入 6144 bytes、完成第二段 center transition并由 `query` 返回原始路径；随后依次请求不存在的 `missing.ppm` 与存在但并非 P3 的 `/etc/slopos/system.conf`，后续三次 query 都仍返回前一图片。最后继续验证 kill/restart、`none`、`clear 1a2b3c`、纯色 query 与恢复图片。7 项 swww/PNM、21 项 niri layout/shell、7 项 Waybar JSONC/CSS 与 5 项 desktop commit/event protocol 测试，共 40 项。
+
+命令与 transition 语义依据 [swww 官方 README](https://github.com/LGFae/swww) 与 [`swww-clear(1)`](https://raw.githubusercontent.com/LGFae/swww/main/doc/swww-clear.1.scd)。初始 environment/hash/image policy 已由用户进程提交，environment 默认值也参与后续四文件 VFS 原子重载；daemon state、path broker、image decode/render 仍在 kernel，而不是常驻用户进程或 Unix socket。当前路径最长 96 ASCII bytes、文件最多 8 KiB、只支持 UTF-8 P3；图形终端会把路径转大写，loader 因而以 ASCII 小写查找，尚不能表达大小写敏感的混合大小写文件名。也没有 Wayland layer-shell、多 output、PNG/JPEG/GIF decode、animated image cache、frame callback/timing、transition position/bezier/wave/grow 或 damage tracking。同步 framebuffer renderer 为限制最坏 CPU 时间，会把极小 step 最多采样成 17 帧，因此不声称二进制或动画时序完全兼容 swww。

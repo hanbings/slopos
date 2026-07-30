@@ -56,6 +56,19 @@ monitor_type() {
     echo "screendump ${repo_dir}/evidence/wallpaper-switched.ppm"
     monitor_type "swww query"
     sleep 2
+    monitor_type "swww img /usr/share/slopos/vfs-wallpaper.ppm --transition-type center --transition-step 64"
+    sleep 8
+    echo "screendump ${repo_dir}/evidence/wallpaper-vfs-loaded.ppm"
+    monitor_type "swww query"
+    sleep 2
+    monitor_type "swww img /usr/share/slopos/missing.ppm --transition-type none"
+    sleep 2
+    monitor_type "swww query"
+    sleep 2
+    monitor_type "swww img /etc/slopos/system.conf --transition-type none"
+    sleep 2
+    monitor_type "swww query"
+    sleep 2
     monitor_type "swww kill"
     sleep 2
     monitor_type "swww-daemon"
@@ -359,6 +372,22 @@ fi
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=30" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: transition complete type=center step=64 fps=30 frames=5" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: load requested generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM output=* transition=center step=64 fps=30 async=true" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: load published generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm inode=30 bytes=6144 blocks=2 format=P3 async=true" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm source=vfs output=* transition=center step=64 fps=30" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: result acknowledged generation=1 renderer=desktop active_image=true" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: load rejected generation=2 request=/USR/SHARE/SLOPOS/MISSING.PPM resolved=/usr/share/slopos/missing.ppm error=not-found retained=previous" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: image=/USR/SHARE/SLOPOS/MISSING.PPM resolved=/usr/share/slopos/missing.ppm source=vfs applied=false error=not-found" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: result acknowledged generation=2 renderer=desktop active_image=false" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: load requested generation=3 request=/ETC/SLOPOS/SYSTEM.CONF output=* transition=none step=255 fps=30 async=true" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: load rejected generation=3 request=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf error=invalid-ppm retained=previous" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: image=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf source=vfs applied=false error=invalid-ppm" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: result acknowledged generation=3 renderer=desktop active_image=false" "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM" "${serial_log}")" -ne 3 ]]; then
+    echo "rejected swww VFS image did not retain the previous wallpaper" >&2
+    exit 1
+fi
 grep -Fq "SLOPOS-SWWW: daemon stopped" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: daemon started" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30" "${serial_log}"
@@ -477,6 +506,7 @@ grep -Fq "SLOPOS-DESKTOP: window closed kind=SYSTEM" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=CONFIG" "${serial_log}"
 test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
+test -s "${repo_dir}/evidence/wallpaper-vfs-loaded.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
 test -s "${repo_dir}/evidence/niri-window-floating.ppm"
 test -s "${repo_dir}/evidence/niri-floating-focus-tiling.ppm"
@@ -520,6 +550,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/terminal-status.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-switched.ppm" \
         >"${repo_dir}/evidence/wallpaper-switched.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-vfs-loaded.ppm" \
+        >"${repo_dir}/evidence/wallpaper-vfs-loaded.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-cleared.ppm" \
         >"${repo_dir}/evidence/wallpaper-cleared.png"
     pnmtopng "${repo_dir}/evidence/niri-window-floating.ppm" \
