@@ -56,6 +56,9 @@ test-boot: image
 test-interaction: image
 	./scripts/test-interaction.sh
 
+test-desktop-custom-config: image
+	./scripts/test-desktop-custom-config.sh
+
 test-page-fault: image
 	./scripts/test-page-fault.sh
 

@@ -7,8 +7,9 @@ use core::arch::{asm, global_asm};
 use core::mem::size_of;
 use core::panic::PanicInfo;
 use slopos_desktop_protocol::{
-    COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit, DesktopServiceEvent,
-    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WALLPAPER_AURORA, config_hash,
+    COMMIT_SIZE, CONFIG_HASH_OFFSET, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit,
+    DesktopServiceEvent, EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WALLPAPER_AURORA,
+    config_hash_extend,
 };
 
 const USER_ENTRY: u64 = 0x4000_0000;
@@ -37,11 +38,12 @@ const O_RDONLY: u64 = 0;
 const STDOUT: u64 = 1;
 const EXPECTED_FD: i64 = 3;
 const PREEMPTION_TSC_WINDOW: u64 = 100_000_000;
+const CONFIG_READ_CAPACITY: usize = 256;
+const WAYBAR_FILE_CAPACITY: usize = 4096;
+const SWWW_ENV_FILE_CAPACITY: usize = 512;
 static MESSAGE: &[u8; 28] = b"SLOPOS desktop policy ready\n";
 static WAYBAR_PATH: &[u8; 25] = b"/etc/slopos/waybar.jsonc\0";
 static SWWW_PATH: &[u8; 21] = b"/etc/slopos/swww.env\0";
-static EXPECTED_WAYBAR: &[u8; 904] = include_bytes!("../../../assets/waybar-config.jsonc");
-static EXPECTED_SWWW: &[u8; 172] = include_bytes!("../../../assets/swww.env");
 static EXPECTED_ARGV: [&[u8]; 2] = [b"/sbin/slop-shell", b"--session"];
 static EXPECTED_ENVIRONMENT: [&[u8]; INITIAL_ENVC] = [
     b"SLOPOS_ROLE=desktop-shell",
@@ -106,10 +108,9 @@ fn load_policy(yield_after_open: bool) -> DesktopCommit {
     if fd != EXPECTED_FD || (yield_after_open && syscall0(SYS_SCHED_YIELD) != 0) {
         exit(2);
     }
-    let mut waybar = [0u8; EXPECTED_WAYBAR.len()];
-    if !read_exact(fd, &mut waybar) || waybar != *EXPECTED_WAYBAR {
+    let Some(waybar_hash) = read_config_hash(fd, WAYBAR_FILE_CAPACITY) else {
         exit(3);
-    }
+    };
     if syscall1(SYS_CLOSE, fd as u64) != 0 {
         exit(4);
     }
@@ -117,20 +118,13 @@ fn load_policy(yield_after_open: bool) -> DesktopCommit {
     if fd != EXPECTED_FD {
         exit(5);
     }
-    let mut swww = [0u8; EXPECTED_SWWW.len()];
-    if !read_exact(fd, &mut swww) || swww != *EXPECTED_SWWW {
+    let Some(swww_hash) = read_config_hash(fd, SWWW_ENV_FILE_CAPACITY) else {
         exit(6);
-    }
+    };
     if syscall1(SYS_CLOSE, fd as u64) != 0 {
         exit(7);
     }
-    DesktopCommit::new(
-        config_hash(&waybar),
-        config_hash(&swww),
-        0,
-        36,
-        WALLPAPER_AURORA,
-    )
+    DesktopCommit::new(waybar_hash, swww_hash, 0, 36, WALLPAPER_AURORA)
 }
 
 fn wait_for_event(kind: u16, after_generation: u64) -> Option<u64> {
@@ -159,23 +153,35 @@ fn open(path: &[u8]) -> i64 {
     )
 }
 
-fn read_exact(fd: i64, output: &mut [u8]) -> bool {
-    let mut copied = 0usize;
-    while copied < output.len() {
-        let remaining = output.len() - copied;
+fn read_config_hash(fd: i64, capacity: usize) -> Option<u64> {
+    let mut buffer = [0u8; CONFIG_READ_CAPACITY];
+    let mut length = 0usize;
+    let mut hash = CONFIG_HASH_OFFSET;
+    loop {
+        let requested = if length == capacity {
+            1
+        } else {
+            core::cmp::min(buffer.len(), capacity - length)
+        };
         let bytes = syscall3(
             SYS_READ,
             fd as u64,
-            output[copied..].as_mut_ptr() as u64,
-            remaining as u64,
+            buffer.as_mut_ptr() as u64,
+            requested as u64,
         );
-        if bytes <= 0 || bytes as usize > remaining {
-            return false;
+        if bytes < 0 || bytes as usize > requested {
+            return None;
         }
-        copied += bytes as usize;
+        let bytes = bytes as usize;
+        if bytes == 0 {
+            return (length != 0).then_some(hash);
+        }
+        if length == capacity {
+            return None;
+        }
+        hash = config_hash_extend(hash, &buffer[..bytes]);
+        length += bytes;
     }
-    let mut extra = 0u8;
-    syscall3(SYS_READ, fd as u64, (&raw mut extra) as u64, 1) == 0
 }
 
 fn exercise_preemption() {

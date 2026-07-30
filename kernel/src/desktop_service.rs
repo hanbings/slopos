@@ -6,12 +6,10 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::{Context, Poll};
 use slopos_desktop_protocol::{
     CAPABILITY_SWWW_POLICY, CAPABILITY_WAYBAR_PROVIDER, DesktopCommit, DesktopServiceEvent,
-    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, WALLPAPER_AURORA, config_hash,
+    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, WALLPAPER_AURORA,
 };
 
 const DESKTOP_SERVICE_PID: u32 = 2;
-const EXPECTED_WAYBAR_HASH: u64 = config_hash(include_bytes!("../../assets/waybar-config.jsonc"));
-const EXPECTED_SWWW_HASH: u64 = config_hash(include_bytes!("../../assets/swww.env"));
 
 static STATE: AtomicU64 = AtomicU64::new(0);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -32,7 +30,6 @@ pub struct DesktopServiceSnapshot {
 pub enum DesktopServiceError {
     PermissionDenied,
     InvalidProtocol,
-    ConfigMismatch,
     CommitPending,
 }
 
@@ -43,9 +40,6 @@ pub fn submit(pid: u32, commit: DesktopCommit) -> Result<u64, DesktopServiceErro
     commit
         .validate()
         .map_err(|_| DesktopServiceError::InvalidProtocol)?;
-    if commit.waybar_hash != EXPECTED_WAYBAR_HASH || commit.swww_hash != EXPECTED_SWWW_HASH {
-        return Err(DesktopServiceError::ConfigMismatch);
-    }
     let generation = GENERATION.load(Ordering::Acquire);
     if generation != POLICY_APPLIED_GENERATION.load(Ordering::Acquire) {
         return Err(DesktopServiceError::CommitPending);

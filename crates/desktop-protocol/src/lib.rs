@@ -14,6 +14,8 @@ pub const COMMIT_SIZE: usize = 40;
 pub const EVENT_SIZE: usize = 32;
 pub const EVENT_POLICY_APPLIED: u16 = 1;
 pub const EVENT_CONFIG_APPLIED: u16 = 2;
+pub const CONFIG_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const CONFIG_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,11 +266,14 @@ pub enum ProtocolError {
 }
 
 pub const fn config_hash(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    config_hash_extend(CONFIG_HASH_OFFSET, bytes)
+}
+
+pub const fn config_hash_extend(mut hash: u64, bytes: &[u8]) -> u64 {
     let mut index = 0usize;
     while index < bytes.len() {
         hash ^= bytes[index] as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        hash = hash.wrapping_mul(CONFIG_HASH_PRIME);
         index += 1;
     }
     hash
@@ -326,9 +331,11 @@ mod tests {
 
     #[test]
     fn hashes_configuration_bytes_deterministically() {
-        assert_eq!(config_hash(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(config_hash(b""), CONFIG_HASH_OFFSET);
         assert_eq!(config_hash(b"SlopOS"), 0x1437_a4b8_2712_245f);
         assert_ne!(config_hash(b"waybar"), config_hash(b"swww"));
+        let first = config_hash_extend(CONFIG_HASH_OFFSET, b"Slop");
+        assert_eq!(config_hash_extend(first, b"OS"), config_hash(b"SlopOS"));
     }
 
     #[test]
