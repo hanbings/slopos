@@ -9,9 +9,10 @@ use slopos_ext4::{
     JournalDescriptorBlock, JournalSuperblock, ParseError, ROOT_INODE, SUPERBLOCK_SIZE, Superblock,
     decode_journal_tag_data, encode_journal_commit_block, encode_journal_data_block,
     encode_journal_descriptor_block, encode_single_block_journal_transaction,
-    resize_regular_file_by_one_block, set_block_allocation, set_inode_size,
-    set_journal_superblock_state, set_superblock_free_block_count, set_superblock_recovery,
-    validate_path_component,
+    initialize_empty_regular_inode, insert_linear_directory_entry, remove_linear_directory_entry,
+    resize_regular_file_by_one_block, set_block_allocation, set_inode_allocation, set_inode_size,
+    set_journal_superblock_state, set_superblock_free_block_count, set_superblock_free_inode_count,
+    set_superblock_recovery, validate_path_component,
 };
 use slopos_vfs::{AbsolutePath, AccessMode, FileDescriptorTable, FileNode, MountTable};
 
@@ -25,6 +26,10 @@ const CACHE_ENTRY_COUNT: usize = 8;
 const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
 const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
 const ALLOCATION_PROBE_BLOCK: u64 = 99;
+const CREATE_TRANSACTION_BLOCKS: usize = 5;
+const CREATE_PROBE_INODE: u32 = 26;
+const CREATE_PROBE_NAME: &[u8] = b"create-probe";
+const CREATE_PROBE_TIMESTAMP: u32 = 0x6a6a_9400;
 static ZERO_BLOCK: [u8; BLOCK_SIZE] = [0; BLOCK_SIZE];
 static JOURNAL_PROBE_BLOCK: [u8; BLOCK_SIZE] = [b'J'; BLOCK_SIZE];
 static ALLOCATION_PROBE_BLOCK_DATA: [u8; BLOCK_SIZE] = [b'G'; BLOCK_SIZE];
@@ -38,6 +43,7 @@ const DEEP_EXTENT_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"deep-extent
 const CROSS_BLOCK_PATH: [&[u8]; 5] = [b"usr", b"share", b"slopos", b"large-directory", b"tail-29"];
 const SYMLINK_PATH: [&[u8]; 2] = [b"etc", b"current-release"];
 const WRITE_PROBE_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"write-probe.bin"];
+const CREATE_PROBE_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", CREATE_PROBE_NAME];
 const ROOT_FILESYSTEM_ID: u16 = 1;
 const VFS_TEST_PATH: &[u8] = b"/etc/./slopos/../slopos/system.conf";
 
@@ -476,6 +482,21 @@ pub async fn mount_task(mut device: BlockDevice) -> ! {
         allocation_transaction.first_sequence,
         allocation_transaction.second_sequence,
         allocation_transaction.final_sequence
+    ));
+    let create_transaction = mount
+        .probe_file_creation_transactions(&mut device, &journal, write_probe.parent_inode)
+        .await;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-EXT4: create journal transactions valid inode={} parent_inode={} inode_bitmap_block={} group_descriptor_block={} inode_table_block={} directory_block={} free_inodes=7/6/7 size=0 checksums=superblock/group/bitmap/inode/directory transactions=2 sequences={}/{} final_sequence={} test_sequence_rewound=true restored=true path=/usr/share/slopos/create-probe",
+        CREATE_PROBE_INODE,
+        write_probe.parent_inode,
+        create_transaction.inode_bitmap_block,
+        create_transaction.group_descriptor_block,
+        create_transaction.inode_table_block,
+        create_transaction.directory_block,
+        create_transaction.first_sequence,
+        create_transaction.second_sequence,
+        create_transaction.final_sequence
     ));
 
     crate::serial::serialln(format_args!(
@@ -1992,6 +2013,230 @@ impl Ext4Mount {
         )
     }
 
+    async fn probe_file_creation_transactions(
+        &mut self,
+        device: &mut BlockDevice,
+        journal: &JournalProbe,
+        parent_inode_number: u32,
+    ) -> CreateJournalProbe {
+        let group_index = self
+            .superblock
+            .inode_group(CREATE_PROBE_INODE)
+            .unwrap_or_else(|_| device.fail("create probe inode group is invalid"));
+        let group =
+            read_group_descriptor(device, &self.superblock, group_index, &mut self.cache).await;
+        let group_descriptor_location = self
+            .superblock
+            .group_descriptor_location(group_index)
+            .unwrap_or_else(|_| device.fail("create probe group descriptor is invalid"));
+        let group_descriptor_offset = group_descriptor_location.offset as usize;
+        let group_descriptor_end =
+            group_descriptor_offset + usize::from(self.superblock.descriptor_size);
+        if group_descriptor_end > BLOCK_SIZE {
+            device.fail("create probe group descriptor crosses its block");
+        }
+        let inode_location = self
+            .superblock
+            .inode_location(CREATE_PROBE_INODE, &group)
+            .unwrap_or_else(|_| device.fail("create probe inode location is invalid"));
+        let inode_offset = inode_location.offset as usize;
+        let inode_end = inode_offset + usize::from(self.superblock.inode_size);
+        if inode_end > BLOCK_SIZE {
+            device.fail("create probe inode crosses its table block");
+        }
+        let parent_inode = self.read_inode(device, parent_inode_number).await;
+        let directory_block = self.directory_extent(device, &parent_inode).physical_block;
+        let targets = [
+            0,
+            group_descriptor_location.block,
+            group.inode_bitmap_block,
+            inode_location.block,
+            directory_block,
+        ];
+        for (index, target) in targets.iter().enumerate() {
+            if targets[..index].contains(target) {
+                device.fail("create probe home blocks overlap");
+            }
+        }
+
+        let mut original = BlockSet::<CREATE_TRANSACTION_BLOCKS>::new();
+        let mut modified = BlockSet::<CREATE_TRANSACTION_BLOCKS>::new();
+        for (index, target) in targets.iter().enumerate() {
+            device
+                .read(
+                    block_to_sector(device, &self.superblock, *target),
+                    BLOCK_SIZE,
+                )
+                .await;
+            original
+                .block_mut(index)
+                .copy_from_slice(device.data(BLOCK_SIZE));
+            modified
+                .block_mut(index)
+                .copy_from_slice(device.data(BLOCK_SIZE));
+        }
+
+        let free_inodes = self.superblock.free_inode_count;
+        let allocated_free_inodes = free_inodes
+            .checked_sub(1)
+            .unwrap_or_else(|| device.fail("create probe has no free inodes"));
+        set_superblock_free_inode_count(
+            &mut modified.block_mut(0)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            allocated_free_inodes,
+        )
+        .unwrap_or_else(|_| device.fail("create probe superblock update failed"));
+        {
+            let descriptor_frame = modified.frames[1];
+            let bitmap_frame = modified.frames[2];
+            set_inode_allocation(
+                scratch_frame_bytes_mut(bitmap_frame),
+                &mut scratch_frame_bytes_mut(descriptor_frame)
+                    [group_descriptor_offset..group_descriptor_end],
+                group_index,
+                CREATE_PROBE_INODE,
+                true,
+                &self.superblock,
+            )
+            .unwrap_or_else(|_| device.fail("create probe inode bitmap update failed"));
+        }
+        initialize_empty_regular_inode(
+            &mut modified.block_mut(3)[inode_offset..inode_end],
+            CREATE_PROBE_INODE,
+            &self.superblock,
+            0o644,
+            CREATE_PROBE_TIMESTAMP,
+            1,
+        )
+        .unwrap_or_else(|_| device.fail("create probe inode initialization failed"));
+        insert_linear_directory_entry(
+            modified.block_mut(4),
+            &parent_inode,
+            &self.superblock,
+            CREATE_PROBE_NAME,
+            CREATE_PROBE_INODE,
+            DIRECTORY_ENTRY_REGULAR_FILE,
+        )
+        .unwrap_or_else(|_| device.fail("create probe directory insertion failed"));
+
+        let first_sequence = journal.superblock.sequence;
+        let second_sequence = self
+            .commit_multi_block_journal_transaction(
+                device,
+                journal,
+                first_sequence,
+                &targets,
+                &modified,
+            )
+            .await;
+        let allocated_group = GroupDescriptor::parse(
+            &modified.block(1)[group_descriptor_offset..group_descriptor_end],
+            group_index,
+            &self.superblock,
+        )
+        .unwrap_or_else(|_| device.fail("create probe updated group descriptor is invalid"));
+        if self.superblock.free_inode_count != allocated_free_inodes
+            || allocated_group.free_inode_count + 1 != group.free_inode_count
+            || allocated_group.unused_inode_count + 1 != group.unused_inode_count
+        {
+            device.fail("create probe allocation counts are invalid");
+        }
+        let created = self.open_file(device, &CREATE_PROBE_PATH).await;
+        if created.inode.number != CREATE_PROBE_INODE
+            || created.inode.size != 0
+            || created.inode.block_count_512 != 0
+            || created.inode.extent_depth() != Ok(0)
+            || created.inode.extent_for_logical_block(0) != Ok(None)
+        {
+            device.fail("create probe file readback is invalid");
+        }
+
+        set_superblock_free_inode_count(
+            &mut modified.block_mut(0)[SUPERBLOCK_OFFSET..SUPERBLOCK_OFFSET + SUPERBLOCK_SIZE],
+            free_inodes,
+        )
+        .unwrap_or_else(|_| device.fail("create probe superblock restoration failed"));
+        {
+            let descriptor_frame = modified.frames[1];
+            let bitmap_frame = modified.frames[2];
+            set_inode_allocation(
+                scratch_frame_bytes_mut(bitmap_frame),
+                &mut scratch_frame_bytes_mut(descriptor_frame)
+                    [group_descriptor_offset..group_descriptor_end],
+                group_index,
+                CREATE_PROBE_INODE,
+                false,
+                &self.superblock,
+            )
+            .unwrap_or_else(|_| device.fail("create probe inode bitmap restoration failed"));
+        }
+        modified.block_mut(3)[inode_offset..inode_end]
+            .copy_from_slice(&original.block(3)[inode_offset..inode_end]);
+        remove_linear_directory_entry(
+            modified.block_mut(4),
+            &parent_inode,
+            &self.superblock,
+            CREATE_PROBE_NAME,
+            CREATE_PROBE_INODE,
+        )
+        .unwrap_or_else(|_| device.fail("create probe directory removal failed"));
+        for index in 0..CREATE_TRANSACTION_BLOCKS {
+            if modified.block(index) != original.block(index) {
+                device.fail("create probe encoded unlink did not restore its home block");
+            }
+        }
+
+        let final_sequence = self
+            .commit_multi_block_journal_transaction(
+                device,
+                journal,
+                second_sequence,
+                &targets,
+                &modified,
+            )
+            .await;
+        let restored_parent = self.read_inode(device, parent_inode_number).await;
+        if self
+            .find_directory_entry(device, &restored_parent, CREATE_PROBE_NAME)
+            .await
+            .is_some()
+        {
+            device.fail("create probe directory entry survived unlink");
+        }
+        if self.superblock.free_inode_count != free_inodes {
+            device.fail("create probe superblock free inode count was not restored");
+        }
+
+        let journal_sector = block_to_sector(device, &self.superblock, journal.physical_block);
+        let mut rewind = JournalStateScratch::new();
+        device.read(journal_sector, BLOCK_SIZE).await;
+        rewind
+            .journal_block_mut()
+            .copy_from_slice(device.data(BLOCK_SIZE));
+        let checkpointed = JournalSuperblock::parse(rewind.journal_block())
+            .unwrap_or_else(|_| device.fail("create probe journal state is invalid"));
+        if checkpointed.sequence != final_sequence || checkpointed.start != 0 {
+            device.fail("create probe journal final sequence mismatch");
+        }
+        set_journal_superblock_state(rewind.journal_block_mut(), first_sequence, 0)
+            .unwrap_or_else(|_| device.fail("create probe journal rewind failed"));
+        device.write(journal_sector, rewind.journal_block()).await;
+        device.flush().await;
+        device.read(journal_sector, BLOCK_SIZE).await;
+        if device.data(BLOCK_SIZE) != rewind.journal_block() {
+            device.fail("create probe journal rewind readback mismatch");
+        }
+
+        CreateJournalProbe {
+            inode_bitmap_block: group.inode_bitmap_block,
+            group_descriptor_block: group_descriptor_location.block,
+            inode_table_block: inode_location.block,
+            directory_block,
+            first_sequence,
+            second_sequence,
+            final_sequence,
+        }
+    }
+
     async fn commit_multi_block_journal_transaction<const N: usize>(
         &mut self,
         device: &mut BlockDevice,
@@ -2865,6 +3110,16 @@ struct AllocationJournalProbe {
     bitmap_block: u64,
     group_descriptor_block: u64,
     inode_table_block: u64,
+    first_sequence: u32,
+    second_sequence: u32,
+    final_sequence: u32,
+}
+
+struct CreateJournalProbe {
+    inode_bitmap_block: u64,
+    group_descriptor_block: u64,
+    inode_table_block: u64,
+    directory_block: u64,
     first_sequence: u32,
     second_sequence: u32,
     final_sequence: u32,
