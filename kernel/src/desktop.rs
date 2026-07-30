@@ -17,6 +17,7 @@ use slopos_shell::{
 const WINDOW_COUNT: usize = 3;
 const WORKSPACE_CAPACITY: usize = 4;
 const TITLE_HEIGHT: i32 = 30;
+const BAR_LEFT_START_X: i32 = 47;
 const NIRI_CONFIG: &str = include_str!("../../assets/niri-config.kdl");
 const WAYBAR_CONFIG: &str = include_str!("../../assets/waybar-config.jsonc");
 const WAYBAR_STYLE: &str = include_str!("../../assets/waybar-style.css");
@@ -349,7 +350,7 @@ impl Desktop {
         framebuffer.rect(10, 7, 26, 26, self.accent());
         framebuffer.text(18, 14, "S", WHITE, 2);
 
-        let mut left_x = 47;
+        let mut left_x = BAR_LEFT_START_X;
         for module in self.bar.modules_left.iter() {
             left_x += self.render_bar_module(framebuffer, module, left_x, baseline, bar_height)
                 + i32::from(self.bar.spacing);
@@ -859,6 +860,20 @@ impl Desktop {
     }
 
     fn pointer_pressed(&mut self) {
+        if let Some(workspace) = self.bar_workspace_at(self.pointer_x, self.pointer_y) {
+            let changed = self
+                .workspaces
+                .focus_workspace(workspace)
+                .unwrap_or_else(|_| crate::fatal("Waybar workspace click selected invalid index"));
+            self.sync_focused_window();
+            serialln(format_args!(
+                "SLOPOS-WAYBAR: workspace clicked index={} name={} changed={} module=niri/workspaces",
+                workspace + 1,
+                self.active_workspace_name(),
+                changed
+            ));
+            return;
+        }
         for index in 0..WINDOW_COUNT {
             let Some(window) = self.positioned_window(index) else {
                 continue;
@@ -886,6 +901,34 @@ impl Desktop {
             }
             return;
         }
+    }
+
+    fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {
+        if y < 0 || y >= i32::from(self.bar.height) {
+            return None;
+        }
+        let mut module_x = BAR_LEFT_START_X;
+        for module in self.bar.modules_left.iter() {
+            let module_width = self.bar_module_width(module);
+            if module == "niri/workspaces" {
+                let text = self.bar_module_text(module);
+                let style = self.bar_module_style(module);
+                let text_x =
+                    module_x + i32::from(style.margin_left) + i32::from(style.padding_left);
+                let relative = x - text_x;
+                if relative >= 0 && relative < text_width(text.as_str()) {
+                    let byte_index = usize::try_from(relative / 6).ok()?;
+                    let digit = *text.as_str().as_bytes().get(byte_index)?;
+                    if (b'1'..=b'8').contains(&digit) {
+                        let workspace = usize::from(digit - b'1');
+                        return (workspace < self.workspaces.len()).then_some(workspace);
+                    }
+                }
+                return None;
+            }
+            module_x += module_width + i32::from(self.bar.spacing);
+        }
+        None
     }
 
     fn pointer_resize_pressed(&mut self) {

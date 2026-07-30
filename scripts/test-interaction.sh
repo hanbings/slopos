@@ -87,6 +87,15 @@ monitor_type() {
     echo "mouse_move -96 0"
     echo "mouse_button 0"
     sleep 1
+    echo "mouse_move -22 -64"
+    echo "mouse_button 1"
+    echo "mouse_button 0"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/waybar-workspace-click.ppm"
+    echo "mouse_move -24 0"
+    echo "mouse_button 1"
+    echo "mouse_button 0"
+    sleep 1
     echo "sendkey meta_l-q 50"
     sleep 1
     echo "sendkey meta_l-q 50"
@@ -192,6 +201,12 @@ grep -Fq "SLOPOS-NIRI: binding action=move-column-right changed=true workspace=1
 grep -Fq "SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=608 delta=96 gesture=mod-right-drag" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=512 delta=-96 gesture=mod-right-drag" "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=true module=niri/workspaces" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: workspace clicked index=1 name=main changed=true module=niri/workspaces" \
+    "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=TERMINAL" "${serial_log}"
@@ -203,6 +218,7 @@ test -s "${repo_dir}/evidence/window-moved.ppm"
 test -s "${repo_dir}/evidence/window-resized.ppm"
 test -s "${repo_dir}/evidence/column-reordered.ppm"
 test -s "${repo_dir}/evidence/mouse-resized.ppm"
+test -s "${repo_dir}/evidence/waybar-workspace-click.ppm"
 test -s "${repo_dir}/evidence/workspace-config.ppm"
 test -s "${repo_dir}/evidence/wallpaper-only.ppm"
 if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; then
@@ -222,9 +238,11 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/column-reordered.png"
     pnmtopng "${repo_dir}/evidence/mouse-resized.ppm" \
         >"${repo_dir}/evidence/mouse-resized.png"
+    pnmtopng "${repo_dir}/evidence/waybar-workspace-click.ppm" \
+        >"${repo_dir}/evidence/waybar-workspace-click.png"
     pnmtopng "${repo_dir}/evidence/workspace-config.ppm" \
         >"${repo_dir}/evidence/workspace-config.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-only.ppm" \
         >"${repo_dir}/evidence/wallpaper-only.png"
 fi
-echo "SlopOS VFS config reload/rollback, swww, niri workspace/bind/rule, viewport, keyboard/pointer resize, reorder, and close verified"
+echo "SlopOS VFS config reload/rollback, swww, niri workspace/bind/rule, Waybar workspace click, viewport, keyboard/pointer resize, reorder, and close verified"
