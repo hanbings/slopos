@@ -3,7 +3,8 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use slopos_shell::{
-    ImgRequest, MAX_WALLPAPER_PATH, ResizeMode, TransitionOptions, TransitionType, parse_ppm,
+    ImgRequest, MAX_WALLPAPER_PATH, ResizeMode, TransitionOptions, TransitionPosition,
+    TransitionType, parse_ppm,
 };
 
 pub const WALLPAPER_FILE_CAPACITY: usize = 8 * 1024;
@@ -116,6 +117,8 @@ impl WallpaperFileRequest {
                 fps: 30,
                 duration_seconds: 3,
                 angle_degrees: 45,
+                position: TransitionPosition::center(),
+                invert_y: false,
                 resize: ResizeMode::Crop,
             },
         }

@@ -11,6 +11,8 @@ pub enum TransitionType {
     Right,
     Top,
     Bottom,
+    Wipe,
+    Grow,
     Center,
     Outer,
     Any,
@@ -35,6 +37,8 @@ impl TransitionType {
             Self::Right => "right",
             Self::Top => "top",
             Self::Bottom => "bottom",
+            Self::Wipe => "wipe",
+            Self::Grow => "grow",
             Self::Center => "center",
             Self::Outer => "outer",
             Self::Any => "any",
@@ -50,6 +54,42 @@ pub enum ResizeMode {
     No,
 }
 
+const POSITION_SCALE: u32 = 10_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransitionCoordinate {
+    Pixel(u32),
+    Percent(u32),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransitionPosition {
+    pub x: TransitionCoordinate,
+    pub y: TransitionCoordinate,
+}
+
+impl TransitionPosition {
+    pub const fn center() -> Self {
+        Self {
+            x: TransitionCoordinate::Percent(POSITION_SCALE / 2),
+            y: TransitionCoordinate::Percent(POSITION_SCALE / 2),
+        }
+    }
+
+    pub fn to_pixel(self, dimensions: (u16, u16), invert_y: bool) -> (i32, i32) {
+        let width = u32::from(dimensions.0);
+        let height = u32::from(dimensions.1);
+        let x = coordinate_to_pixel(self.x, width);
+        let y_from_bottom = coordinate_to_pixel(self.y, height);
+        let y = if invert_y {
+            y_from_bottom
+        } else {
+            i64::from(height) - y_from_bottom
+        };
+        (clamp_i64_to_i32(x), clamp_i64_to_i32(y))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TransitionOptions {
     pub kind: TransitionType,
@@ -57,6 +97,8 @@ pub struct TransitionOptions {
     pub fps: u8,
     pub duration_seconds: u16,
     pub angle_degrees: u16,
+    pub position: TransitionPosition,
+    pub invert_y: bool,
     pub resize: ResizeMode,
 }
 
@@ -68,6 +110,8 @@ impl Default for TransitionOptions {
             fps: 30,
             duration_seconds: 3,
             angle_degrees: 45,
+            position: TransitionPosition::center(),
+            invert_y: false,
             resize: ResizeMode::Crop,
         }
     }
@@ -110,6 +154,8 @@ pub enum SwwwParseError {
     InvalidNumber,
     InvalidTransition,
     InvalidResize,
+    InvalidPosition,
+    InvalidBoolean,
     InvalidColor,
     UnexpectedArgument,
 }
@@ -174,6 +220,10 @@ pub fn parse_swww_environment(input: &str) -> Result<SwwwDefaults, SwwwParseErro
             defaults.transition.duration_seconds = parse_u16(value)?;
         } else if name == "SWWW_TRANSITION_ANGLE" {
             defaults.transition.angle_degrees = parse_angle(value)?;
+        } else if name == "SWWW_TRANSITION_POS" {
+            defaults.transition.position = parse_position(value)?;
+        } else if name == "SWWW_INVERT_Y" {
+            defaults.transition.invert_y = parse_bool(value)?;
         }
     }
     Ok(defaults)
@@ -201,6 +251,10 @@ fn parse_img<'a>(
         } else if equal(argument, "--transition-angle") {
             transition.angle_degrees =
                 parse_angle(args.next().ok_or(SwwwParseError::MissingValue)?)?;
+        } else if equal(argument, "--transition-pos") {
+            transition.position = parse_position(args.next().ok_or(SwwwParseError::MissingValue)?)?;
+        } else if equal(argument, "--invert-y") {
+            transition.invert_y = parse_bool(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if equal(argument, "--resize") {
             transition.resize = match args.next().ok_or(SwwwParseError::MissingValue)? {
                 value if equal(value, "crop") => ResizeMode::Crop,
@@ -268,6 +322,10 @@ fn parse_transition(value: &str) -> Result<TransitionType, SwwwParseError> {
         Ok(TransitionType::Top)
     } else if equal(value, "bottom") {
         Ok(TransitionType::Bottom)
+    } else if equal(value, "wipe") {
+        Ok(TransitionType::Wipe)
+    } else if equal(value, "grow") {
+        Ok(TransitionType::Grow)
     } else if equal(value, "center") {
         Ok(TransitionType::Center)
     } else if equal(value, "outer") {
@@ -299,21 +357,134 @@ fn parse_angle(value: &str) -> Result<u16, SwwwParseError> {
     })
 }
 
+fn parse_position(value: &str) -> Result<TransitionPosition, SwwwParseError> {
+    let alias = if equal(value, "center") {
+        Some((5_000, 5_000))
+    } else if equal(value, "top") {
+        Some((5_000, 10_000))
+    } else if equal(value, "bottom") {
+        Some((5_000, 0))
+    } else if equal(value, "left") {
+        Some((0, 5_000))
+    } else if equal(value, "right") {
+        Some((10_000, 5_000))
+    } else if equal(value, "top-left") {
+        Some((0, 10_000))
+    } else if equal(value, "top-right") {
+        Some((10_000, 10_000))
+    } else if equal(value, "bottom-left") {
+        Some((0, 0))
+    } else if equal(value, "bottom-right") {
+        Some((10_000, 0))
+    } else {
+        None
+    };
+    if let Some((x, y)) = alias {
+        return Ok(TransitionPosition {
+            x: TransitionCoordinate::Percent(x),
+            y: TransitionCoordinate::Percent(y),
+        });
+    }
+
+    let Some((x, y)) = value.split_once(',') else {
+        return Err(SwwwParseError::InvalidPosition);
+    };
+    if y.contains(',') {
+        return Err(SwwwParseError::InvalidPosition);
+    }
+    Ok(TransitionPosition {
+        x: parse_coordinate(x.trim())?,
+        y: parse_coordinate(y.trim())?,
+    })
+}
+
+fn parse_coordinate(value: &str) -> Result<TransitionCoordinate, SwwwParseError> {
+    if value.contains('.') {
+        parse_decimal_fixed(value)
+            .map(TransitionCoordinate::Percent)
+            .map_err(|_| SwwwParseError::InvalidPosition)
+    } else {
+        parse_u32(value)
+            .map(TransitionCoordinate::Pixel)
+            .map_err(|_| SwwwParseError::InvalidPosition)
+    }
+}
+
+fn parse_decimal_fixed(value: &str) -> Result<u32, SwwwParseError> {
+    let Some((whole, fraction)) = value.split_once('.') else {
+        return Err(SwwwParseError::InvalidNumber);
+    };
+    if fraction.contains('.') || (whole.is_empty() && fraction.is_empty()) {
+        return Err(SwwwParseError::InvalidNumber);
+    }
+    let whole = if whole.is_empty() {
+        0
+    } else {
+        parse_u32(whole)?
+    };
+    let mut fractional = 0u32;
+    let mut digits = 0u32;
+    for byte in fraction.bytes() {
+        if !byte.is_ascii_digit() {
+            return Err(SwwwParseError::InvalidNumber);
+        }
+        if digits < 4 {
+            fractional = fractional * 10 + u32::from(byte - b'0');
+            digits += 1;
+        }
+    }
+    while digits < 4 {
+        fractional *= 10;
+        digits += 1;
+    }
+    whole
+        .checked_mul(POSITION_SCALE)
+        .and_then(|value| value.checked_add(fractional))
+        .ok_or(SwwwParseError::InvalidNumber)
+}
+
+fn parse_bool(value: &str) -> Result<bool, SwwwParseError> {
+    if equal(value, "true") {
+        Ok(true)
+    } else if equal(value, "false") {
+        Ok(false)
+    } else {
+        Err(SwwwParseError::InvalidBoolean)
+    }
+}
+
 fn parse_u16(value: &str) -> Result<u16, SwwwParseError> {
+    u16::try_from(parse_u32(value)?).map_err(|_| SwwwParseError::InvalidNumber)
+}
+
+fn parse_u32(value: &str) -> Result<u32, SwwwParseError> {
     if value.is_empty() {
         return Err(SwwwParseError::InvalidNumber);
     }
-    let mut parsed = 0u16;
+    let mut parsed = 0u32;
     for byte in value.bytes() {
         if !byte.is_ascii_digit() {
             return Err(SwwwParseError::InvalidNumber);
         }
         parsed = parsed
             .checked_mul(10)
-            .and_then(|number| number.checked_add(u16::from(byte - b'0')))
+            .and_then(|number| number.checked_add(u32::from(byte - b'0')))
             .ok_or(SwwwParseError::InvalidNumber)?;
     }
     Ok(parsed)
+}
+
+fn coordinate_to_pixel(coordinate: TransitionCoordinate, length: u32) -> i64 {
+    match coordinate {
+        TransitionCoordinate::Pixel(value) => i64::from(value),
+        TransitionCoordinate::Percent(value) => {
+            i64::from(value) * i64::from(length) / i64::from(POSITION_SCALE)
+        }
+    }
+}
+
+fn clamp_i64_to_i32(value: i64) -> i32 {
+    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 fn parse_hex_color(value: &str) -> Result<u32, SwwwParseError> {
@@ -460,6 +631,8 @@ impl WallpaperDaemon {
                 fps: 30,
                 duration_seconds: 3,
                 angle_degrees: 45,
+                position: TransitionPosition::center(),
+                invert_y: false,
                 resize: ResizeMode::Crop,
             },
             progress: 0,
@@ -519,7 +692,7 @@ impl WallpaperDaemon {
         self.clear_color = None;
         self.transition = request.transition;
         self.generation = self.generation.wrapping_add(1);
-        self.transition.kind = resolve_transition(self.transition.kind, self.generation);
+        resolve_transition(&mut self.transition, self.generation);
         self.transition_active =
             self.previous.get().is_some() && self.transition.kind != TransitionType::None;
         self.progress = if self.transition_active { 0 } else { u8::MAX };
@@ -614,27 +787,38 @@ impl WallpaperDaemon {
     }
 }
 
-fn resolve_transition(kind: TransitionType, generation: u32) -> TransitionType {
-    const RANDOM_TYPES: [TransitionType; 8] = [
+fn resolve_transition(transition: &mut TransitionOptions, generation: u32) {
+    const RANDOM_TYPES: [TransitionType; 7] = [
         TransitionType::Simple,
-        TransitionType::Left,
-        TransitionType::Right,
-        TransitionType::Top,
-        TransitionType::Bottom,
-        TransitionType::Center,
+        TransitionType::Wipe,
+        TransitionType::Grow,
         TransitionType::Outer,
         TransitionType::Fade,
+        TransitionType::Left,
+        TransitionType::Top,
     ];
-    match kind {
+    match transition.kind {
         TransitionType::Any => {
+            transition.position = pseudo_random_position(generation);
             if generation & 1 == 0 {
-                TransitionType::Center
+                transition.kind = TransitionType::Grow;
             } else {
-                TransitionType::Outer
+                transition.kind = TransitionType::Outer;
             }
         }
-        TransitionType::Random => RANDOM_TYPES[generation as usize % RANDOM_TYPES.len()],
-        value => value,
+        TransitionType::Random => {
+            transition.position = pseudo_random_position(generation);
+            transition.angle_degrees = ((generation.wrapping_mul(137)) % 360) as u16;
+            transition.kind = RANDOM_TYPES[generation as usize % RANDOM_TYPES.len()];
+        }
+        _ => {}
+    }
+}
+
+fn pseudo_random_position(generation: u32) -> TransitionPosition {
+    TransitionPosition {
+        x: TransitionCoordinate::Percent(generation.wrapping_mul(7_919) % 10_001),
+        y: TransitionCoordinate::Percent(generation.wrapping_mul(4_279) % 10_001),
     }
 }
 
@@ -646,7 +830,28 @@ pub fn transition_pixel(
     old: u32,
     new: u32,
 ) -> u32 {
-    if kind == TransitionType::None {
+    transition_pixel_with_options(
+        TransitionOptions {
+            kind,
+            ..TransitionOptions::default()
+        },
+        progress,
+        (i32::from(position.0), i32::from(position.1)),
+        dimensions,
+        old,
+        new,
+    )
+}
+
+pub fn transition_pixel_with_options(
+    options: TransitionOptions,
+    progress: u8,
+    position: (i32, i32),
+    dimensions: (u16, u16),
+    old: u32,
+    new: u32,
+) -> u32 {
+    if options.kind == TransitionType::None {
         return new;
     }
     if progress == 0 {
@@ -655,27 +860,51 @@ pub fn transition_pixel(
     if progress == u8::MAX {
         return new;
     }
-    let (x, y) = position;
-    let (width, height) = dimensions;
-    match kind {
+    match options.kind {
         TransitionType::Simple | TransitionType::Fade => blend(old, new, progress),
-        TransitionType::Left => choose(scale_position(x, width) <= progress, old, new),
-        TransitionType::Right => choose(
-            scale_position(width.saturating_sub(1).saturating_sub(x), width) <= progress,
-            old,
-            new,
-        ),
-        TransitionType::Top => choose(scale_position(y, height) <= progress, old, new),
-        TransitionType::Bottom => choose(
-            scale_position(height.saturating_sub(1).saturating_sub(y), height) <= progress,
-            old,
-            new,
-        ),
-        TransitionType::Center => {
-            choose(center_distance(x, y, width, height) <= progress, old, new)
+        TransitionType::Left => {
+            choose(wipe_revealed(180, progress, position, dimensions), old, new)
         }
+        TransitionType::Right => choose(wipe_revealed(0, progress, position, dimensions), old, new),
+        TransitionType::Top => choose(wipe_revealed(90, progress, position, dimensions), old, new),
+        TransitionType::Bottom => {
+            choose(wipe_revealed(270, progress, position, dimensions), old, new)
+        }
+        TransitionType::Wipe => choose(
+            wipe_revealed(options.angle_degrees, progress, position, dimensions),
+            old,
+            new,
+        ),
+        TransitionType::Grow => choose(
+            radial_revealed(
+                options.position.to_pixel(dimensions, options.invert_y),
+                progress,
+                position,
+                dimensions,
+                false,
+            ),
+            old,
+            new,
+        ),
+        TransitionType::Center => choose(
+            radial_revealed(
+                TransitionPosition::center().to_pixel(dimensions, false),
+                progress,
+                position,
+                dimensions,
+                false,
+            ),
+            old,
+            new,
+        ),
         TransitionType::Outer => choose(
-            center_distance(x, y, width, height) >= u8::MAX - progress,
+            radial_revealed(
+                options.position.to_pixel(dimensions, options.invert_y),
+                progress,
+                position,
+                dimensions,
+                true,
+            ),
             old,
             new,
         ),
@@ -687,27 +916,74 @@ fn choose(reveal: bool, old: u32, new: u32) -> u32 {
     if reveal { new } else { old }
 }
 
-fn scale_position(position: u16, length: u16) -> u8 {
-    if length <= 1 {
-        return 0;
+fn wipe_revealed(angle: u16, progress: u8, position: (i32, i32), dimensions: (u16, u16)) -> bool {
+    let (dx, dy) = wipe_direction(angle);
+    let width = i64::from(dimensions.0.saturating_sub(1));
+    let height = i64::from(dimensions.1.saturating_sub(1));
+    let corners = [
+        0,
+        i64::from(dx) * width,
+        i64::from(dy) * height,
+        i64::from(dx) * width + i64::from(dy) * height,
+    ];
+    let mut minimum = corners[0];
+    let mut maximum = corners[0];
+    for value in &corners[1..] {
+        minimum = minimum.min(*value);
+        maximum = maximum.max(*value);
     }
-    (u32::from(position) * 255 / u32::from(length - 1)) as u8
+    let raw = i64::from(dx) * i64::from(position.0) + i64::from(dy) * i64::from(position.1);
+    if maximum == minimum {
+        return true;
+    }
+    (raw - minimum).clamp(0, maximum - minimum) * 255 <= (maximum - minimum) * i64::from(progress)
 }
 
-fn center_distance(x: u16, y: u16, width: u16, height: u16) -> u8 {
-    let horizontal = axis_center_distance(x, width);
-    let vertical = axis_center_distance(y, height);
-    horizontal.max(vertical).min(255) as u8
+fn wipe_direction(angle: u16) -> (i16, i16) {
+    let angle = angle % 360;
+    match angle {
+        0..=89 => (-(90 - angle as i16), angle as i16),
+        90..=179 => ((angle - 90) as i16, (180 - angle) as i16),
+        180..=269 => ((270 - angle) as i16, -((angle - 180) as i16)),
+        _ => (-((angle - 270) as i16), -((360 - angle) as i16)),
+    }
 }
 
-fn axis_center_distance(position: u16, length: u16) -> u32 {
-    if length <= 1 {
-        return 0;
+fn radial_revealed(
+    center: (i32, i32),
+    progress: u8,
+    position: (i32, i32),
+    dimensions: (u16, u16),
+    outer: bool,
+) -> bool {
+    let distance = squared_distance(position, center);
+    let right = i32::from(dimensions.0.saturating_sub(1));
+    let bottom = i32::from(dimensions.1.saturating_sub(1));
+    let maximum = squared_distance((0, 0), center)
+        .max(squared_distance((right, 0), center))
+        .max(squared_distance((0, bottom), center))
+        .max(squared_distance((right, bottom), center))
+        .max(1);
+    let threshold = if outer {
+        u64::from(u8::MAX - progress)
+    } else {
+        u64::from(progress)
+    };
+    if outer {
+        distance.saturating_mul(u64::from(u8::MAX).pow(2))
+            >= maximum.saturating_mul(threshold.pow(2))
+    } else {
+        distance.saturating_mul(u64::from(u8::MAX).pow(2))
+            <= maximum.saturating_mul(threshold.pow(2))
     }
-    let raw = (i32::from(position) * 2 + 1 - i32::from(length)).unsigned_abs();
-    let minimum = u32::from(length % 2 == 0);
-    let maximum = u32::from(length - 1).saturating_sub(minimum).max(1);
-    raw.saturating_sub(minimum) * 255 / maximum
+}
+
+fn squared_distance(left: (i32, i32), right: (i32, i32)) -> u64 {
+    let x = i64::from(left.0) - i64::from(right.0);
+    let y = i64::from(left.1) - i64::from(right.1);
+    x.unsigned_abs()
+        .saturating_mul(x.unsigned_abs())
+        .saturating_add(y.unsigned_abs().saturating_mul(y.unsigned_abs()))
 }
 
 fn blend(old: u32, new: u32, progress: u8) -> u32 {
@@ -911,21 +1187,42 @@ mod tests {
     #[test]
     fn applies_environment_defaults_and_transition_specific_step() {
         let defaults = parse_swww_environment(
-            "SWWW_TRANSITION=center\nSWWW_TRANSITION_STEP=33\nSWWW_TRANSITION_FPS=60\nSWWW_TRANSITION_DURATION=2\n",
+            "SWWW_TRANSITION=grow\nSWWW_TRANSITION_STEP=33\nSWWW_TRANSITION_FPS=60\nSWWW_TRANSITION_DURATION=2\nSWWW_TRANSITION_ANGLE=120\nSWWW_TRANSITION_POS=top-right\nSWWW_INVERT_Y=true\n",
         )
         .unwrap();
-        assert_eq!(defaults.transition.kind, TransitionType::Center);
+        assert_eq!(defaults.transition.kind, TransitionType::Grow);
         assert_eq!(defaults.transition.step, 33);
         assert_eq!(defaults.transition.fps, 60);
         assert_eq!(defaults.transition.duration_seconds, 2);
+        assert_eq!(defaults.transition.angle_degrees, 120);
+        assert_eq!(
+            defaults.transition.position,
+            TransitionPosition {
+                x: TransitionCoordinate::Percent(10_000),
+                y: TransitionCoordinate::Percent(10_000),
+            }
+        );
+        assert!(defaults.transition.invert_y);
 
-        let SwwwCommand::Img(request) =
-            parse_swww_command("img image.ppm --transition-type left", defaults).unwrap()
+        let SwwwCommand::Img(request) = parse_swww_command(
+            "img image.ppm --transition-type wipe --transition-angle 30 --transition-pos 0.25,0.75 --invert-y false",
+            defaults,
+        )
+        .unwrap()
         else {
             panic!("expected image request");
         };
-        assert_eq!(request.transition.kind, TransitionType::Left);
-        assert_eq!(request.transition.step, TransitionType::Left.default_step());
+        assert_eq!(request.transition.kind, TransitionType::Wipe);
+        assert_eq!(request.transition.step, TransitionType::Wipe.default_step());
+        assert_eq!(request.transition.angle_degrees, 30);
+        assert_eq!(
+            request.transition.position,
+            TransitionPosition {
+                x: TransitionCoordinate::Percent(2_500),
+                y: TransitionCoordinate::Percent(7_500),
+            }
+        );
+        assert!(!request.transition.invert_y);
     }
 
     #[test]
@@ -951,6 +1248,24 @@ mod tests {
                 SwwwDefaults::default()
             ),
             Err(SwwwParseError::InvalidTransition)
+        );
+        assert_eq!(
+            parse_swww_command(
+                "swww img one.ppm --transition-pos middle",
+                SwwwDefaults::default()
+            ),
+            Err(SwwwParseError::InvalidPosition)
+        );
+        assert_eq!(
+            parse_swww_command(
+                "swww img one.ppm --transition-pos 0.2,wat",
+                SwwwDefaults::default()
+            ),
+            Err(SwwwParseError::InvalidPosition)
+        );
+        assert_eq!(
+            parse_swww_command("swww img one.ppm --invert-y yes", SwwwDefaults::default()),
+            Err(SwwwParseError::InvalidBoolean)
         );
         assert_eq!(
             parse_swww_command("swww clear #1a804a", SwwwDefaults::default()),
@@ -1073,7 +1388,7 @@ mod tests {
             old
         );
         assert_eq!(
-            transition_pixel(TransitionType::Center, 1, (1, 1), (4, 4), old, new),
+            transition_pixel(TransitionType::Center, 1, (2, 2), (4, 4), old, new),
             new
         );
         assert_eq!(
@@ -1088,6 +1403,46 @@ mod tests {
             transition_pixel(TransitionType::None, 0, (0, 0), (4, 4), old, new),
             new
         );
+
+        let mut options = TransitionOptions {
+            kind: TransitionType::Wipe,
+            angle_degrees: 0,
+            ..TransitionOptions::default()
+        };
+        assert_eq!(
+            transition_pixel_with_options(options, 90, (3, 0), (4, 4), old, new),
+            new
+        );
+        assert_eq!(
+            transition_pixel_with_options(options, 90, (0, 0), (4, 4), old, new),
+            old
+        );
+        options.angle_degrees = 180;
+        assert_eq!(
+            transition_pixel_with_options(options, 90, (0, 0), (4, 4), old, new),
+            new
+        );
+        assert_eq!(
+            transition_pixel_with_options(options, 90, (3, 0), (4, 4), old, new),
+            old
+        );
+
+        options.kind = TransitionType::Grow;
+        options.position = parse_position("top-left").unwrap();
+        assert_eq!(options.position.to_pixel((100, 80), false), (0, 0));
+        assert_eq!(
+            transition_pixel_with_options(options, 1, (0, 0), (100, 80), old, new),
+            new
+        );
+        assert_eq!(
+            transition_pixel_with_options(options, 1, (99, 79), (100, 80), old, new),
+            old
+        );
+
+        options.position = parse_position("20,10").unwrap();
+        assert_eq!(options.position.to_pixel((100, 80), false), (20, 70));
+        options.invert_y = true;
+        assert_eq!(options.position.to_pixel((100, 80), true), (20, 10));
     }
 
     #[test]

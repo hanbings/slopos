@@ -13,7 +13,7 @@ use slopos_shell::{
     SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference,
     WorkspaceSet, format_bar_text, parse_niri_layout, parse_niri_shell_config, parse_ppm,
     parse_swww_command, parse_swww_environment, parse_waybar_config, parse_waybar_style,
-    transition_pixel,
+    transition_pixel_with_options,
 };
 
 const WINDOW_COUNT: usize = 3;
@@ -521,11 +521,13 @@ impl Desktop {
                 let new = new_pixels
                     .next()
                     .unwrap_or_else(|| crate::fatal("swww current PPM pixel stream truncated"));
-                let color = transition_pixel(
-                    self.wallpaper.transition().kind,
+                let sample_x = destination_x + i32::from(x) * scale + scale / 2;
+                let sample_y = destination_y + i32::from(y) * scale + scale / 2;
+                let color = transition_pixel_with_options(
+                    self.wallpaper.transition(),
                     self.wallpaper.progress(),
-                    (x, y),
-                    (current.width(), current.height()),
+                    (sample_x, sample_y),
+                    (self.screen_width as u16, self.screen_height as u16),
                     old,
                     new,
                 );
@@ -559,12 +561,20 @@ impl Desktop {
         }
         self.wallpaper.finish_transition();
         self.wallpaper_previous_image = None;
+        let origin = transition.position.to_pixel(
+            (self.screen_width as u16, self.screen_height as u16),
+            transition.invert_y,
+        );
         serialln(format_args!(
-            "SLOPOS-SWWW: transition complete type={} step={} fps={} frames={}",
+            "SLOPOS-SWWW: transition complete type={} step={} fps={} frames={} angle={} position={},{} invert_y={}",
             transition.kind.name(),
             transition.step,
             transition.fps,
-            frames
+            frames,
+            transition.angle_degrees,
+            origin.0,
+            origin.1,
+            transition.invert_y
         ));
     }
 

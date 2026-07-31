@@ -161,6 +161,12 @@ qmp_wheel_burst() {
     sleep 2
     monitor_type "swww img sunset.ppm --transition-type none"
     sleep 2
+    monitor_type "swww img aurora.ppm --transition-type grow --transition-pos top-left --transition-step 64"
+    sleep 4
+    echo "screendump ${repo_dir}/evidence/wallpaper-grow-top-left.ppm"
+    monitor_type "swww img sunset.ppm --transition-type wipe --transition-angle 30 --transition-step 64"
+    sleep 4
+    echo "screendump ${repo_dir}/evidence/wallpaper-wipe-angle.ppm"
     echo "sendkey meta_l-comma 50"
     sleep 1
     echo "sendkey meta_l-ctrl-shift-2 50"
@@ -580,6 +586,10 @@ grep -Fq "SLOPOS-SWWW: daemon started" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: clear color=1A2B3C output=*" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: image=AURORA.PPM output=* transition=grow step=64 fps=30 source=embedded" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: transition complete type=grow step=64 fps=30 frames=5 angle=45 position=0,0 invert_y=false" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=wipe step=64 fps=30 source=embedded" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: transition complete type=wipe step=64 fps=30 frames=5 angle=30 position=512,384 invert_y=false" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
@@ -759,6 +769,8 @@ test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-vfs-loaded.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
+test -s "${repo_dir}/evidence/wallpaper-grow-top-left.ppm"
+test -s "${repo_dir}/evidence/wallpaper-wipe-angle.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-target.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-returned.ppm"
 test -s "${repo_dir}/evidence/niri-column-workspace-target.ppm"
@@ -829,6 +841,10 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-vfs-loaded.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-cleared.ppm" \
         >"${repo_dir}/evidence/wallpaper-cleared.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-grow-top-left.ppm" \
+        >"${repo_dir}/evidence/wallpaper-grow-top-left.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-wipe-angle.ppm" \
+        >"${repo_dir}/evidence/wallpaper-wipe-angle.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-target.ppm" \
         >"${repo_dir}/evidence/niri-window-workspace-target.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-returned.ppm" \
