@@ -13,6 +13,44 @@ pub enum BarPosition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarLayer {
+    Bottom,
+    Top,
+    Overlay,
+}
+
+impl BarLayer {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Bottom => "bottom",
+            Self::Top => "top",
+            Self::Overlay => "overlay",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarMode {
+    Default,
+    Dock,
+    Hide,
+    Invisible,
+    Overlay,
+}
+
+impl BarMode {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Dock => "dock",
+            Self::Hide => "hide",
+            Self::Invisible => "invisible",
+            Self::Overlay => "overlay",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BarButton {
     Left,
     Middle,
@@ -158,7 +196,11 @@ pub struct WaybarConfig<'a> {
     pub margin_bottom: i32,
     pub margin_left: i32,
     pub fixed_center: bool,
+    pub layer: BarLayer,
+    pub mode: BarMode,
     pub exclusive: bool,
+    pub passthrough: bool,
+    pub visible: bool,
     pub modules_left: BarModuleList<'a>,
     pub modules_center: BarModuleList<'a>,
     pub modules_right: BarModuleList<'a>,
@@ -176,7 +218,11 @@ impl Default for WaybarConfig<'_> {
             margin_bottom: 0,
             margin_left: 0,
             fixed_center: true,
+            layer: BarLayer::Bottom,
+            mode: BarMode::Default,
             exclusive: true,
+            passthrough: false,
+            visible: true,
             modules_left: BarModuleList::empty(),
             modules_center: BarModuleList::empty(),
             modules_right: BarModuleList::empty(),
@@ -187,12 +233,16 @@ impl Default for WaybarConfig<'_> {
 
 impl WaybarConfig<'_> {
     pub fn reserved_top(self) -> u16 {
-        if !self.exclusive || self.position != BarPosition::Top {
+        if !self.visible || !self.exclusive || self.position != BarPosition::Top {
             return 0;
         }
         i32::from(self.height)
             .saturating_add(self.margin_top)
             .clamp(0, i32::from(u16::MAX)) as u16
+    }
+
+    pub const fn layer_is_above_windows(self) -> bool {
+        matches!(self.layer, BarLayer::Top | BarLayer::Overlay)
     }
 }
 
@@ -475,19 +525,23 @@ struct JsonParser<'a> {
 }
 
 impl<'a> JsonParser<'a> {
-    const POSITION: u16 = 1 << 0;
-    const HEIGHT: u16 = 1 << 1;
-    const SPACING: u16 = 1 << 2;
-    const LEFT: u16 = 1 << 3;
-    const CENTER: u16 = 1 << 4;
-    const RIGHT: u16 = 1 << 5;
-    const MARGIN: u16 = 1 << 6;
-    const MARGIN_TOP: u16 = 1 << 7;
-    const MARGIN_RIGHT: u16 = 1 << 8;
-    const MARGIN_BOTTOM: u16 = 1 << 9;
-    const MARGIN_LEFT: u16 = 1 << 10;
-    const FIXED_CENTER: u16 = 1 << 11;
-    const EXCLUSIVE: u16 = 1 << 12;
+    const POSITION: u32 = 1 << 0;
+    const HEIGHT: u32 = 1 << 1;
+    const SPACING: u32 = 1 << 2;
+    const LEFT: u32 = 1 << 3;
+    const CENTER: u32 = 1 << 4;
+    const RIGHT: u32 = 1 << 5;
+    const MARGIN: u32 = 1 << 6;
+    const MARGIN_TOP: u32 = 1 << 7;
+    const MARGIN_RIGHT: u32 = 1 << 8;
+    const MARGIN_BOTTOM: u32 = 1 << 9;
+    const MARGIN_LEFT: u32 = 1 << 10;
+    const FIXED_CENTER: u32 = 1 << 11;
+    const EXCLUSIVE: u32 = 1 << 12;
+    const LAYER: u32 = 1 << 13;
+    const MODE: u32 = 1 << 14;
+    const PASSTHROUGH: u32 = 1 << 15;
+    const START_HIDDEN: u32 = 1 << 16;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -499,12 +553,13 @@ impl<'a> JsonParser<'a> {
     fn parse(mut self) -> Result<WaybarConfig<'a>, BarConfigError> {
         self.expect(Token::LeftBrace)?;
         let mut config = WaybarConfig::default();
-        let mut fields = 0u16;
+        let mut fields = 0u32;
         let mut margin = None;
         let mut margin_top = None;
         let mut margin_right = None;
         let mut margin_bottom = None;
         let mut margin_left = None;
+        let mut start_hidden = false;
         loop {
             match self.next() {
                 Token::RightBrace => break,
@@ -566,6 +621,40 @@ impl<'a> JsonParser<'a> {
                                 _ => return Err(BarConfigError::UnexpectedToken),
                             };
                         }
+                        "layer" => {
+                            mark_once(&mut fields, Self::LAYER)?;
+                            config.layer = match self.string_value()? {
+                                "bottom" => BarLayer::Bottom,
+                                "top" => BarLayer::Top,
+                                "overlay" => BarLayer::Overlay,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
+                        "mode" => {
+                            mark_once(&mut fields, Self::MODE)?;
+                            config.mode = match self.string_value()? {
+                                "default" => BarMode::Default,
+                                "dock" => BarMode::Dock,
+                                "hide" => BarMode::Hide,
+                                "invisible" => BarMode::Invisible,
+                                "overlay" => BarMode::Overlay,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
+                        "passthrough" => {
+                            mark_once(&mut fields, Self::PASSTHROUGH)?;
+                            config.passthrough = match self.next() {
+                                Token::Bool(value) => value,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
+                        "start_hidden" => {
+                            mark_once(&mut fields, Self::START_HIDDEN)?;
+                            start_hidden = match self.next() {
+                                Token::Bool(value) => value,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
                         "modules-left" => {
                             mark_once(&mut fields, Self::LEFT)?;
                             config.modules_left = self.module_list()?;
@@ -615,6 +704,40 @@ impl<'a> JsonParser<'a> {
             config.margin_bottom = bottom;
             config.margin_left = left;
         }
+        match config.mode {
+            BarMode::Default => {}
+            BarMode::Dock => {
+                config.layer = BarLayer::Bottom;
+                config.exclusive = true;
+                config.passthrough = false;
+                config.visible = true;
+            }
+            BarMode::Hide => {
+                config.layer = BarLayer::Overlay;
+                config.exclusive = false;
+                config.passthrough = false;
+                config.visible = true;
+            }
+            BarMode::Invisible => {
+                config.layer = BarLayer::Bottom;
+                config.exclusive = false;
+                config.passthrough = true;
+                config.visible = false;
+            }
+            BarMode::Overlay => {
+                config.layer = BarLayer::Overlay;
+                config.exclusive = false;
+                config.passthrough = true;
+                config.visible = true;
+            }
+        }
+        if start_hidden {
+            config.mode = BarMode::Invisible;
+            config.layer = BarLayer::Bottom;
+            config.exclusive = false;
+            config.passthrough = true;
+            config.visible = false;
+        }
         Ok(config)
     }
 
@@ -649,7 +772,7 @@ impl<'a> JsonParser<'a> {
             return Ok(None);
         }
         let mut module = BarModuleConfig::empty(name);
-        let mut fields = 0u16;
+        let mut fields = 0u32;
         let mut supported = false;
         loop {
             match self.next() {
@@ -913,7 +1036,7 @@ impl<'a> JsonParser<'a> {
     }
 }
 
-fn mark_once(fields: &mut u16, field: u16) -> Result<(), BarConfigError> {
+fn mark_once(fields: &mut u32, field: u32) -> Result<(), BarConfigError> {
     if *fields & field != 0 {
         return Err(BarConfigError::DuplicateField);
     }
@@ -983,7 +1106,9 @@ mod tests {
                 "spacing": 8,
                 "margin": "1 2 3 4",
                 "fixed-center": false,
+                "layer": "top",
                 "exclusive": false,
+                "passthrough": true,
                 "modules-left": ["niri/workspaces", "custom/launcher"],
                 "modules-center": ["niri/window"],
                 "modules-right": ["network", "cpu", "memory", "clock",],
@@ -1019,7 +1144,11 @@ mod tests {
             (1, 2, 3, 4)
         );
         assert!(!config.fixed_center);
+        assert_eq!(config.layer, BarLayer::Top);
+        assert_eq!(config.mode, BarMode::Default);
         assert!(!config.exclusive);
+        assert!(config.passthrough);
+        assert!(config.visible);
         assert_eq!(config.reserved_top(), 0);
         let mut left = config.modules_left.iter();
         assert_eq!(left.next(), Some("niri/workspaces"));
@@ -1071,7 +1200,11 @@ mod tests {
             (0, 0, 0, 0)
         );
         assert!(config.fixed_center);
+        assert_eq!(config.layer, BarLayer::Bottom);
+        assert_eq!(config.mode, BarMode::Default);
         assert!(config.exclusive);
+        assert!(!config.passthrough);
+        assert!(config.visible);
         assert_eq!(config.reserved_top(), 30);
         assert!(config.modules_left.is_empty());
         assert_eq!(
@@ -1098,6 +1231,10 @@ mod tests {
             r#"{ "margin-left": 2147483648 }"#,
             r#"{ "fixed-center": "false" }"#,
             r#"{ "exclusive": 1 }"#,
+            r#"{ "layer": "background" }"#,
+            r#"{ "mode": "normal" }"#,
+            r#"{ "passthrough": 1 }"#,
+            r#"{ "start_hidden": "true" }"#,
         ] {
             assert!(parse_waybar_config(input).is_err());
         }
@@ -1135,6 +1272,64 @@ mod tests {
                 expected
             );
         }
+        for (input, mode, layer, exclusive, passthrough, visible) in [
+            (
+                r#"{"layer":"top","exclusive":true,"passthrough":false,"mode":"dock"}"#,
+                "dock",
+                BarLayer::Bottom,
+                true,
+                false,
+                true,
+            ),
+            (
+                r#"{"layer":"top","exclusive":true,"passthrough":false,"mode":"hide"}"#,
+                "hide",
+                BarLayer::Overlay,
+                false,
+                false,
+                true,
+            ),
+            (
+                r#"{"layer":"top","exclusive":true,"passthrough":false,"mode":"invisible"}"#,
+                "invisible",
+                BarLayer::Bottom,
+                false,
+                true,
+                false,
+            ),
+            (
+                r#"{"layer":"top","exclusive":true,"passthrough":false,"mode":"overlay"}"#,
+                "overlay",
+                BarLayer::Overlay,
+                false,
+                true,
+                true,
+            ),
+        ] {
+            let config = parse_waybar_config(input).unwrap();
+            assert_eq!(config.mode.name(), mode);
+            assert_eq!(config.layer, layer);
+            assert_eq!(config.exclusive, exclusive);
+            assert_eq!(config.passthrough, passthrough);
+            assert_eq!(config.visible, visible);
+            assert_eq!(config.reserved_top(), if exclusive { 30 } else { 0 });
+        }
+        let hidden = parse_waybar_config(
+            r#"{
+                "layer": "top",
+                "exclusive": true,
+                "passthrough": false,
+                "mode": "dock",
+                "start_hidden": true
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(hidden.mode, BarMode::Invisible);
+        assert_eq!(hidden.layer, BarLayer::Bottom);
+        assert!(!hidden.exclusive);
+        assert!(hidden.passthrough);
+        assert!(!hidden.visible);
+        assert_eq!(hidden.reserved_top(), 0);
         assert_eq!(
             parse_waybar_config(
                 r#"{

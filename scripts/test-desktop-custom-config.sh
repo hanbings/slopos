@@ -20,12 +20,18 @@ right_action_screenshot="${repo_dir}/evidence/custom-config-on-click-right.ppm"
 middle_action_screenshot="${repo_dir}/evidence/custom-config-on-click-middle.ppm"
 scroll_up_screenshot="${repo_dir}/evidence/custom-config-scroll-up.ppm"
 scroll_down_screenshot="${repo_dir}/evidence/custom-config-scroll-down.ppm"
+overlay_serial_log="${repo_dir}/evidence/waybar-overlay-serial.log"
+overlay_debug_log="${repo_dir}/evidence/waybar-overlay-uefi-debugcon.log"
+overlay_qemu_log="${repo_dir}/evidence/waybar-overlay-qemu.log"
+overlay_screenshot="${repo_dir}/evidence/waybar-overlay-passthrough.ppm"
+overlay_clicked_screenshot="${repo_dir}/evidence/waybar-overlay-click-through.ppm"
 runtime_dir="$(mktemp -d /tmp/slopos-custom-config.XXXXXX)"
 runtime_esp="${runtime_dir}/slopos-esp.img"
 runtime_root="${runtime_dir}/slopos-root.ext4"
 runtime_vars="${runtime_dir}/OVMF_VARS_4M.fd"
 custom_niri="${runtime_dir}/niri.kdl"
 custom_waybar="${runtime_dir}/waybar.jsonc"
+overlay_waybar="${runtime_dir}/waybar-overlay.jsonc"
 fsck_log="${runtime_dir}/fsck.log"
 debugfs=/usr/sbin/debugfs
 e2fsck=/usr/sbin/e2fsck
@@ -37,6 +43,7 @@ cleanup() {
         "${runtime_vars}" \
         "${custom_niri}" \
         "${custom_waybar}" \
+        "${overlay_waybar}" \
         "${fsck_log}"
     do
         unlink "${temporary_file}" 2>/dev/null || true
@@ -88,7 +95,7 @@ if (( custom_niri_bytes <= default_niri_bytes || custom_niri_bytes > 4096 )); th
 fi
 sed \
     -e '1i// user override accepted by the SlopOS desktop service' \
-    -e '/"spacing": 10,/a\    "margin": "4 12",\n    "fixed-center": false,\n    "exclusive": true,' \
+    -e '/"spacing": 10,/a\    "margin": "4 12",\n    "fixed-center": false,\n    "layer": "top",\n    "exclusive": true,' \
     -e '/"modules-left":/,/]/ s/"niri\/workspaces"/"niri\/window"/' \
     -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
     -e '/"clock": {/a\        "on-click": "status",' \
@@ -101,6 +108,15 @@ sed \
 custom_bytes="$(wc -c <"${custom_waybar}")"
 if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
     echo "custom Waybar fixture has unexpected size: ${custom_bytes}" >&2
+    exit 1
+fi
+sed \
+    -e '1i// Waybar overlay preset and pointer passthrough integration fixture' \
+    -e '/"spacing": 10,/a\    "mode": "overlay",' \
+    "${repo_dir}/assets/waybar-config.jsonc" >"${overlay_waybar}"
+overlay_bytes="$(wc -c <"${overlay_waybar}")"
+if (( overlay_bytes <= 904 || overlay_bytes > 4096 )); then
+    echo "overlay Waybar fixture has unexpected size: ${overlay_bytes}" >&2
     exit 1
 fi
 
@@ -118,10 +134,12 @@ fi
 set +e
 {
     sleep 7
-    echo "mouse_move 5 -364"
+    echo "mouse_move -212 -364"
+    sleep 1
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
+    echo "mouse_move 217 0"
     echo "screendump ${workspace_screenshot}"
     echo "sendkey meta_l-shift-f 50"
     sleep 1
@@ -258,7 +276,10 @@ if [[ "$(grep -Fc "SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=
     exit 1
 fi
 grep -Fq \
-    "SLOPOS-WAYBAR: geometry position=top x=12 y=4 width=1000 height=40 margin=4/12/4/12 spacing=10 fixed_center=false exclusive=true reserved_top=44 source=config" \
+    "SLOPOS-WAYBAR: geometry position=top x=12 y=4 width=1000 height=40 margin=4/12/4/12 spacing=10 fixed_center=false layer=top mode=default exclusive=true passthrough=false visible=true reserved_top=44 source=config" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: surface clicked button=left consumed=true layer=top passthrough=false" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized value=true applied=true workspace=2 x=16 y=60 width=992 height=338 mode=maximized-column source=config" \
@@ -419,6 +440,77 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/custom-config-scroll-down.png"
 fi
 
+cp --reflink=auto --sparse=always "${root_image}" "${runtime_root}"
+cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
+"${debugfs}" -w -R "rm /etc/slopos/waybar.jsonc" "${runtime_root}" >/dev/null 2>&1
+"${debugfs}" \
+    -w \
+    -R "write ${overlay_waybar} /etc/slopos/waybar.jsonc" \
+    "${runtime_root}" >/dev/null 2>&1
+
+set +e
+{
+    sleep 7
+    echo "screendump ${overlay_screenshot}"
+    echo "mouse_move 478 -358"
+    sleep 1
+    echo "mouse_button 1"
+    echo "mouse_button 0"
+    sleep 1
+    echo "screendump ${overlay_clicked_screenshot}"
+    echo "quit"
+} | timeout 14s qemu-system-x86_64 \
+    -machine q35,accel=tcg \
+    -cpu qemu64 \
+    -m 256M \
+    -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd" \
+    -drive "if=pflash,format=raw,file=${runtime_vars}" \
+    -drive "if=virtio,format=raw,file=${runtime_esp}" \
+    -drive "if=virtio,format=raw,file=${runtime_root}" \
+    -serial "file:${overlay_serial_log}" \
+    -debugcon "file:${overlay_debug_log}" \
+    -global isa-debugcon.iobase=0x402 \
+    -display none \
+    -monitor stdio \
+    -no-reboot >"${overlay_qemu_log}" 2>&1
+overlay_qemu_status=$?
+set -e
+
+if [[ ${overlay_qemu_status} -ne 0 && ${overlay_qemu_status} -ne 124 ]]; then
+    echo "Waybar overlay QEMU failed with status ${overlay_qemu_status}" >&2
+    exit "${overlay_qemu_status}"
+fi
+sed -i 's/\r$//' "${overlay_serial_log}" "${overlay_debug_log}" "${overlay_qemu_log}"
+grep -Fq \
+    "bytes=${overlay_bytes} access=readonly async=true path=/etc/slopos/waybar.jsonc" \
+    "${overlay_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=overlay mode=overlay exclusive=false passthrough=true visible=true reserved_top=0 source=config" \
+    "${overlay_serial_log}"
+grep -Fq \
+    "SLOPOS-DESKTOP: window closed kind=SYSTEM workspace=1" \
+    "${overlay_serial_log}"
+if grep -Fq "SLOPOS-WAYBAR: module clicked name=clock button=left" "${overlay_serial_log}"; then
+    echo "Waybar overlay consumed a click despite passthrough=true" >&2
+    exit 1
+fi
+if grep -Fq "FATAL" "${overlay_serial_log}" || grep -Fq "state=exited" "${overlay_serial_log}"; then
+    echo "Waybar overlay integration reached an unexpected exit or fatal path" >&2
+    exit 1
+fi
+test -s "${overlay_screenshot}"
+test -s "${overlay_clicked_screenshot}"
+if [[ "$(ppm_pixel_hex "${overlay_screenshot}" 600 39)" != "6558f5" ]]; then
+    echo "Waybar overlay was not composited above the overlapping System titlebar" >&2
+    exit 1
+fi
+if command -v pnmtopng >/dev/null 2>&1; then
+    pnmtopng "${overlay_screenshot}" \
+        >"${repo_dir}/evidence/waybar-overlay-passthrough.png"
+    pnmtopng "${overlay_clicked_screenshot}" \
+        >"${repo_dir}/evidence/waybar-overlay-click-through.png"
+fi
+
 set +e
 "${e2fsck}" -fn "${runtime_root}" >"${fsck_log}" 2>&1
 fsck_status=$?
@@ -428,4 +520,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded niri/Waybar user configuration override, initial width/maximize, placement, actions, and alternate format verified"
+echo "SlopOS bounded niri/Waybar override, geometry, layer/mode, passthrough, actions, and alternate format verified"

@@ -461,22 +461,26 @@ impl Desktop {
 
     pub fn render(&self, framebuffer: &mut Framebuffer) {
         self.render_wallpaper(framebuffer);
+        if self.bar.visible && !self.bar.layer_is_above_windows() {
+            self.render_bar(framebuffer);
+        }
+
         if let Some(window) = self.workspaces.fullscreen_window() {
             self.render_window(framebuffer, window as usize);
-            framebuffer.cursor(self.pointer_x, self.pointer_y);
-            return;
-        }
-        self.render_bar(framebuffer);
-
-        for index in 0..WINDOW_COUNT {
-            if self.windows[index].open && !self.workspaces.window_is_floating(index as u32) {
-                self.render_window(framebuffer, index);
+        } else {
+            for index in 0..WINDOW_COUNT {
+                if self.windows[index].open && !self.workspaces.window_is_floating(index as u32) {
+                    self.render_window(framebuffer, index);
+                }
+            }
+            for z in 0..WINDOW_COUNT {
+                if let Some(window) = self.workspaces.floating_window_at_z(z) {
+                    self.render_window(framebuffer, window as usize);
+                }
             }
         }
-        for z in 0..WINDOW_COUNT {
-            if let Some(window) = self.workspaces.floating_window_at_z(z) {
-                self.render_window(framebuffer, window as usize);
-            }
+        if self.bar.visible && self.bar.layer_is_above_windows() {
+            self.render_bar(framebuffer);
         }
         framebuffer.cursor(self.pointer_x, self.pointer_y);
     }
@@ -1156,14 +1160,18 @@ impl Desktop {
     fn log_bar_geometry(&self, source: &str) {
         let (x, y, width, height) = self.bar_rect();
         serialln(format_args!(
-            "SLOPOS-WAYBAR: geometry position=top x={x} y={y} width={width} height={height} margin={}/{}/{}/{} spacing={} fixed_center={} exclusive={} reserved_top={} source={source}",
+            "SLOPOS-WAYBAR: geometry position=top x={x} y={y} width={width} height={height} margin={}/{}/{}/{} spacing={} fixed_center={} layer={} mode={} exclusive={} passthrough={} visible={} reserved_top={} source={source}",
             self.bar.margin_top,
             self.bar.margin_right,
             self.bar.margin_bottom,
             self.bar.margin_left,
             self.bar.spacing,
             self.bar.fixed_center,
+            self.bar.layer.name(),
+            self.bar.mode.name(),
             self.bar.exclusive,
+            self.bar.passthrough,
+            self.bar.visible,
             self.bar.reserved_top()
         ));
     }
@@ -1615,7 +1623,9 @@ impl Desktop {
         }
         if right && !right_was_down {
             if event.modifiers.logo {
-                self.pointer_resize_pressed();
+                if !self.bar_pointer_receives(self.pointer_x, self.pointer_y) {
+                    self.pointer_resize_pressed();
+                }
             } else {
                 animate |= self.pointer_right_pressed();
             }
@@ -1721,6 +1731,16 @@ impl Desktop {
             {
                 return self.execute_bar_action(module, action, "left");
             }
+            return false;
+        }
+        if self.bar_pointer_receives(self.pointer_x, self.pointer_y) {
+            serialln(format_args!(
+                "SLOPOS-WAYBAR: surface clicked button=left consumed=true layer={} passthrough={} x={} y={}",
+                self.bar.layer.name(),
+                self.bar.passthrough,
+                self.pointer_x,
+                self.pointer_y
+            ));
             return false;
         }
         if let Some(index) = self.window_at_pointer() {
@@ -1876,11 +1896,7 @@ impl Desktop {
     }
 
     fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {
-        let (_, bar_y, _, bar_height) = self.bar_rect();
-        if self.workspaces.fullscreen_window().is_some()
-            || y < bar_y
-            || y >= bar_y.saturating_add(bar_height)
-        {
+        if !self.bar_pointer_receives(x, y) {
             return None;
         }
         let (left_x, center_x, right_x) = self.bar_module_origins();
@@ -1932,11 +1948,7 @@ impl Desktop {
     }
 
     fn bar_module_at(&self, x: i32, y: i32) -> Option<&'static str> {
-        let (_, bar_y, _, bar_height) = self.bar_rect();
-        if self.workspaces.fullscreen_window().is_some()
-            || y < bar_y
-            || y >= bar_y.saturating_add(bar_height)
-        {
+        if !self.bar_pointer_receives(x, y) {
             return None;
         }
         let (left_x, center_x, right_x) = self.bar_module_origins();
@@ -1980,6 +1992,10 @@ impl Desktop {
     }
 
     fn window_at_pointer(&self) -> Option<usize> {
+        self.window_at(self.pointer_x, self.pointer_y)
+    }
+
+    fn window_at(&self, x: i32, y: i32) -> Option<usize> {
         for z in (0..WINDOW_COUNT).rev() {
             let Some(window) = self.workspaces.floating_window_at_z(z) else {
                 continue;
@@ -1987,7 +2003,7 @@ impl Desktop {
             let index = window as usize;
             if self
                 .positioned_window(index)
-                .is_some_and(|window| inside(self.pointer_x, self.pointer_y, window))
+                .is_some_and(|window| inside(x, y, window))
             {
                 return Some(index);
             }
@@ -1996,8 +2012,20 @@ impl Desktop {
             !self.workspaces.window_is_floating(*index as u32)
                 && self
                     .positioned_window(*index)
-                    .is_some_and(|window| inside(self.pointer_x, self.pointer_y, window))
+                    .is_some_and(|window| inside(x, y, window))
         })
+    }
+
+    fn bar_pointer_receives(&self, x: i32, y: i32) -> bool {
+        if !self.bar.visible || self.bar.passthrough {
+            return false;
+        }
+        let (bar_x, bar_y, bar_width, bar_height) = self.bar_rect();
+        let inside_bar = x >= bar_x
+            && x < bar_x.saturating_add(bar_width)
+            && y >= bar_y
+            && y < bar_y.saturating_add(bar_height);
+        inside_bar && (self.bar.layer_is_above_windows() || self.window_at(x, y).is_none())
     }
 
     fn execute_command(&mut self) -> bool {
