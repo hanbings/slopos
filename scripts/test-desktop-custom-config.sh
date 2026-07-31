@@ -112,7 +112,7 @@ if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
 fi
 sed \
     -e '1i// Waybar custom overlay mode and pointer passthrough integration fixture' \
-    -e '/"spacing": 10,/a\    "mode": "slop-overlay",\n    "modes": {\n        "slop-overlay": {\n            "layer": "overlay",\n            "exclusive": false,\n            "passthrough": true,\n            "visible": true\n        }\n    },' \
+    -e '/"spacing": 10,/a\    "width": 800,\n    "no-center": true,\n    "mode": "slop-overlay",\n    "modes": {\n        "slop-overlay": {\n            "layer": "overlay",\n            "exclusive": false,\n            "passthrough": true,\n            "visible": true\n        }\n    },' \
     "${repo_dir}/assets/waybar-config.jsonc" >"${overlay_waybar}"
 overlay_bytes="$(wc -c <"${overlay_waybar}")"
 if (( overlay_bytes <= 904 || overlay_bytes > 4096 )); then
@@ -452,7 +452,7 @@ set +e
 {
     sleep 7
     echo "screendump ${overlay_screenshot}"
-    echo "mouse_move 478 -358"
+    echo "mouse_move -25 -358"
     sleep 1
     echo "mouse_button 1"
     echo "mouse_button 0"
@@ -485,10 +485,13 @@ grep -Fq \
     "bytes=${overlay_bytes} access=readonly async=true path=/etc/slopos/waybar.jsonc" \
     "${overlay_serial_log}"
 grep -Fq \
-    "SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=overlay mode=slop-overlay exclusive=false passthrough=true visible=true reserved_top=0 source=config" \
+    "SLOPOS-WAYBAR: geometry position=top x=112 y=0 width=800 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=overlay mode=slop-overlay exclusive=false passthrough=true visible=true reserved_top=0 source=config" \
     "${overlay_serial_log}"
 grep -Fq \
-    "SLOPOS-DESKTOP: window closed kind=SYSTEM workspace=1" \
+    "SLOPOS-WAYBAR: layout configured_width=800 no_center=true source=config" \
+    "${overlay_serial_log}"
+grep -Fq \
+    "SLOPOS-DESKTOP: window closed kind=TERMINAL workspace=1" \
     "${overlay_serial_log}"
 if grep -Fq "SLOPOS-WAYBAR: module clicked name=clock button=left" "${overlay_serial_log}"; then
     echo "Waybar overlay consumed a click despite passthrough=true" >&2
@@ -502,6 +505,15 @@ test -s "${overlay_screenshot}"
 test -s "${overlay_clicked_screenshot}"
 if [[ "$(ppm_pixel_hex "${overlay_screenshot}" 600 39)" != "6558f5" ]]; then
     echo "Waybar overlay was not composited above the overlapping System titlebar" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${overlay_screenshot}" 100 10)" != "111144" ]] \
+    || [[ "$(ppm_pixel_hex "${overlay_screenshot}" 112 10)" != "161a2a" ]]; then
+    echo "Waybar fixed width did not center and constrain the overlay surface" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${overlay_screenshot}" 488 16)" != "161a2a" ]]; then
+    echo "Waybar no-center still rendered the configured center module" >&2
     exit 1
 fi
 if command -v pnmtopng >/dev/null 2>&1; then
@@ -520,4 +532,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded niri/Waybar override, geometry, layer/mode, passthrough, actions, and alternate format verified"
+echo "SlopOS bounded niri/Waybar override, geometry, fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"

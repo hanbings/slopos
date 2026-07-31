@@ -726,11 +726,20 @@ impl Desktop {
             );
         }
 
-        for module in self.bar.modules_center.iter() {
-            center_x = center_x.saturating_add(
-                self.render_bar_module(framebuffer, module, center_x, bar_y, baseline, bar_height)
+        if !self.bar.no_center {
+            for module in self.bar.modules_center.iter() {
+                center_x = center_x.saturating_add(
+                    self.render_bar_module(
+                        framebuffer,
+                        module,
+                        center_x,
+                        bar_y,
+                        baseline,
+                        bar_height,
+                    )
                     .saturating_add(i32::from(self.bar.spacing)),
-            );
+                );
+            }
         }
 
         for module in self.bar.modules_right.iter() {
@@ -794,13 +803,8 @@ impl Desktop {
     }
 
     fn bar_rect(&self) -> (i32, i32, i32, i32) {
-        let x = self.bar.margin_left;
+        let (x, width) = self.bar.horizontal_geometry(self.screen_width);
         let y = self.bar.margin_top;
-        let width = self
-            .screen_width
-            .saturating_sub(self.bar.margin_left)
-            .saturating_sub(self.bar.margin_right)
-            .max(0);
         (x, y, width, i32::from(self.bar.height))
     }
 
@@ -808,7 +812,11 @@ impl Desktop {
         let (bar_x, _, bar_width, _) = self.bar_rect();
         let left_x = bar_x.saturating_add(BAR_LEFT_START_X);
         let left_width = self.bar_modules_width(self.bar.modules_left);
-        let center_width = self.bar_modules_width(self.bar.modules_center);
+        let center_width = if self.bar.no_center {
+            0
+        } else {
+            self.bar_modules_width(self.bar.modules_center)
+        };
         let right_width = self.bar_modules_width(self.bar.modules_right);
         let right_x = bar_x
             .saturating_add(bar_width)
@@ -1344,6 +1352,10 @@ impl Desktop {
             self.bar.passthrough,
             self.bar.visible,
             self.bar.reserved_top()
+        ));
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: layout configured_width={} no_center={} source={source}",
+            self.bar.width, self.bar.no_center
         ));
     }
 
@@ -2072,7 +2084,11 @@ impl Desktop {
         }
         let (left_x, center_x, right_x) = self.bar_module_origins();
         self.bar_workspace_in_modules(self.bar.modules_left, left_x, x)
-            .or_else(|| self.bar_workspace_in_modules(self.bar.modules_center, center_x, x))
+            .or_else(|| {
+                (!self.bar.no_center)
+                    .then(|| self.bar_workspace_in_modules(self.bar.modules_center, center_x, x))
+                    .flatten()
+            })
             .or_else(|| self.bar_workspace_in_modules(self.bar.modules_right, right_x, x))
     }
 
@@ -2124,7 +2140,11 @@ impl Desktop {
         }
         let (left_x, center_x, right_x) = self.bar_module_origins();
         self.bar_module_in_modules(self.bar.modules_left, left_x, x)
-            .or_else(|| self.bar_module_in_modules(self.bar.modules_center, center_x, x))
+            .or_else(|| {
+                (!self.bar.no_center)
+                    .then(|| self.bar_module_in_modules(self.bar.modules_center, center_x, x))
+                    .flatten()
+            })
             .or_else(|| self.bar_module_in_modules(self.bar.modules_right, right_x, x))
     }
 

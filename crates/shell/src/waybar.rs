@@ -372,12 +372,14 @@ impl<'a> BarModuleConfigList<'a> {
 pub struct WaybarConfig<'a> {
     pub position: BarPosition,
     pub height: u16,
+    pub width: u16,
     pub spacing: u16,
     pub margin_top: i32,
     pub margin_right: i32,
     pub margin_bottom: i32,
     pub margin_left: i32,
     pub fixed_center: bool,
+    pub no_center: bool,
     pub layer: BarLayer,
     pub mode: BarMode,
     pub mode_name: &'a str,
@@ -402,12 +404,14 @@ impl Default for WaybarConfig<'_> {
         Self {
             position: BarPosition::Top,
             height: 30,
+            width: 0,
             spacing: 4,
             margin_top: 0,
             margin_right: 0,
             margin_bottom: 0,
             margin_left: 0,
             fixed_center: true,
+            no_center: false,
             layer: BarLayer::Bottom,
             mode: BarMode::Default,
             mode_name: "default",
@@ -439,6 +443,27 @@ impl<'a> WaybarConfig<'a> {
 
     pub const fn layer_is_above_windows(self) -> bool {
         matches!(self.layer, BarLayer::Top | BarLayer::Overlay)
+    }
+
+    pub fn horizontal_geometry(self, output_width: i32) -> (i32, i32) {
+        let available = output_width
+            .saturating_sub(self.margin_left)
+            .saturating_sub(self.margin_right)
+            .max(0);
+        if self.width <= 1 {
+            return (self.margin_left, available);
+        }
+        let width = i32::from(self.width).min(available);
+        let x = if width
+            .saturating_add(self.margin_left)
+            .saturating_add(self.margin_right)
+            < output_width
+        {
+            output_width.saturating_sub(width) / 2
+        } else {
+            self.margin_left
+        };
+        (x, width)
     }
 
     pub const fn visibility_state(self) -> bool {
@@ -781,6 +806,8 @@ impl<'a> JsonParser<'a> {
     const VISIBLE: u32 = 1 << 18;
     const ON_SIGUSR1: u32 = 1 << 19;
     const ON_SIGUSR2: u32 = 1 << 20;
+    const WIDTH: u32 = 1 << 21;
+    const NO_CENTER: u32 = 1 << 22;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -824,6 +851,10 @@ impl<'a> JsonParser<'a> {
                                 return Err(BarConfigError::InvalidNumber);
                             }
                         }
+                        "width" => {
+                            mark_once(&mut fields, Self::WIDTH)?;
+                            config.width = self.u16_value()?;
+                        }
                         "spacing" => {
                             mark_once(&mut fields, Self::SPACING)?;
                             config.spacing = self.u16_value()?;
@@ -851,6 +882,13 @@ impl<'a> JsonParser<'a> {
                         "fixed-center" => {
                             mark_once(&mut fields, Self::FIXED_CENTER)?;
                             config.fixed_center = match self.next() {
+                                Token::Bool(value) => value,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
+                        "no-center" => {
+                            mark_once(&mut fields, Self::NO_CENTER)?;
+                            config.no_center = match self.next() {
                                 Token::Bool(value) => value,
                                 _ => return Err(BarConfigError::UnexpectedToken),
                             };
@@ -1470,9 +1508,11 @@ mod tests {
                 // Waybar-compatible top-level fields.
                 "position": "top",
                 "height": 40,
+                "width": 800,
                 "spacing": 8,
                 "margin": "1 2 3 4",
                 "fixed-center": false,
+                "no-center": true,
                 "layer": "top",
                 "exclusive": false,
                 "passthrough": true,
@@ -1500,6 +1540,7 @@ mod tests {
         .unwrap();
         assert_eq!(config.position, BarPosition::Top);
         assert_eq!(config.height, 40);
+        assert_eq!(config.width, 800);
         assert_eq!(config.spacing, 8);
         assert_eq!(
             (
@@ -1511,6 +1552,8 @@ mod tests {
             (1, 2, 3, 4)
         );
         assert!(!config.fixed_center);
+        assert!(config.no_center);
+        assert_eq!(config.horizontal_geometry(1024), (112, 800));
         assert_eq!(config.layer, BarLayer::Top);
         assert_eq!(config.mode, BarMode::Default);
         assert!(!config.exclusive);
@@ -1556,6 +1599,7 @@ mod tests {
         .unwrap();
         assert_eq!(config.position, BarPosition::Top);
         assert_eq!(config.height, 30);
+        assert_eq!(config.width, 0);
         assert_eq!(config.spacing, 4);
         assert_eq!(
             (
@@ -1567,6 +1611,8 @@ mod tests {
             (0, 0, 0, 0)
         );
         assert!(config.fixed_center);
+        assert!(!config.no_center);
+        assert_eq!(config.horizontal_geometry(1024), (0, 1024));
         assert_eq!(config.layer, BarLayer::Bottom);
         assert_eq!(config.mode, BarMode::Default);
         assert!(config.exclusive);
@@ -1605,7 +1651,10 @@ mod tests {
             r#"{ "margin": "1px" }"#,
             r#"{ "margin": 1.5 }"#,
             r#"{ "margin-left": 2147483648 }"#,
+            r#"{ "width": -1 }"#,
+            r#"{ "width": 65536 }"#,
             r#"{ "fixed-center": "false" }"#,
+            r#"{ "no-center": 1 }"#,
             r#"{ "exclusive": 1 }"#,
             r#"{ "layer": "background" }"#,
             r#"{ "mode": "bad mode" }"#,
@@ -1642,6 +1691,11 @@ mod tests {
             (-2, 5, 0, 0)
         );
         assert_eq!(individual_margin.reserved_top(), 28);
+        assert_eq!(individual_margin.horizontal_geometry(1000), (0, 995));
+        let fixed_width = parse_waybar_config(r#"{ "width": 800, "margin": "4 12" }"#).unwrap();
+        assert_eq!(fixed_width.horizontal_geometry(1024), (112, 800));
+        let clamped_width = parse_waybar_config(r#"{ "width": 1200, "margin": "4 12" }"#).unwrap();
+        assert_eq!(clamped_width.horizontal_geometry(1024), (12, 1000));
         for (input, expected) in [
             (r#"{ "margin": 7 }"#, (7, 7, 7, 7)),
             (r#"{ "margin": "1 2" }"#, (1, 2, 1, 2)),
