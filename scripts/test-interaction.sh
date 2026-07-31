@@ -182,15 +182,15 @@ qmp_wheel_burst() {
     sleep 8
     echo "screendump ${repo_dir}/evidence/wallpaper-wave.ppm"
     monitor_type "img aurora.ppm -t none --resize fit --fill-color 123456"
-    sleep 3
+    sleep 8
     echo "screendump ${repo_dir}/evidence/wallpaper-fit-fill.ppm"
     sleep 1
     monitor_type "img aurora.ppm -t none --resize crop --crop-gravity right"
-    sleep 3
+    sleep 8
     echo "screendump ${repo_dir}/evidence/wallpaper-crop-right.ppm"
     sleep 1
     monitor_type "img sunset.ppm -t none --resize stretch"
-    sleep 3
+    sleep 8
     echo "screendump ${repo_dir}/evidence/wallpaper-stretched.ppm"
     sleep 1
     monitor_type "img aurora.ppm -t none --resize stretch -f bilinear"
