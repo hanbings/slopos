@@ -832,12 +832,8 @@ impl Desktop {
                 .saturating_add((bar_width.saturating_sub(center_width)) / 2)
                 .clamp(available_start, latest_center)
         } else {
-            available_start.saturating_add(
-                available_end
-                    .saturating_sub(available_start)
-                    .saturating_sub(center_width)
-                    / 2,
-            )
+            self.bar
+                .dynamic_center_origin(available_start, available_end, center_width)
         };
         (left_x, center_x, right_x)
     }
@@ -1354,8 +1350,12 @@ impl Desktop {
             self.bar.reserved_top()
         ));
         serialln(format_args!(
-            "SLOPOS-WAYBAR: layout configured_width={} no_center={} source={source}",
-            self.bar.width, self.bar.no_center
+            "SLOPOS-WAYBAR: layout configured_width={} no_center={} expand={}/{}/{} source={source}",
+            self.bar.width,
+            self.bar.no_center,
+            self.bar.expand_left,
+            self.bar.expand_center,
+            self.bar.expand_right
         ));
     }
 

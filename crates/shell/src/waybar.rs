@@ -379,6 +379,9 @@ pub struct WaybarConfig<'a> {
     pub margin_bottom: i32,
     pub margin_left: i32,
     pub fixed_center: bool,
+    pub expand_left: bool,
+    pub expand_center: bool,
+    pub expand_right: bool,
     pub no_center: bool,
     pub layer: BarLayer,
     pub mode: BarMode,
@@ -411,6 +414,9 @@ impl Default for WaybarConfig<'_> {
             margin_bottom: 0,
             margin_left: 0,
             fixed_center: true,
+            expand_left: false,
+            expand_center: false,
+            expand_right: false,
             no_center: false,
             layer: BarLayer::Bottom,
             mode: BarMode::Default,
@@ -464,6 +470,24 @@ impl<'a> WaybarConfig<'a> {
             self.margin_left
         };
         (x, width)
+    }
+
+    pub fn dynamic_center_origin(
+        self,
+        available_start: i32,
+        available_end: i32,
+        center_width: i32,
+    ) -> i32 {
+        let latest_center = available_end.saturating_sub(center_width);
+        if latest_center <= available_start {
+            return available_start;
+        }
+        let extra = latest_center.saturating_sub(available_start);
+        let expand_count = 1 + usize::from(self.expand_left) + usize::from(self.expand_right);
+        let share = extra / i32::try_from(expand_count).unwrap_or(3);
+        available_start
+            .saturating_add(if self.expand_left { share } else { 0 })
+            .saturating_add(if self.expand_center { 0 } else { share / 2 })
     }
 
     pub const fn visibility_state(self) -> bool {
@@ -808,6 +832,9 @@ impl<'a> JsonParser<'a> {
     const ON_SIGUSR2: u32 = 1 << 20;
     const WIDTH: u32 = 1 << 21;
     const NO_CENTER: u32 = 1 << 22;
+    const EXPAND_LEFT: u32 = 1 << 23;
+    const EXPAND_CENTER: u32 = 1 << 24;
+    const EXPAND_RIGHT: u32 = 1 << 25;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -882,6 +909,27 @@ impl<'a> JsonParser<'a> {
                         "fixed-center" => {
                             mark_once(&mut fields, Self::FIXED_CENTER)?;
                             config.fixed_center = match self.next() {
+                                Token::Bool(value) => value,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
+                        "expand-left" => {
+                            mark_once(&mut fields, Self::EXPAND_LEFT)?;
+                            config.expand_left = match self.next() {
+                                Token::Bool(value) => value,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
+                        "expand-center" => {
+                            mark_once(&mut fields, Self::EXPAND_CENTER)?;
+                            config.expand_center = match self.next() {
+                                Token::Bool(value) => value,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
+                        "expand-right" => {
+                            mark_once(&mut fields, Self::EXPAND_RIGHT)?;
+                            config.expand_right = match self.next() {
                                 Token::Bool(value) => value,
                                 _ => return Err(BarConfigError::UnexpectedToken),
                             };
@@ -1512,6 +1560,9 @@ mod tests {
                 "spacing": 8,
                 "margin": "1 2 3 4",
                 "fixed-center": false,
+                "expand-left": true,
+                "expand-center": true,
+                "expand-right": true,
                 "no-center": true,
                 "layer": "top",
                 "exclusive": false,
@@ -1552,6 +1603,9 @@ mod tests {
             (1, 2, 3, 4)
         );
         assert!(!config.fixed_center);
+        assert!(config.expand_left);
+        assert!(config.expand_center);
+        assert!(config.expand_right);
         assert!(config.no_center);
         assert_eq!(config.horizontal_geometry(1024), (112, 800));
         assert_eq!(config.layer, BarLayer::Top);
@@ -1611,6 +1665,9 @@ mod tests {
             (0, 0, 0, 0)
         );
         assert!(config.fixed_center);
+        assert!(!config.expand_left);
+        assert!(!config.expand_center);
+        assert!(!config.expand_right);
         assert!(!config.no_center);
         assert_eq!(config.horizontal_geometry(1024), (0, 1024));
         assert_eq!(config.layer, BarLayer::Bottom);
@@ -1654,6 +1711,9 @@ mod tests {
             r#"{ "width": -1 }"#,
             r#"{ "width": 65536 }"#,
             r#"{ "fixed-center": "false" }"#,
+            r#"{ "expand-left": 1 }"#,
+            r#"{ "expand-center": "true" }"#,
+            r#"{ "expand-right": null }"#,
             r#"{ "no-center": 1 }"#,
             r#"{ "exclusive": 1 }"#,
             r#"{ "layer": "background" }"#,
@@ -1938,6 +1998,36 @@ mod tests {
             parse_waybar_config(r#"{ "clock": { "format-alt-click": "double-click" } }"#),
             Err(BarConfigError::InvalidModuleOption)
         );
+    }
+
+    #[test]
+    fn distributes_dynamic_center_space_like_gtk_box_packing() {
+        let default = parse_waybar_config(r#"{ "fixed-center": false }"#).unwrap();
+        assert_eq!(default.dynamic_center_origin(100, 900, 100), 450);
+
+        let center =
+            parse_waybar_config(r#"{ "fixed-center": false, "expand-center": true }"#).unwrap();
+        assert_eq!(center.dynamic_center_origin(100, 900, 100), 100);
+
+        let left =
+            parse_waybar_config(r#"{ "fixed-center": false, "expand-left": true }"#).unwrap();
+        assert_eq!(left.dynamic_center_origin(100, 900, 100), 625);
+
+        let right =
+            parse_waybar_config(r#"{ "fixed-center": false, "expand-right": true }"#).unwrap();
+        assert_eq!(right.dynamic_center_origin(100, 900, 100), 275);
+
+        let all = parse_waybar_config(
+            r#"{
+                "fixed-center": false,
+                "expand-left": true,
+                "expand-center": true,
+                "expand-right": true
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(all.dynamic_center_origin(100, 900, 100), 333);
+        assert_eq!(all.dynamic_center_origin(100, 150, 100), 100);
     }
 
     #[test]

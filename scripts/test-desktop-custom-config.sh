@@ -95,7 +95,7 @@ if (( custom_niri_bytes <= default_niri_bytes || custom_niri_bytes > 4096 )); th
 fi
 sed \
     -e '1i// user override accepted by the SlopOS desktop service' \
-    -e '/"spacing": 10,/a\    "margin": "4 12",\n    "fixed-center": false,\n    "layer": "top",\n    "exclusive": true,' \
+    -e '/"spacing": 10,/a\    "margin": "4 12",\n    "fixed-center": false,\n    "expand-left": true,\n    "expand-center": true,\n    "expand-right": true,\n    "layer": "top",\n    "exclusive": true,' \
     -e '/"modules-left":/,/]/ s/"niri\/workspaces"/"niri\/window"/' \
     -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
     -e '/"clock": {/a\        "on-click": "status",' \
@@ -163,22 +163,32 @@ set +e
     echo "screendump ${floating_remembered_screenshot}"
     echo "sendkey meta_l-ctrl-v 50"
     sleep 1
-    echo "mouse_move -90 0"
+    echo "mouse_move -193 0"
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
-    echo "mouse_move 30 0"
+    echo "mouse_move 32 0"
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
-    echo "mouse_move -30 0"
+    echo "mouse_move -32 0"
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
     echo "sendkey a"
     echo "sendkey b"
     echo "sendkey o"
-    echo "mouse_move 557 0"
+    echo "mouse_move 120 0"
+    sleep 0.2
+    echo "mouse_move 120 0"
+    sleep 0.2
+    echo "mouse_move 120 0"
+    sleep 0.2
+    echo "mouse_move 120 0"
+    sleep 0.2
+    echo "mouse_move 120 0"
+    sleep 0.2
+    echo "mouse_move 60 0"
     sleep 1
     echo "mouse_button 1"
     echo "mouse_button 0"
@@ -277,6 +287,9 @@ if [[ "$(grep -Fc "SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=
 fi
 grep -Fq \
     "SLOPOS-WAYBAR: geometry position=top x=12 y=4 width=1000 height=40 margin=4/12/4/12 spacing=10 fixed_center=false layer=top mode=default exclusive=true passthrough=false visible=true reserved_top=44 source=config" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=true/true/true source=config" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-WAYBAR: surface clicked button=left consumed=true layer=top passthrough=false" \
@@ -414,6 +427,10 @@ if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 0 20)" != "111144" ]] \
     echo "custom Waybar margins did not constrain the rendered bar surface" >&2
     exit 1
 fi
+if [[ "$(ppm_pixel_hex "${format_restored_screenshot}" 331 20)" != "f4f4f8" ]]; then
+    echo "Waybar expand block allocation did not move the center workspace module" >&2
+    exit 1
+fi
 
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${workspace_screenshot}" \
@@ -488,7 +505,7 @@ grep -Fq \
     "SLOPOS-WAYBAR: geometry position=top x=112 y=0 width=800 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=overlay mode=slop-overlay exclusive=false passthrough=true visible=true reserved_top=0 source=config" \
     "${overlay_serial_log}"
 grep -Fq \
-    "SLOPOS-WAYBAR: layout configured_width=800 no_center=true source=config" \
+    "SLOPOS-WAYBAR: layout configured_width=800 no_center=true expand=false/false/false source=config" \
     "${overlay_serial_log}"
 grep -Fq \
     "SLOPOS-DESKTOP: window closed kind=TERMINAL workspace=1" \
@@ -532,4 +549,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded niri/Waybar override, geometry, fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"
+echo "SlopOS bounded niri/Waybar override, geometry, expand/fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"
