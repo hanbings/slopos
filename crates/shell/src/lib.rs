@@ -32,6 +32,7 @@ pub const DEFAULT_GAPS: u16 = 16;
 pub const DEFAULT_FOCUS_RING_WIDTH: u16 = 4;
 pub const DEFAULT_ACTIVE_COLOR: u32 = 0x7f_c8_ff;
 pub const DEFAULT_INACTIVE_COLOR: u32 = 0x50_50_50;
+pub const DEFAULT_BORDER_COLOR: u32 = 0xff_c8_7f;
 pub const DEFAULT_BACKGROUND_COLOR: u32 = 0x10_14_26;
 pub const MAX_PRESET_SIZES: usize = 8;
 
@@ -172,6 +173,14 @@ pub struct FocusRing {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Border {
+    pub enabled: bool,
+    pub width: u16,
+    pub active_color: u32,
+    pub inactive_color: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LayoutConfig {
     pub gaps: u16,
     pub center_focused_column: CenterFocusedColumn,
@@ -181,6 +190,7 @@ pub struct LayoutConfig {
     pub preset_column_widths: PresetSizes,
     pub preset_window_heights: PresetSizes,
     pub focus_ring: FocusRing,
+    pub border: Border,
     pub background_color: u32,
 }
 
@@ -198,6 +208,12 @@ impl Default for LayoutConfig {
                 enabled: true,
                 width: DEFAULT_FOCUS_RING_WIDTH,
                 active_color: DEFAULT_ACTIVE_COLOR,
+                inactive_color: DEFAULT_INACTIVE_COLOR,
+            },
+            border: Border {
+                enabled: false,
+                width: DEFAULT_FOCUS_RING_WIDTH,
+                active_color: DEFAULT_BORDER_COLOR,
                 inactive_color: DEFAULT_INACTIVE_COLOR,
             },
             background_color: DEFAULT_BACKGROUND_COLOR,
@@ -1599,6 +1615,10 @@ impl<'a> ConfigParser<'a> {
                     self.expect_block()?;
                     config.focus_ring = self.parse_focus_ring(config.focus_ring)?;
                 }
+                Token::Identifier("border") => {
+                    self.expect_block()?;
+                    config.border = self.parse_border(config.border)?;
+                }
                 Token::Identifier("background-color") => {
                     config.background_color = parse_color(self.value_string()?)?;
                     self.finish_node()?;
@@ -1688,6 +1708,39 @@ impl<'a> ConfigParser<'a> {
                 }
                 Token::Identifier("inactive-color") => {
                     ring.inactive_color = parse_color(self.value_string()?)?;
+                    self.finish_node()?;
+                }
+                Token::Identifier(_) | Token::Other | Token::Number(_) | Token::String(_) => {
+                    self.skip_node()?
+                }
+                Token::End => return Err(ConfigError::UnexpectedEnd),
+                Token::LeftBrace | Token::EndNode => {}
+            }
+        }
+    }
+
+    fn parse_border(&mut self, mut border: Border) -> Result<Border, ConfigError> {
+        loop {
+            match self.next_non_end_node() {
+                Token::RightBrace => return Ok(border),
+                Token::Identifier("on") => {
+                    border.enabled = true;
+                    self.finish_node()?;
+                }
+                Token::Identifier("off") => {
+                    border.enabled = false;
+                    self.finish_node()?;
+                }
+                Token::Identifier("width") => {
+                    border.width = parse_rounded_u16(self.value_number()?)?;
+                    self.finish_node()?;
+                }
+                Token::Identifier("active-color") => {
+                    border.active_color = parse_color(self.value_string()?)?;
+                    self.finish_node()?;
+                }
+                Token::Identifier("inactive-color") => {
+                    border.inactive_color = parse_color(self.value_string()?)?;
                     self.finish_node()?;
                 }
                 Token::Identifier(_) | Token::Other | Token::Number(_) | Token::String(_) => {
@@ -1908,7 +1961,12 @@ mod tests {
                     inactive-color "#45475a80"
                 }
                 background-color "#1e1e2e"
-                border { off; }
+                border {
+                    on
+                    width 2
+                    active-color "#fab387"
+                    inactive-color "#585b70"
+                }
             }
             window-rule {
                 default-column-width { fixed 900; }
@@ -1941,6 +1999,10 @@ mod tests {
         assert_eq!(config.focus_ring.width, 3);
         assert_eq!(config.focus_ring.active_color, 0x89_b4_fa);
         assert_eq!(config.focus_ring.inactive_color, 0x45_47_5a);
+        assert!(config.border.enabled);
+        assert_eq!(config.border.width, 2);
+        assert_eq!(config.border.active_color, 0xfa_b3_87);
+        assert_eq!(config.border.inactive_color, 0x58_5b_70);
         assert_eq!(config.background_color, 0x1e_1e_2e);
     }
 

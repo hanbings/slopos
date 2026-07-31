@@ -121,6 +121,7 @@ impl Desktop {
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let open_focused = niri.window_rules.focused_for(app_id);
             let focus_ring = niri.window_rules.focus_ring_for(app_id, config.focus_ring);
+            let border = niri.window_rules.border_for(app_id, config.border);
             let opacity = niri.window_rules.opacity_for(app_id);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating =
@@ -235,6 +236,16 @@ impl Desktop {
                     focus_ring.width,
                     focus_ring.active_color,
                     focus_ring.inactive_color
+                ));
+            }
+            if let Some(border) = border {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=border enabled={} width={} active={:#08x} inactive={:#08x} applied=true source=config",
+                    app_id,
+                    border.enabled,
+                    border.width,
+                    border.active_color,
+                    border.inactive_color
                 ));
             }
             if let Some(opacity) = opacity {
@@ -813,6 +824,7 @@ impl Desktop {
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let open_focused = niri.window_rules.focused_for(app_id);
             let focus_ring = niri.window_rules.focus_ring_for(app_id, layout.focus_ring);
+            let border = niri.window_rules.border_for(app_id, layout.border);
             let opacity = niri.window_rules.opacity_for(app_id);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating = niri
@@ -938,6 +950,16 @@ impl Desktop {
                     focus_ring.width,
                     focus_ring.active_color,
                     focus_ring.inactive_color
+                ));
+            }
+            if let Some(border) = border {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=border enabled={} width={} active={:#08x} inactive={:#08x} applied=true source=config",
+                    app_id,
+                    border.enabled,
+                    border.width,
+                    border.active_color,
+                    border.inactive_color
                 ));
             }
             if let Some(opacity) = opacity {
@@ -1172,6 +1194,11 @@ impl Desktop {
             .window_rules
             .focus_ring_for(app_id(window.kind), self.workspaces.config().focus_ring)
             .unwrap_or(self.workspaces.config().focus_ring);
+        let border = self
+            .niri
+            .window_rules
+            .border_for(app_id(window.kind), self.workspaces.config().border)
+            .unwrap_or(self.workspaces.config().border);
         let opacity = self
             .niri
             .window_rules
@@ -1194,24 +1221,36 @@ impl Desktop {
             8,
             0x080a12,
         );
-        // Like niri's default draw-border-with-background mode, the focus
-        // ring is compositor background: a translucent surface shows it
-        // through rather than changing the ring's own opacity.
-        if focus_ring.enabled {
-            let width = if active {
-                i32::from(focus_ring.width)
-            } else {
-                1
-            };
+        // Like niri's default draw-border-with-background mode, decorations
+        // are compositor backgrounds: a translucent surface shows them
+        // through rather than changing their own opacity. Focus ring is only
+        // on the focused window; border remains visible on every window.
+        let border_width = if border.enabled {
+            i32::from(border.width)
+        } else {
+            0
+        };
+        if active && focus_ring.enabled {
+            let width = i32::from(focus_ring.width);
+            let extent = border_width + width;
             framebuffer.rect(
-                window.x - width,
-                window.y - width,
-                window.width + width * 2,
-                window.height + width * 2,
+                window.x - extent,
+                window.y - extent,
+                window.width + extent * 2,
+                window.height + extent * 2,
+                focus_ring.active_color,
+            );
+        }
+        if border.enabled {
+            framebuffer.rect(
+                window.x - border_width,
+                window.y - border_width,
+                window.width + border_width * 2,
+                window.height + border_width * 2,
                 if active {
-                    focus_ring.active_color
+                    border.active_color
                 } else {
-                    focus_ring.inactive_color
+                    border.inactive_color
                 },
             );
         }

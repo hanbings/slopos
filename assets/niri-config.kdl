@@ -2,7 +2,6 @@ workspace "main"
 workspace "config" {
     open-on-output "SLOPOS-1"
 }
-
 binds {
   Mod+Left { focus-column-left; }
   Mod+Right { focus-column-right; }
@@ -76,21 +75,10 @@ binds {
   Mod+Ctrl+F { expand-column-to-available-width; }
   Mod+Q { close-window; }
 }
-
 window-rule {
-    match app-id="slopos-config"
-    open-on-workspace "config"
-    open-floating false
-    open-maximized false
-    open-maximized-to-edges false
-    open-fullscreen false
-    open-focused false
-    default-floating-position x=24 y=24 relative-to="bottom-right"
-    default-column-width { proportion 0.5; }
-    default-window-height { proportion 1.0; }
-    default-column-display "normal"
+    match app-id="slopos-config"; open-on-workspace "config"; open-floating false; open-maximized false; open-maximized-to-edges false; open-fullscreen false; open-focused false
+    default-floating-position x=24 y=24 relative-to="bottom-right"; default-column-width { proportion 0.5; }; default-window-height { proportion 1.0; }; default-column-display "normal"
 }
-
 layout {
     gaps 16
     center-focused-column "never"
@@ -98,8 +86,6 @@ layout {
     preset-window-heights { proportion 0.333; proportion 0.5; proportion 0.667; }
     always-center-single-column
     default-column-width { proportion 0.5; }
-
     focus-ring { width 3; active-color "#7fc8ff"; inactive-color "#505050"; }
-
     background-color "#101426"
 }

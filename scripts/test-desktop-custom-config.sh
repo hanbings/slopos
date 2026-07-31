@@ -72,6 +72,7 @@ sed \
     -e 's/open-fullscreen false/open-fullscreen true/' \
     -e 's/open-focused false/open-focused true/' \
     -e '/match app-id="slopos-config"/a\    focus-ring { off; }' \
+    -e '/match app-id="slopos-config"/a\    border { on; width 4; active-color "#ffb86c"; inactive-color "#505050"; }' \
     -e '/match app-id="slopos-config"/a\    opacity 0.75' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 1\.0/proportion 0.5/' \
@@ -272,6 +273,9 @@ grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=focus-ring enabled=false width=3 active=0x7fc8ff inactive=0x505050 applied=true source=config" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=border enabled=true width=4 active=0xffb86c inactive=0x505050 applied=true source=config" \
+    "${serial_log}"
+grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=opacity value=750/1000 applied=true fullscreen_ignored=true source=config" \
     "${serial_log}"
 grep -Fq \
@@ -353,13 +357,17 @@ ppm_pixel_hex() {
         | tr -d ' \n'
 }
 
-if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 200 350)" != "222247" ]] \
-    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 800 350)" != "222a4b" ]]; then
-    echo "custom niri opacity did not alpha-blend the Config surface over the wallpaper" >&2
+if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 200 350)" != "51433b" ]] \
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 800 350)" != "51433b" ]]; then
+    echo "custom niri opacity did not alpha-blend the Config surface over its border background" >&2
     exit 1
 fi
 if [[ "$(ppm_pixel_hex "${workspace_screenshot}" 200 350)" != "171c2b" ]]; then
     echo "fullscreen Config surface incorrectly retained its niri opacity rule" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 182 350)" != "ffb86c" ]]; then
+    echo "custom niri border was not composited around the Config surface" >&2
     exit 1
 fi
 
