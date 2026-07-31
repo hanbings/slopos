@@ -74,6 +74,7 @@ sed \
     -e '/match app-id="slopos-config"/a\    focus-ring { off; }' \
     -e '/match app-id="slopos-config"/a\    border { on; width 4; active-color "#ffb86c"; inactive-color "#505050"; }' \
     -e '/match app-id="slopos-config"/a\    shadow { on; softness 8; spread 2; offset x=6 y=4; draw-behind-window false; color "#000c"; inactive-color "#0006"; }' \
+    -e '/match app-id="slopos-config"/a\    draw-border-with-background false' \
     -e '/match app-id="slopos-config"/a\    opacity 0.75' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 1\.0/proportion 0.5/' \
@@ -280,6 +281,9 @@ grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=shadow enabled=true softness=8 spread=2 offset_x=6 offset_y=4 draw_behind_window=false color=0x000000 alpha=800/1000 inactive_color=0x000000 inactive_alpha=400/1000 applied=true source=config" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=draw-border-with-background value=false applied=true source=config" \
+    "${serial_log}"
+grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=opacity value=750/1000 applied=true fullscreen_ignored=true source=config" \
     "${serial_log}"
 grep -Fq \
@@ -361,9 +365,9 @@ ppm_pixel_hex() {
         | tr -d ' \n'
 }
 
-if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 200 350)" != "51433b" ]] \
-    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 800 350)" != "51433b" ]]; then
-    echo "custom niri opacity did not alpha-blend the Config surface over its border background" >&2
+if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 200 350)" != "222247" ]] \
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 800 350)" != "222a4b" ]]; then
+    echo "custom niri draw-border-with-background=false did not expose wallpaper through the translucent Config surface" >&2
     exit 1
 fi
 if [[ "$(ppm_pixel_hex "${workspace_screenshot}" 200 350)" != "171c2b" ]]; then

@@ -80,12 +80,12 @@ window-rule {
     default-floating-position x=24 y=24 relative-to="bottom-right"; default-column-width { proportion 0.5; }; default-window-height { proportion 1.0; }; default-column-display "normal"
 }
 layout {
-    gaps 16
-    center-focused-column "never"
-    preset-column-widths { proportion 0.333; proportion 0.5; proportion 0.667; }
-    preset-window-heights { proportion 0.333; proportion 0.5; proportion 0.667; }
-    always-center-single-column
-    default-column-width { proportion 0.5; }
-    focus-ring { width 3; active-color "#7fc8ff"; inactive-color "#505050"; }
-    background-color "#101426"
+gaps 16
+center-focused-column "never"
+preset-column-widths { proportion 0.333; proportion 0.5; proportion 0.667; }
+preset-window-heights { proportion 0.333; proportion 0.5; proportion 0.667; }
+always-center-single-column
+default-column-width { proportion 0.5; }
+focus-ring { width 3; active-color "#7fc8ff"; inactive-color "#505050"; }
+background-color "#101426"
 }

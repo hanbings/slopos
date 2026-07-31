@@ -292,6 +292,7 @@ pub struct NiriWindowRule<'a> {
     pub shadow_draw_behind_window: Option<bool>,
     pub shadow_color: Option<ShadowColor>,
     pub shadow_inactive_color: Option<ShadowColor>,
+    pub draw_border_with_background: Option<bool>,
     pub opacity: Option<i32>,
     pub default_floating_position: Option<FloatingPosition>,
     pub default_column_width: Option<ColumnWidth>,
@@ -521,6 +522,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         opacity
+    }
+
+    pub fn draw_border_with_background_for(self, app_id: &str) -> Option<bool> {
+        let mut draw_with_background = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.draw_border_with_background {
+                    draw_with_background = Some(value);
+                }
+            }
+        }
+        draw_with_background
     }
 
     pub fn column_width_for(self, app_id: &str) -> Option<ColumnWidth> {
@@ -789,6 +802,7 @@ impl<'a> ShellConfigParser<'a> {
             shadow_draw_behind_window: None,
             shadow_color: None,
             shadow_inactive_color: None,
+            draw_border_with_background: None,
             opacity: None,
             default_floating_position: None,
             default_column_width: None,
@@ -867,6 +881,14 @@ impl<'a> ShellConfigParser<'a> {
                 KdlToken::Word("focus-ring") => self.parse_rule_focus_ring(&mut rule)?,
                 KdlToken::Word("border") => self.parse_rule_border(&mut rule)?,
                 KdlToken::Word("shadow") => self.parse_rule_shadow(&mut rule)?,
+                KdlToken::Word("draw-border-with-background") => {
+                    rule.draw_border_with_background = Some(match self.next() {
+                        KdlToken::Word("true") => true,
+                        KdlToken::Word("false") => false,
+                        _ => return Err(NiriConfigError::InvalidWindowRule),
+                    });
+                    self.finish_node()?;
+                }
                 KdlToken::Word("opacity") => {
                     let KdlToken::Word(value) = self.next() else {
                         return Err(NiriConfigError::InvalidWindowRule);
@@ -3260,6 +3282,7 @@ mod tests {
                     color "#1238"
                     inactive-color "#10203040"
                 }
+                draw-border-with-background true
                 default-floating-position x=10 y=20
                 default-column-width { fixed 600; }
                 default-window-height { fixed 400; }
@@ -3292,6 +3315,7 @@ mod tests {
                     draw-behind-window false
                     inactive-color "#4455"
                 }
+                draw-border-with-background false
                 default-floating-position x=-10.4 y=200 relative-to="bottom-left"
                 default-column-width { proportion 0.333; }
                 default-window-height { proportion 0.333; }
@@ -3807,6 +3831,18 @@ mod tests {
         );
         assert_eq!(config.window_rules.opacity_for("slopos-config"), Some(500));
         assert_eq!(
+            config
+                .window_rules
+                .draw_border_with_background_for("slopos-terminal"),
+            Some(true)
+        );
+        assert_eq!(
+            config
+                .window_rules
+                .draw_border_with_background_for("slopos-config"),
+            Some(false)
+        );
+        assert_eq!(
             config.window_rules.focus_ring_for(
                 "slopos-terminal",
                 FocusRing {
@@ -3992,6 +4028,10 @@ mod tests {
         );
         assert_eq!(
             parse_niri_shell_config("window-rule { open-focused maybe; }"),
+            Err(NiriConfigError::InvalidWindowRule)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { draw-border-with-background maybe; }"),
             Err(NiriConfigError::InvalidWindowRule)
         );
         for input in [

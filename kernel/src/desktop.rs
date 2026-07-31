@@ -124,6 +124,8 @@ impl Desktop {
             let focus_ring = niri.window_rules.focus_ring_for(app_id, config.focus_ring);
             let border = niri.window_rules.border_for(app_id, config.border);
             let shadow = niri.window_rules.shadow_for(app_id, config.shadow);
+            let draw_border_with_background =
+                niri.window_rules.draw_border_with_background_for(app_id);
             let opacity = niri.window_rules.opacity_for(app_id);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating =
@@ -264,6 +266,11 @@ impl Desktop {
                     shadow.color.opacity,
                     resolved_shadow_color(shadow, false).rgb,
                     resolved_shadow_color(shadow, false).opacity
+                ));
+            }
+            if let Some(draw_border_with_background) = draw_border_with_background {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={app_id} property=draw-border-with-background value={draw_border_with_background} applied=true source=config"
                 ));
             }
             if let Some(opacity) = opacity {
@@ -844,6 +851,8 @@ impl Desktop {
             let focus_ring = niri.window_rules.focus_ring_for(app_id, layout.focus_ring);
             let border = niri.window_rules.border_for(app_id, layout.border);
             let shadow = niri.window_rules.shadow_for(app_id, layout.shadow);
+            let draw_border_with_background =
+                niri.window_rules.draw_border_with_background_for(app_id);
             let opacity = niri.window_rules.opacity_for(app_id);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating = niri
@@ -995,6 +1004,11 @@ impl Desktop {
                     shadow.color.opacity,
                     resolved_shadow_color(shadow, false).rgb,
                     resolved_shadow_color(shadow, false).opacity
+                ));
+            }
+            if let Some(draw_border_with_background) = draw_border_with_background {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={app_id} property=draw-border-with-background value={draw_border_with_background} applied=true source=config"
                 ));
             }
             if let Some(opacity) = opacity {
@@ -1239,16 +1253,20 @@ impl Desktop {
             .window_rules
             .shadow_for(app_id(window.kind), self.workspaces.config().shadow)
             .unwrap_or(self.workspaces.config().shadow);
+        let draw_border_with_background = self
+            .niri
+            .window_rules
+            .draw_border_with_background_for(app_id(window.kind))
+            .unwrap_or(true);
         let opacity = self
             .niri
             .window_rules
             .opacity_for(app_id(window.kind))
             .unwrap_or(1000);
         Self::render_shadow(framebuffer, window, shadow, active);
-        // Like niri's default draw-border-with-background mode, decorations
-        // are compositor backgrounds: a translucent surface shows them
-        // through rather than changing their own opacity. Focus ring is only
-        // on the focused window; border remains visible on every window.
+        // With niri's default background mode, translucent client pixels show
+        // the solid compositor decoration underneath. A false window-rule
+        // instead restricts decoration to the area outside the client rect.
         let border_width = if border.enabled {
             i32::from(border.width)
         } else {
@@ -1257,26 +1275,51 @@ impl Desktop {
         if active && focus_ring.enabled {
             let width = i32::from(focus_ring.width);
             let extent = border_width + width;
-            framebuffer.rect(
-                window.x - extent,
-                window.y - extent,
-                window.width + extent * 2,
-                window.height + extent * 2,
-                focus_ring.active_color,
-            );
+            if border.enabled || !draw_border_with_background {
+                render_outline(
+                    framebuffer,
+                    window.x - border_width,
+                    window.y - border_width,
+                    window.width + border_width * 2,
+                    window.height + border_width * 2,
+                    width,
+                    focus_ring.active_color,
+                );
+            } else {
+                framebuffer.rect(
+                    window.x - extent,
+                    window.y - extent,
+                    window.width + extent * 2,
+                    window.height + extent * 2,
+                    focus_ring.active_color,
+                );
+            }
         }
         if border.enabled {
-            framebuffer.rect(
-                window.x - border_width,
-                window.y - border_width,
-                window.width + border_width * 2,
-                window.height + border_width * 2,
-                if active {
-                    border.active_color
-                } else {
-                    border.inactive_color
-                },
-            );
+            let color = if active {
+                border.active_color
+            } else {
+                border.inactive_color
+            };
+            if draw_border_with_background {
+                framebuffer.rect(
+                    window.x - border_width,
+                    window.y - border_width,
+                    window.width + border_width * 2,
+                    window.height + border_width * 2,
+                    color,
+                );
+            } else {
+                render_outline(
+                    framebuffer,
+                    window.x,
+                    window.y,
+                    window.width,
+                    window.height,
+                    border_width,
+                    color,
+                );
+            }
         }
         let previous_opacity = framebuffer.set_opacity(opacity);
         framebuffer.rect(window.x, window.y, window.width, window.height, WINDOW_ALT);
@@ -3021,6 +3064,33 @@ fn module_selector(module: &str) -> &'static str {
 
 fn inside(x: i32, y: i32, window: Window) -> bool {
     x >= window.x && x < window.x + window.width && y >= window.y && y < window.y + window.height
+}
+
+fn render_outline(
+    framebuffer: &mut Framebuffer,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    thickness: i32,
+    color: u32,
+) {
+    if thickness <= 0 || width <= 0 || height <= 0 {
+        return;
+    }
+    let outer_x = x.saturating_sub(thickness);
+    let outer_y = y.saturating_sub(thickness);
+    let outer_width = width.saturating_add(thickness.saturating_mul(2));
+    framebuffer.rect(outer_x, outer_y, outer_width, thickness, color);
+    framebuffer.rect(
+        outer_x,
+        y.saturating_add(height),
+        outer_width,
+        thickness,
+        color,
+    );
+    framebuffer.rect(outer_x, y, thickness, height, color);
+    framebuffer.rect(x.saturating_add(width), y, thickness, height, color);
 }
 
 fn axis_distance(coordinate: i32, start: i32, length: i32) -> i32 {
