@@ -590,7 +590,7 @@ impl Desktop {
             transition.invert_y,
         );
         serialln(format_args!(
-            "SLOPOS-SWWW: transition complete type={} step={} fps={} duration_ms={} sampled_step={} frames={} angle={} position={},{} invert_y={} bezier={},{},{},{} midpoint={}",
+            "SLOPOS-SWWW: transition complete type={} step={} fps={} duration_ms={} sampled_step={} frames={} angle={} position={},{} invert_y={} bezier={},{},{},{} midpoint={} wave={},{}",
             transition.kind.name(),
             transition.step,
             transition.fps,
@@ -605,7 +605,9 @@ impl Desktop {
             transition.bezier.y1,
             transition.bezier.x2,
             transition.bezier.y2,
-            transition_eased_progress(transition, 128)
+            transition_eased_progress(transition, 128),
+            transition.wave.width,
+            transition.wave.height
         ));
     }
 

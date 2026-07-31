@@ -4,7 +4,7 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=629392
+SLOPOS-UEFI: kernel file loaded bytes=629560
 SLOPOS-UEFI: kernel mapped 0x4000000..0x4082000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: user ELF loaded bytes=26344 base=0xdf47000
@@ -313,17 +313,17 @@ SLOPOS-ASYNC: timer future completed tick=2101 input_dropped=0 virtio_interrupts
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE CENTER --TRANSITION-STEP 64
-SLOPOS-SWWW: transition complete type=center step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155
-SLOPOS-ASYNC: timer future completed tick=3211 input_dropped=0 virtio_interrupts=532/532
-SLOPOS-ASYNC: timer future completed tick=3211 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-SWWW: transition complete type=center step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=200000,200000
+SLOPOS-ASYNC: timer future completed tick=3230 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-ASYNC: timer future completed tick=3230 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-ASYNC: timer future completed tick=3601 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-ASYNC: timer future completed tick=4101 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM
 SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-SWWW-VFS: load requested generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM output=* transition=center step=64 fps=30 async=true
 SLOPOS-TERMINAL: command=SWWW IMG /USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM --TRANSITION-TYPE CENTER --TRANSITION-STEP 64
-SLOPOS-ASYNC: timer future completed tick=5289 input_dropped=0 virtio_interrupts=532/532
-SLOPOS-ASYNC: timer future completed tick=5289 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-ASYNC: timer future completed tick=5301 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-ASYNC: timer future completed tick=5301 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -331,7 +331,7 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-SWWW-VFS: load published generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm inode=30 bytes=6144 blocks=2 format=P3 async=true
 SLOPOS-SWWW: image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm source=vfs output=* transition=center step=64 fps=30
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=vfs
-SLOPOS-SWWW: transition complete type=center step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155
+SLOPOS-SWWW: transition complete type=center step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=200000,200000
 SLOPOS-SWWW-VFS: result acknowledged generation=1 renderer=desktop active_image=true
 SLOPOS-ASYNC: timer future completed tick=5601 input_dropped=0 virtio_interrupts=539/539
 SLOPOS-ASYNC: timer future completed tick=6101 input_dropped=0 virtio_interrupts=539/539
@@ -339,7 +339,7 @@ SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS
 SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-SWWW-VFS: load requested generation=2 request=/USR/SHARE/SLOPOS/MISSING.PPM output=* transition=none step=255 fps=30 async=true
 SLOPOS-TERMINAL: command=SWWW IMG /USR/SHARE/SLOPOS/MISSING.PPM --TRANSITION-TYPE NONE
-SLOPOS-ASYNC: timer future completed tick=7045 input_dropped=0 virtio_interrupts=539/539
+SLOPOS-ASYNC: timer future completed tick=7057 input_dropped=0 virtio_interrupts=539/539
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -352,14 +352,14 @@ SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-ASYNC: timer future completed tick=7601 input_dropped=0 virtio_interrupts=546/546
 SLOPOS-SWWW-VFS: load requested generation=3 request=/ETC/SLOPOS/SYSTEM.CONF output=* transition=none step=255 fps=30 async=true
 SLOPOS-TERMINAL: command=SWWW IMG /ETC/SLOPOS/SYSTEM.CONF --TRANSITION-TYPE NONE
-SLOPOS-ASYNC: timer future completed tick=8198 input_dropped=0 virtio_interrupts=546/546
+SLOPOS-ASYNC: timer future completed tick=8211 input_dropped=0 virtio_interrupts=546/546
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-SWWW-VFS: load rejected generation=3 request=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf error=invalid-ppm retained=previous
 SLOPOS-SWWW: image=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf source=vfs applied=false error=invalid-ppm
 SLOPOS-SWWW-VFS: result acknowledged generation=3 renderer=desktop active_image=false
 SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM
 SLOPOS-TERMINAL: command=SWWW QUERY
-SLOPOS-ASYNC: timer future completed tick=8619 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=8629 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: daemon stopped
 SLOPOS-TERMINAL: command=SWWW KILL
 SLOPOS-ASYNC: timer future completed tick=9101 input_dropped=0 virtio_interrupts=549/549
@@ -372,7 +372,7 @@ SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE NONE
 SLOPOS-ASYNC: timer future completed tick=10101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: clear color=1A2B3C output=*
 SLOPOS-TERMINAL: command=SWWW CLEAR 1A2B3C
-SLOPOS-ASYNC: timer future completed tick=10676 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=10687 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C
 SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-ASYNC: timer future completed tick=11101 input_dropped=0 virtio_interrupts=549/549
@@ -383,61 +383,68 @@ SLOPOS-ASYNC: timer future completed tick=11601 input_dropped=0 virtio_interrupt
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=grow step=64 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded
 SLOPOS-TERMINAL: command=SWWW IMG AURORA.PPM --TRANSITION-TYPE GROW --TRANSITION-POS TOP-LEFT --TRANSITION-STEP 64
-SLOPOS-SWWW: transition complete type=grow step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=0,0 invert_y=false bezier=5400,0,3400,9900 midpoint=155
-SLOPOS-ASYNC: timer future completed tick=12612 input_dropped=0 virtio_interrupts=549/549
-SLOPOS-ASYNC: timer future completed tick=12612 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-SWWW: transition complete type=grow step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=0,0 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=200000,200000
+SLOPOS-ASYNC: timer future completed tick=12625 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=12625 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=13101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=wipe step=64 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE WIPE --TRANSITION-ANGLE 30 --TRANSITION-STEP 64
-SLOPOS-SWWW: transition complete type=wipe step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=30 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155
-SLOPOS-ASYNC: timer future completed tick=14177 input_dropped=0 virtio_interrupts=549/549
-SLOPOS-ASYNC: timer future completed tick=14177 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-SWWW: transition complete type=wipe step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=30 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=200000,200000
+SLOPOS-ASYNC: timer future completed tick=14212 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=14212 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=14601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=wipe step=90 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded
 SLOPOS-TERMINAL: command=IMG AURORA.PPM -T WIPE --TRANSITION-DURATION .1
-SLOPOS-SWWW: transition complete type=wipe step=90 fps=30 duration_ms=100 sampled_step=85 frames=4 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155
-SLOPOS-ASYNC: timer future completed tick=15360 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-SWWW: transition complete type=wipe step=90 fps=30 duration_ms=100 sampled_step=85 frames=4 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=200000,200000
+SLOPOS-ASYNC: timer future completed tick=15363 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=15601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=fade step=2 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded
 SLOPOS-TERMINAL: command=IMG SUNSET.PPM -T FADE --TRANSITION-BEZIER 0,0,1,0
-SLOPOS-SWWW: transition complete type=fade step=2 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=0,0,10000,0 midpoint=32
-SLOPOS-ASYNC: timer future completed tick=16289 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-SWWW: transition complete type=fade step=2 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=0,0,10000,0 midpoint=32 wave=200000,200000
+SLOPOS-ASYNC: timer future completed tick=16298 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=16601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=17101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-SWWW: image=AURORA.PPM output=* transition=wave step=90 fps=30 source=embedded
+SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded
+SLOPOS-TERMINAL: command=IMG AURORA.PPM -T WAVE --TRANSITION-WAVE 40,24
+SLOPOS-SWWW: transition complete type=wave step=90 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=400000,240000
+SLOPOS-ASYNC: timer future completed tick=17885 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=18101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=18601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=fit x=0 y=43 width=1024 height=682 crop_gravity=center fill=123456 source=embedded
 SLOPOS-TERMINAL: command=IMG AURORA.PPM -T NONE --RESIZE FIT --FILL-COLOR 123456
-SLOPOS-ASYNC: timer future completed tick=17814 input_dropped=0 virtio_interrupts=549/549
-SLOPOS-ASYNC: timer future completed tick=18101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=19409 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=19601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-128 y=0 width=1152 height=768 crop_gravity=right fill=000000 source=embedded
 SLOPOS-TERMINAL: command=IMG AURORA.PPM -T NONE --RESIZE CROP --CROP-GRAVITY RIGHT
-SLOPOS-ASYNC: timer future completed tick=18601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=20208 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded
 SLOPOS-TERMINAL: command=IMG SUNSET.PPM -T NONE --RESIZE STRETCH
-SLOPOS-ASYNC: timer future completed tick=19265 input_dropped=0 virtio_interrupts=549/549
-SLOPOS-ASYNC: timer future completed tick=19601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=20873 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=21101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded
 SLOPOS-TERMINAL: command=IMG SUNSET.PPM -T NONE --RESIZE CROP
-SLOPOS-ASYNC: timer future completed tick=20101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=21668 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=22101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-workspace changed=true workspace=2 name=config focused=1
 SLOPOS-NIRI: workspace target action=move-window-to-workspace kind=index value=2
-SLOPOS-ASYNC: timer future completed tick=20601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-workspace changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: workspace target action=move-window-to-workspace kind=name value=main
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=21101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=22601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=2 name=config x=520 y=56 width=488 height=340 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=2 name=config x=520 y=412 width=488 height=340 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
@@ -447,7 +454,7 @@ SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace 
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=1 name=main x=268 y=412 width=488 height=340 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=main
-SLOPOS-ASYNC: timer future completed tick=21601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=23101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-workspace changed=true workspace=2 name=config focused=1
@@ -456,45 +463,45 @@ SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace 
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-workspace changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: workspace target action=move-window-to-workspace kind=name value=main
-SLOPOS-ASYNC: timer future completed tick=22101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=23601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: binding action=focus-column-last changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=24101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column reordered kind=SYSTEM x=16 direction=move-column-to-first layout=scrolling
 SLOPOS-NIRI: binding action=move-column-to-first changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=22601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column reordered kind=SYSTEM x=520 direction=move-column-to-last layout=scrolling
 SLOPOS-NIRI: binding action=move-column-to-last changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: binding action=focus-column-first changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=23101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=24601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace reordered action=move-workspace-down workspace=2 name=main previous=1 focused=0 layout=niri
 SLOPOS-NIRI: binding action=move-workspace-down changed=true workspace=2 name=main focused=0
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=1 name=config focused=2
 SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=config
+SLOPOS-ASYNC: timer future completed tick=25101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 name=main focused=0
 SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main
-SLOPOS-ASYNC: timer future completed tick=23601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace reordered action=move-workspace-up workspace=1 name=main previous=2 focused=0 layout=niri
 SLOPOS-NIRI: binding action=move-workspace-up changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2
-SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=false cooldown_ms=150 remaining_ms=80
-SLOPOS-ASYNC: timer future completed tick=24101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=false cooldown_ms=150 remaining_ms=70
+SLOPOS-ASYNC: timer future completed tick=25601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x1 action=focus-workspace-up source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-NIRI: binding action=focus-workspace-up changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=26101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2
-SLOPOS-ASYNC: timer future completed tick=24601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x1 action=focus-workspace-up source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-NIRI: binding action=focus-workspace-up changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=25101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=26601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x5 action=focus-column-right source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x5 action=focus-column-left source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=25601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=27107 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x5 action=focus-column-right source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=26101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=27601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x3 action=move-column-to-workspace-down source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-down member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-down member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
@@ -503,181 +510,181 @@ SLOPOS-NIRI: wheel binding direction=up modifiers=0x3 action=move-column-to-work
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-up member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-up member=SYSTEM workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace-up changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=26601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=28101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x5 action=focus-column-left source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=28601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x7 action=move-column-right source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=520 direction=move-column-right layout=scrolling
 SLOPOS-NIRI: binding action=move-column-right changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=27103 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x7 action=move-column-left source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling
 SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=27601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=29101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: fullscreen toggled state=active kind=TERMINAL restore_layer=tiling x=0 y=0 width=1024 height=768 bar=covered layout=niri
 SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=29601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=TERMINAL restore_layer=tiling x=16 y=56 width=488 height=696 bar=visible layout=niri
 SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=28105 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window layer moved action=move-window-to-floating kind=TERMINAL layer=floating x=16 y=161 width=488 height=485 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-floating changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=30101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: fullscreen toggled state=active kind=TERMINAL restore_layer=floating x=0 y=0 width=1024 height=768 bar=covered layout=niri
 SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=28601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=TERMINAL restore_layer=floating x=16 y=161 width=488 height=485 bar=visible layout=niri
 SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=1 name=main focused=0
 SLOPOS-DESKTOP: layer focus switched layer=tiling kind=SYSTEM layout=niri action=focus-tiling
 SLOPOS-NIRI: binding action=focus-tiling changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=30601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: layer focus switched layer=floating kind=TERMINAL layout=niri action=focus-floating
 SLOPOS-NIRI: binding action=focus-floating changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=29106 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window layer moved action=move-window-to-tiling kind=TERMINAL layer=tiling x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-tiling changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=31101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling
 SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=29601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window layer toggled kind=TERMINAL layer=floating x=16 y=161 width=488 height=485 layout=niri
 SLOPOS-NIRI: binding action=toggle-window-floating changed=true workspace=1 name=main focused=0
 SLOPOS-DESKTOP: layer focus switched layer=tiling kind=SYSTEM layout=niri action=switch-focus-between-floating-and-tiling
 SLOPOS-NIRI: binding action=switch-focus-between-floating-and-tiling changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=31601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: layer focus switched layer=floating kind=TERMINAL layout=niri action=switch-focus-between-floating-and-tiling
 SLOPOS-NIRI: binding action=switch-focus-between-floating-and-tiling changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=30105 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: floating window moved kind=TERMINAL x=16 y=211 direction=move-window-down layout=floating
 SLOPOS-NIRI: binding action=move-window-down changed=true workspace=1 name=main focused=0
 SLOPOS-DESKTOP: window layer toggled kind=TERMINAL layer=tiling x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=toggle-window-floating changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=30601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=32108 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling
 SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=32601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column display toggled mode=tabbed kind=SYSTEM tab=2/2 x=268 y=56 width=488 height=696 layout=scrolling
 SLOPOS-NIRI: binding action=toggle-column-tabbed-display changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=31101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: tab focused kind=TERMINAL tab=1/2 direction=focus-window-up layout=scrolling
 SLOPOS-NIRI: binding action=focus-window-up changed=true workspace=1 name=main focused=0
 SLOPOS-DESKTOP: tab focused kind=SYSTEM tab=2/2 direction=focus-window-down layout=scrolling
 SLOPOS-NIRI: binding action=focus-window-down changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=31601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=33107 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column display toggled mode=normal kind=SYSTEM x=268 y=412 width=488 height=340 layout=scrolling
 SLOPOS-NIRI: binding action=toggle-column-tabbed-display changed=true workspace=1 name=main focused=1
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=411 layout=scrolling
 SLOPOS-NIRI: binding action=set-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=33601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=340 layout=scrolling
 SLOPOS-NIRI: binding action=reset-window-height changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=32107 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=458 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=34101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=221 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-window-height changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=32601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=340 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-window-height changed=true workspace=1 name=main focused=1
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=269 layout=scrolling
 SLOPOS-NIRI: binding action=set-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=34601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=340 layout=scrolling
 SLOPOS-NIRI: binding action=set-window-height changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=33106 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=move-window-up changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=35101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=move-window-down changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=33601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-window-up changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: binding action=focus-window-down changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=35601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=expel-window-from-column changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=34101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=36101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=left x=268 y=412 width=488 height=340 layout=scrolling
 SLOPOS-NIRI: binding action=consume-or-expel-window-left changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=34601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=left x=268 y=56 width=488 height=696 layout=scrolling
 SLOPOS-NIRI: binding action=consume-or-expel-window-left changed=true workspace=1 name=main focused=1
 SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=right x=268 y=412 width=488 height=340 layout=scrolling
 SLOPOS-NIRI: binding action=consume-or-expel-window-right changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=36601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=right x=520 y=56 width=488 height=696 layout=scrolling
 SLOPOS-NIRI: binding action=consume-or-expel-window-right changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=35101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=37101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column centered kind=TERMINAL x=268 offset=-252 layout=scrolling
 SLOPOS-NIRI: binding action=center-column changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=35601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=37601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=992 layout=scrolling
 SLOPOS-NIRI: binding action=maximize-column changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=36103 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=maximize-column changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=38101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=656 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=36601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=37101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=38601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=SYSTEM width=319 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=39101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=657 layout=scrolling
 SLOPOS-NIRI: binding action=expand-column-to-available-width changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=37601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=656 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=0
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=39601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=38103 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=SYSTEM width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=40101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=38601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=319 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=39101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=40601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=SYSTEM width=319 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=41101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: visible columns centered kind=TERMINAL x=185 offset=-169 layout=scrolling
 SLOPOS-NIRI: binding action=center-visible-columns changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=39601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=41601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=SYSTEM width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=40106 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-ASYNC: timer future completed tick=42101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window edge maximize toggled kind=TERMINAL x=0 y=40 width=1024 height=728 layout=scrolling
 SLOPOS-NIRI: binding action=maximize-window-to-edges changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=40601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window edge maximize toggled kind=TERMINAL x=16 y=56 width=488 height=696 layout=scrolling
 SLOPOS-NIRI: binding action=maximize-window-to-edges changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=41101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=42601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SHELL: view scrolled workspace=1 offset=0 gesture=titlebar-drag
 SLOPOS-DESKTOP: window moved kind=TERMINAL x=16 y=56 layout=scrolling
+SLOPOS-ASYNC: timer future completed tick=43101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=588 layout=scrolling
 SLOPOS-NIRI: binding action=set-column-width changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=41601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=set-column-width changed=true workspace=1 name=main focused=0
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=520 direction=move-column-right layout=scrolling
 SLOPOS-NIRI: binding action=move-column-right changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=42101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=43601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling
 SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0
 SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=584 delta=96 gesture=mod-right-drag
-SLOPOS-ASYNC: timer future completed tick=42601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=44101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=488 delta=-96 gesture=mod-right-drag
-SLOPOS-ASYNC: timer future completed tick=43101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=44601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 name=config focused=2
 SLOPOS-NIRI: workspace target action=focus-workspace kind=index value=2
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: workspace target action=focus-workspace kind=index value=1
+SLOPOS-ASYNC: timer future completed tick=45101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: dynamic workspaces reason=move-column count=3->4 named=2 active=3 trailing_empty=true
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=3 name=<empty> x=268 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=3 name=<empty> focused=0
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=index value=3
-SLOPOS-ASYNC: timer future completed tick=43601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: dynamic workspaces reason=move-column count=4->3 named=2 active=1 trailing_empty=true
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri
@@ -685,30 +692,30 @@ SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=1 na
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=index value=1
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 name=config focused=2
 SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=config
+SLOPOS-ASYNC: timer future completed tick=45601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main
-SLOPOS-ASYNC: timer future completed tick=44101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=2 name=config focused=0
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=config
+SLOPOS-ASYNC: timer future completed tick=46101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=main
-SLOPOS-ASYNC: timer future completed tick=44601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-workspace-previous changed=true workspace=2 name=config focused=2
 SLOPOS-NIRI: binding action=focus-workspace-previous changed=true workspace=1 name=main focused=0
-SLOPOS-ASYNC: timer future completed tick=45101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=46601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=true module=niri/workspaces
-SLOPOS-ASYNC: timer future completed tick=45601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=47101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-WAYBAR: workspace clicked index=1 name=main changed=true module=niri/workspaces
 SLOPOS-DESKTOP: window closed kind=TERMINAL workspace=1
 SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main focused=1
+SLOPOS-ASYNC: timer future completed tick=47601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window closed kind=SYSTEM workspace=1
 SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main focused=-1
-SLOPOS-ASYNC: timer future completed tick=46101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2
 SLOPOS-DESKTOP: window closed kind=CONFIG workspace=2
 SLOPOS-NIRI: binding action=close-window changed=true workspace=2 name=config focused=-1
-SLOPOS-ASYNC: timer future completed tick=46601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=48101 input_dropped=0 virtio_interrupts=549/549

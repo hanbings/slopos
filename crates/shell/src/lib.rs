@@ -16,8 +16,8 @@ pub use niri::{
 pub use wallpaper::{
     ClearRequest, CropGravity, ImgRequest, MAX_WALLPAPER_PATH, PpmError, PpmImage, ResizeMode,
     SwwwCommand, SwwwDaemonError, SwwwDefaults, SwwwParseError, TransitionBezier,
-    TransitionCoordinate, TransitionOptions, TransitionPosition, TransitionType, WallpaperDaemon,
-    WallpaperQuery, parse_ppm, parse_swww_command, parse_swww_environment,
+    TransitionCoordinate, TransitionOptions, TransitionPosition, TransitionType, TransitionWave,
+    WallpaperDaemon, WallpaperQuery, parse_ppm, parse_swww_command, parse_swww_environment,
     transition_eased_progress, transition_pixel, transition_pixel_with_options,
 };
 pub use waybar::{

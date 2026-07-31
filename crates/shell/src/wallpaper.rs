@@ -12,6 +12,7 @@ pub enum TransitionType {
     Top,
     Bottom,
     Wipe,
+    Wave,
     Grow,
     Center,
     Outer,
@@ -38,6 +39,7 @@ impl TransitionType {
             Self::Top => "top",
             Self::Bottom => "bottom",
             Self::Wipe => "wipe",
+            Self::Wave => "wave",
             Self::Grow => "grow",
             Self::Center => "center",
             Self::Outer => "outer",
@@ -96,7 +98,7 @@ impl CropGravity {
 }
 
 const POSITION_SCALE: u32 = 10_000;
-const BEZIER_SCALE: i32 = 10_000;
+const TRANSITION_FIXED_SCALE: i32 = 10_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TransitionBezier {
@@ -104,6 +106,27 @@ pub struct TransitionBezier {
     pub y1: i32,
     pub x2: i32,
     pub y2: i32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransitionWave {
+    pub width: u32,
+    pub height: i32,
+}
+
+impl TransitionWave {
+    pub const fn swww_default() -> Self {
+        Self {
+            width: 200_000,
+            height: 200_000,
+        }
+    }
+}
+
+impl Default for TransitionWave {
+    fn default() -> Self {
+        Self::swww_default()
+    }
 }
 
 impl TransitionBezier {
@@ -120,8 +143,8 @@ impl TransitionBezier {
         Self {
             x1: 0,
             y1: 0,
-            x2: BEZIER_SCALE,
-            y2: BEZIER_SCALE,
+            x2: TRANSITION_FIXED_SCALE,
+            y2: TRANSITION_FIXED_SCALE,
         }
     }
 }
@@ -176,6 +199,7 @@ pub struct TransitionOptions {
     pub position: TransitionPosition,
     pub invert_y: bool,
     pub bezier: TransitionBezier,
+    pub wave: TransitionWave,
     pub resize: ResizeMode,
     pub crop_gravity: CropGravity,
     pub fill_color: u32,
@@ -192,6 +216,7 @@ impl Default for TransitionOptions {
             position: TransitionPosition::center(),
             invert_y: false,
             bezier: TransitionBezier::default(),
+            wave: TransitionWave::default(),
             resize: ResizeMode::Crop,
             crop_gravity: CropGravity::Center,
             fill_color: 0,
@@ -239,6 +264,7 @@ pub enum SwwwParseError {
     InvalidCropGravity,
     InvalidPosition,
     InvalidBezier,
+    InvalidWave,
     InvalidBoolean,
     InvalidColor,
     UnexpectedArgument,
@@ -310,6 +336,8 @@ pub fn parse_swww_environment(input: &str) -> Result<SwwwDefaults, SwwwParseErro
             defaults.transition.invert_y = parse_bool(value)?;
         } else if name == "SWWW_TRANSITION_BEZIER" {
             defaults.transition.bezier = parse_bezier(value)?;
+        } else if name == "SWWW_TRANSITION_WAVE" {
+            defaults.transition.wave = parse_wave(value)?;
         }
     }
     Ok(defaults)
@@ -343,6 +371,8 @@ fn parse_img<'a>(
             transition.invert_y = parse_bool(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if equal(argument, "--transition-bezier") {
             transition.bezier = parse_bezier(args.next().ok_or(SwwwParseError::MissingValue)?)?;
+        } else if equal(argument, "--transition-wave") {
+            transition.wave = parse_wave(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if equal(argument, "--no-resize") {
             transition.resize = ResizeMode::No;
         } else if equal(argument, "--resize") {
@@ -421,6 +451,8 @@ fn parse_transition(value: &str) -> Result<TransitionType, SwwwParseError> {
         Ok(TransitionType::Bottom)
     } else if equal(value, "wipe") {
         Ok(TransitionType::Wipe)
+    } else if equal(value, "wave") {
+        Ok(TransitionType::Wave)
     } else if equal(value, "grow") {
         Ok(TransitionType::Grow)
     } else if equal(value, "center") {
@@ -576,24 +608,24 @@ fn parse_bezier(value: &str) -> Result<TransitionBezier, SwwwParseError> {
     let bezier = TransitionBezier {
         x1: parse_signed_fixed(
             components.next().ok_or(SwwwParseError::InvalidBezier)?,
-            BEZIER_SCALE,
+            TRANSITION_FIXED_SCALE,
         )?,
         y1: parse_signed_fixed(
             components.next().ok_or(SwwwParseError::InvalidBezier)?,
-            BEZIER_SCALE,
+            TRANSITION_FIXED_SCALE,
         )?,
         x2: parse_signed_fixed(
             components.next().ok_or(SwwwParseError::InvalidBezier)?,
-            BEZIER_SCALE,
+            TRANSITION_FIXED_SCALE,
         )?,
         y2: parse_signed_fixed(
             components.next().ok_or(SwwwParseError::InvalidBezier)?,
-            BEZIER_SCALE,
+            TRANSITION_FIXED_SCALE,
         )?,
     };
     if components.next().is_some()
-        || !(0..=BEZIER_SCALE).contains(&bezier.x1)
-        || !(0..=BEZIER_SCALE).contains(&bezier.x2)
+        || !(0..=TRANSITION_FIXED_SCALE).contains(&bezier.x1)
+        || !(0..=TRANSITION_FIXED_SCALE).contains(&bezier.x2)
         || bezier
             == (TransitionBezier {
                 x1: 0,
@@ -605,6 +637,27 @@ fn parse_bezier(value: &str) -> Result<TransitionBezier, SwwwParseError> {
         return Err(SwwwParseError::InvalidBezier);
     }
     Ok(bezier)
+}
+
+fn parse_wave(value: &str) -> Result<TransitionWave, SwwwParseError> {
+    let mut components = value.split(',');
+    let width = parse_signed_fixed(
+        components.next().ok_or(SwwwParseError::InvalidWave)?,
+        TRANSITION_FIXED_SCALE,
+    )
+    .map_err(|_| SwwwParseError::InvalidWave)?;
+    let height = parse_signed_fixed(
+        components.next().ok_or(SwwwParseError::InvalidWave)?,
+        TRANSITION_FIXED_SCALE,
+    )
+    .map_err(|_| SwwwParseError::InvalidWave)?;
+    if components.next().is_some() || width <= 0 {
+        return Err(SwwwParseError::InvalidWave);
+    }
+    Ok(TransitionWave {
+        width: width as u32,
+        height,
+    })
 }
 
 fn parse_signed_fixed(value: &str, scale: i32) -> Result<i32, SwwwParseError> {
@@ -864,6 +917,7 @@ impl WallpaperDaemon {
                 position: TransitionPosition::center(),
                 invert_y: false,
                 bezier: TransitionBezier::swww_default(),
+                wave: TransitionWave::swww_default(),
                 resize: ResizeMode::Crop,
                 crop_gravity: CropGravity::Center,
                 fill_color: 0,
@@ -1021,9 +1075,10 @@ impl WallpaperDaemon {
 }
 
 fn resolve_transition(transition: &mut TransitionOptions, generation: u32) {
-    const RANDOM_TYPES: [TransitionType; 7] = [
+    const RANDOM_TYPES: [TransitionType; 8] = [
         TransitionType::Simple,
         TransitionType::Wipe,
+        TransitionType::Wave,
         TransitionType::Grow,
         TransitionType::Outer,
         TransitionType::Fade,
@@ -1109,6 +1164,17 @@ pub fn transition_pixel_with_options(
             old,
             new,
         ),
+        TransitionType::Wave => choose(
+            wave_revealed(
+                options.angle_degrees,
+                options.wave,
+                progress,
+                position,
+                dimensions,
+            ),
+            old,
+            new,
+        ),
         TransitionType::Grow => choose(
             radial_revealed(
                 options.position.to_pixel(dimensions, options.invert_y),
@@ -1153,7 +1219,7 @@ pub fn transition_eased_progress(options: TransitionOptions, progress: u8) -> u8
     {
         return progress;
     }
-    let scale = i64::from(BEZIER_SCALE);
+    let scale = i64::from(TRANSITION_FIXED_SCALE);
     let target_x = (i64::from(progress) * scale + i64::from(u8::MAX) / 2) / i64::from(u8::MAX);
     let mut low = 0i64;
     let mut high = scale;
@@ -1170,7 +1236,7 @@ pub fn transition_eased_progress(options: TransitionOptions, progress: u8) -> u8
 }
 
 fn cubic_bezier_coordinate(first: i32, second: i32, time: i64) -> i64 {
-    let scale = i128::from(BEZIER_SCALE);
+    let scale = i128::from(TRANSITION_FIXED_SCALE);
     let time = i128::from(time);
     let inverse = scale - time;
     let numerator = 3 * inverse * inverse * time * i128::from(first)
@@ -1214,6 +1280,58 @@ fn wipe_direction(angle: u16) -> (i16, i16) {
         180..=269 => ((270 - angle) as i16, -((angle - 180) as i16)),
         _ => (-((angle - 270) as i16), -((360 - angle) as i16)),
     }
+}
+
+fn wave_revealed(
+    angle: u16,
+    wave: TransitionWave,
+    progress: u8,
+    position: (i32, i32),
+    dimensions: (u16, u16),
+) -> bool {
+    let (dx, dy) = wipe_direction(angle);
+    let width = i64::from(dimensions.0.saturating_sub(1));
+    let height = i64::from(dimensions.1.saturating_sub(1));
+    let corners = [
+        0,
+        i64::from(dx) * width,
+        i64::from(dy) * height,
+        i64::from(dx) * width + i64::from(dy) * height,
+    ];
+    let mut minimum = corners[0];
+    let mut maximum = corners[0];
+    for value in &corners[1..] {
+        minimum = minimum.min(*value);
+        maximum = maximum.max(*value);
+    }
+    if maximum == minimum {
+        return true;
+    }
+    let raw = i64::from(dx) * i64::from(position.0) + i64::from(dy) * i64::from(position.1);
+    let magnitude = i64::from(dx.unsigned_abs().max(dy.unsigned_abs()).max(1));
+    let tangent = -i64::from(dy) * i64::from(position.0) + i64::from(dx) * i64::from(position.1);
+    let phase = (i128::from(tangent) * i128::from(TRANSITION_FIXED_SCALE) / i128::from(magnitude))
+        .rem_euclid(i128::from(wave.width)) as u32;
+    let sine = wave_sine(phase, wave.width);
+    let wave_offset = i128::from(sine) * i128::from(wave.height) * i128::from(magnitude)
+        / (i128::from(TRANSITION_FIXED_SCALE) * i128::from(TRANSITION_FIXED_SCALE));
+    let boundary = i128::from(minimum)
+        + i128::from(maximum - minimum) * i128::from(progress) / i128::from(u8::MAX)
+        + wave_offset;
+    i128::from(raw) <= boundary
+}
+
+fn wave_sine(phase: u32, period: u32) -> i32 {
+    const SAMPLES: [i32; 17] = [
+        0, 3_827, 7_071, 9_239, 10_000, 9_239, 7_071, 3_827, 0, -3_827, -7_071, -9_239, -10_000,
+        -9_239, -7_071, -3_827, 0,
+    ];
+    let scaled = u64::from(phase) * 16;
+    let index = (scaled / u64::from(period)) as usize;
+    let remainder = scaled % u64::from(period);
+    let start = i64::from(SAMPLES[index.min(15)]);
+    let end = i64::from(SAMPLES[(index + 1).min(16)]);
+    (start + (end - start) * remainder as i64 / i64::from(period)) as i32
 }
 
 fn radial_revealed(
@@ -1473,7 +1591,7 @@ mod tests {
     #[test]
     fn applies_environment_defaults_and_transition_specific_step() {
         let defaults = parse_swww_environment(
-            "SWWW_TRANSITION=grow\nSWWW_TRANSITION_STEP=33\nSWWW_TRANSITION_FPS=60\nSWWW_TRANSITION_DURATION=2.125\nSWWW_TRANSITION_ANGLE=120\nSWWW_TRANSITION_POS=top-right\nSWWW_INVERT_Y=true\nSWWW_TRANSITION_BEZIER=.25,-.1,.75,1.2\n",
+            "SWWW_TRANSITION=grow\nSWWW_TRANSITION_STEP=33\nSWWW_TRANSITION_FPS=60\nSWWW_TRANSITION_DURATION=2.125\nSWWW_TRANSITION_ANGLE=120\nSWWW_TRANSITION_POS=top-right\nSWWW_INVERT_Y=true\nSWWW_TRANSITION_BEZIER=.25,-.1,.75,1.2\nSWWW_TRANSITION_WAVE=40.5,-2.25\n",
         )
         .unwrap();
         assert_eq!(defaults.transition.kind, TransitionType::Grow);
@@ -1498,17 +1616,24 @@ mod tests {
                 y2: 12_000,
             }
         );
+        assert_eq!(
+            defaults.transition.wave,
+            TransitionWave {
+                width: 405_000,
+                height: -22_500,
+            }
+        );
 
         let SwwwCommand::Img(request) = parse_swww_command(
-            "img image.ppm --transition-type wipe --transition-angle 30 --transition-pos 0.25,0.75 --invert-y false --transition-bezier 0,0,1,0",
+            "img image.ppm --transition-type wave --transition-angle 30 --transition-pos 0.25,0.75 --invert-y false --transition-bezier 0,0,1,0 --transition-wave 40,24",
             defaults,
         )
         .unwrap()
         else {
             panic!("expected image request");
         };
-        assert_eq!(request.transition.kind, TransitionType::Wipe);
-        assert_eq!(request.transition.step, TransitionType::Wipe.default_step());
+        assert_eq!(request.transition.kind, TransitionType::Wave);
+        assert_eq!(request.transition.step, TransitionType::Wave.default_step());
         assert_eq!(request.transition.angle_degrees, 30);
         assert_eq!(
             request.transition.position,
@@ -1525,6 +1650,13 @@ mod tests {
                 y1: 0,
                 x2: 10_000,
                 y2: 0,
+            }
+        );
+        assert_eq!(
+            request.transition.wave,
+            TransitionWave {
+                width: 400_000,
+                height: 240_000,
             }
         );
         let SwwwCommand::Img(request) = parse_swww_command(
@@ -1606,6 +1738,9 @@ mod tests {
         );
         for bezier in ["0,0,0,0", "0,0,1", "-.1,0,1,1", "0,0,1.1,1", "0,a,1,1"] {
             assert_eq!(parse_bezier(bezier), Err(SwwwParseError::InvalidBezier));
+        }
+        for wave in ["0,20", "-1,20", "20", "20,20,20", "wide,20"] {
+            assert_eq!(parse_wave(wave), Err(SwwwParseError::InvalidWave));
         }
         assert_eq!(
             parse_swww_command("swww clear #1a804a", SwwwDefaults::default()),
@@ -1736,6 +1871,24 @@ mod tests {
                 128
             ),
             128
+        );
+        let wave = TransitionOptions {
+            kind: TransitionType::Wave,
+            angle_degrees: 0,
+            bezier: TransitionBezier::linear(),
+            wave: TransitionWave {
+                width: 200_000,
+                height: 100_000,
+            },
+            ..TransitionOptions::default()
+        };
+        assert_eq!(
+            transition_pixel_with_options(wave, 128, (50, 5), (100, 80), old, new),
+            old
+        );
+        assert_eq!(
+            transition_pixel_with_options(wave, 128, (50, 15), (100, 80), old, new),
+            new
         );
         assert_eq!(
             transition_pixel(TransitionType::Simple, 0, (0, 0), (4, 4), old, new),

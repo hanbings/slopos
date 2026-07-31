@@ -172,6 +172,9 @@ qmp_wheel_burst() {
     sleep 4
     monitor_type "img sunset.ppm -t fade --transition-bezier 0,0,1,0"
     sleep 8
+    monitor_type "img aurora.ppm -t wave --transition-wave 40,24"
+    sleep 8
+    echo "screendump ${repo_dir}/evidence/wallpaper-wave.ppm"
     monitor_type "img aurora.ppm -t none --resize fit --fill-color 123456"
     sleep 3
     echo "screendump ${repo_dir}/evidence/wallpaper-fit-fill.ppm"
@@ -613,6 +616,8 @@ grep -Fq "SLOPOS-SWWW: image=AURORA.PPM output=* transition=wipe step=90 fps=30 
 grep -Fq "SLOPOS-SWWW: transition complete type=wipe step=90 fps=30 duration_ms=100 sampled_step=85 frames=4 angle=45 position=512,384 invert_y=false" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=fade step=2 fps=30 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: transition complete type=fade step=2 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=0,0,10000,0 midpoint=32" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: image=AURORA.PPM output=* transition=wave step=90 fps=30 source=embedded" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: transition complete type=wave step=90 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=400000,240000" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=fit x=0 y=43 width=1024 height=682 crop_gravity=center fill=123456 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=crop x=-128 y=0 width=1152 height=768 crop_gravity=right fill=000000 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded" "${serial_log}"
@@ -797,6 +802,7 @@ test -s "${repo_dir}/evidence/wallpaper-vfs-loaded.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
 test -s "${repo_dir}/evidence/wallpaper-grow-top-left.ppm"
 test -s "${repo_dir}/evidence/wallpaper-wipe-angle.ppm"
+test -s "${repo_dir}/evidence/wallpaper-wave.ppm"
 test -s "${repo_dir}/evidence/wallpaper-fit-fill.ppm"
 test -s "${repo_dir}/evidence/wallpaper-crop-right.ppm"
 test -s "${repo_dir}/evidence/wallpaper-stretched.ppm"
@@ -898,6 +904,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-grow-top-left.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-wipe-angle.ppm" \
         >"${repo_dir}/evidence/wallpaper-wipe-angle.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-wave.ppm" \
+        >"${repo_dir}/evidence/wallpaper-wave.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-fit-fill.ppm" \
         >"${repo_dir}/evidence/wallpaper-fit-fill.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-crop-right.ppm" \
