@@ -187,15 +187,18 @@ fn validate_png(input: &[u8]) -> Result<PngMetadata, PngError> {
                 saw_palette = true;
             }
             b"tRNS" => {
-                let color_type = header
+                let (color_type, bit_depth) = header
                     .as_ref()
-                    .map(|(_, _, color_type, _, _)| *color_type)
+                    .map(|(_, _, color_type, bit_depth, _)| (*color_type, *bit_depth))
                     .ok_or(PngError::InvalidChunkOrder)?;
                 if saw_transparency || saw_idat {
                     return Err(PngError::InvalidChunkOrder);
                 }
                 transparency = match color_type {
-                    0 if chunk.data.len() == 2 && chunk.data[0] == 0 => {
+                    0 if chunk.data.len() == 2
+                        && chunk.data[0] == 0
+                        && u16::from(chunk.data[1]) < 1u16 << bit_depth =>
+                    {
                         Transparency::Gray(chunk.data[1])
                     }
                     2 if chunk.data.len() == 6
@@ -313,7 +316,7 @@ fn parse_header(data: &[u8]) -> Result<(usize, usize, u8, u8, usize), PngError> 
         return Err(PngError::InvalidHeader);
     }
     let channels = match (data[9], data[8]) {
-        (0, 8) => 1,
+        (0, 1 | 2 | 4 | 8) => 1,
         (2, 8) => 3,
         (3, 1 | 2 | 4 | 8) => 1,
         (4, 8) => 2,
@@ -810,6 +813,33 @@ fn compact_rgb(bytes: &mut [u8], metadata: &PngMetadata) -> Result<(), PngError>
         return Ok(());
     }
 
+    if metadata.color_type == 0 && metadata.bit_depth < 8 {
+        let bit_depth = usize::from(metadata.bit_depth);
+        let row_bytes = (width * bit_depth).div_ceil(8);
+        let source_stride = row_bytes + 1;
+        let mask = u8::MAX >> (8 - metadata.bit_depth);
+        for row in (0..height).rev() {
+            let source_start = row * source_stride + 1;
+            for pixel in (0..width).rev() {
+                let bit = pixel * bit_depth;
+                let source = bytes[source_start + bit / 8];
+                let shift = 8 - bit_depth - bit % 8;
+                let sample = source >> shift & mask;
+                let value = if matches!(metadata.transparency, Transparency::Gray(key) if sample == key)
+                {
+                    0
+                } else {
+                    scale_gray_sample(sample, mask)
+                };
+                let destination = (row * width + pixel) * 3;
+                bytes[destination] = value;
+                bytes[destination + 1] = value;
+                bytes[destination + 2] = value;
+            }
+        }
+        return Ok(());
+    }
+
     let channels = metadata.channels;
     let source_stride = width * channels + 1;
     if matches!(metadata.color_type, 0 | 4) {
@@ -874,6 +904,10 @@ fn alpha_blend_black(value: u8, alpha: u8) -> u8 {
     ((u16::from(value) * u16::from(alpha) + 127) / 255) as u8
 }
 
+fn scale_gray_sample(sample: u8, maximum: u8) -> u8 {
+    ((u16::from(sample) * 255 + u16::from(maximum) / 2) / u16::from(maximum)) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -891,6 +925,10 @@ mod tests {
     const INVALID_PALETTE_INDEX_PNG: [u8; 85] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x02\x03\x00\x00\x00\x62\x7b\x2c\x1a\x00\x00\x00\x06PLTE\xff\x00\x00\x00\xff\x00\xd2\x87\xef\x71\x00\x00\x00\x0aIDAT\x78\xda\x63\x68\x00\x00\x00\x82\x00\x81\xda\x45\x08\x3b\x00\x00\x00\x00IEND\xae\x42\x60\x82";
     const RGB_TRANSPARENT_PNG: [u8; 90] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x01\x08\x02\x00\x00\x00\x7b\x40\xe8\xdd\x00\x00\x00\x06tRNS\x00\x0a\x00\x14\x00\x1e\xc5\x36\x29\xff\x00\x00\x00\x0fIDAT\x78\xda\x63\xe0\x12\x91\xd3\x30\xb2\x01\x00\x02\x37\x00\xd3\xe2\x2d\xed\x9f\x00\x00\x00\x00IEND\xae\x42\x60\x82";
     const GRAY_TRANSPARENT_PNG: [u8; 82] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x01\x08\x00\x00\x00\x00\xd1\x49\x20\x56\x00\x00\x00\x02tRNS\x00\x14\x6c\x49\x19\x45\x00\x00\x00\x0bIDAT\x78\xda\x63\xe0\x12\x01\x00\x00\x2b\x00\x1f\x04\xc8\xf0\xc2\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const GRAY1_PNG: [u8; 71] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x09\x00\x00\x00\x02\x01\x00\x00\x00\x00\xa2\x2d\xcb\x7e\x00\x00\x00\x0eIDAT\x78\xda\x63\x88\x6a\x60\x5c\x1a\x0d\x00\x05\x70\x01\xdc\x45\x01\xa4\xc6\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const GRAY2_TRANSPARENT_PNG: [u8; 85] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x05\x00\x00\x00\x02\x02\x00\x00\x00\x00\xff\xb1\x51\x20\x00\x00\x00\x02tRNS\x00\x02\x98\x9d\xac\x14\x00\x00\x00\x0eIDAT\x78\xda\x63\x90\x76\x60\xba\xd1\x00\x00\x03\xc3\x01\xb6\x14\x89\x83\xb4\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const GRAY4_TRANSPARENT_PNG: [u8; 87] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x05\x00\x00\x00\x02\x04\x00\x00\x00\x00\x70\xf1\xa4\x80\x00\x00\x00\x02tRNS\x00\x05\x06\xf9\x39\xb7\x00\x00\x00\x10IDAT\x78\xda\x63\x60\x5d\x2f\xc0\xf2\x55\x60\x3d\x00\x08\x53\x02\x7d\x11\x4d\xa8\x78\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const GRAY2_INVALID_TRANSPARENCY_PNG: [u8; 81] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x02\x00\x00\x00\x00\x70\xce\x83\xf4\x00\x00\x00\x02tRNS\x00\x04\x71\xfe\x09\x21\x00\x00\x00\x0aIDAT\x78\xda\x63\x60\x00\x00\x00\x02\x00\x01\xe5\x27\xde\xfc\x00\x00\x00\x00IEND\xae\x42\x60\x82";
 
     #[test]
     fn inflates_stored_fixed_and_dynamic_blocks() {
@@ -976,6 +1014,35 @@ mod tests {
         let mut gray_transparent_png = GRAY_TRANSPARENT_PNG;
         let decoded = decode_png_rgb(&mut gray_transparent_png, &mut output).unwrap();
         assert_eq!(&output[..decoded.rgb_length()], b"\x0a\x0a\x0a\x00\x00\x00");
+
+        for (png, expected) in [
+            (
+                GRAY1_PNG.as_slice(),
+                [
+                    0, 255, 0, 255, 255, 0, 255, 0, 255, 255, 0, 255, 0, 0, 255, 0, 255, 0,
+                ]
+                .as_slice(),
+            ),
+            (
+                GRAY2_TRANSPARENT_PNG.as_slice(),
+                [0, 85, 0, 255, 85, 255, 255, 0, 255, 255].as_slice(),
+            ),
+            (
+                GRAY4_TRANSPARENT_PNG.as_slice(),
+                [0, 0, 170, 255, 17, 255, 170, 0, 170, 187].as_slice(),
+            ),
+        ] {
+            let mut input = [0u8; GRAY4_TRANSPARENT_PNG.len()];
+            input[..png.len()].copy_from_slice(png);
+            let decoded = decode_png_rgb(&mut input[..png.len()], &mut output).unwrap();
+            assert_eq!(decoded.rgb_length(), expected.len() * 3);
+            for (rgb, gray) in output[..decoded.rgb_length()]
+                .chunks_exact(3)
+                .zip(expected.iter().copied())
+            {
+                assert_eq!(rgb, [gray, gray, gray]);
+            }
+        }
     }
 
     #[test]
@@ -998,6 +1065,12 @@ mod tests {
         assert_eq!(
             decode_png_rgb(&mut png, &mut output),
             Err(PngError::InvalidPaletteIndex)
+        );
+
+        let mut png = GRAY2_INVALID_TRANSPARENCY_PNG;
+        assert_eq!(
+            decode_png_rgb(&mut png, &mut output),
+            Err(PngError::UnsupportedColor)
         );
     }
 }
