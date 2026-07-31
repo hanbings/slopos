@@ -115,6 +115,7 @@ pub enum NiriAction<'a> {
 pub struct NiriBinding<'a> {
     pub modifiers: BindingModifiers,
     pub key: BindingKey,
+    pub cooldown_ms: Option<u16>,
     pub action: NiriAction<'a>,
 }
 
@@ -141,11 +142,21 @@ impl<'a> NiriBindingList<'a> {
     }
 
     pub fn action(self, modifiers: BindingModifiers, key: BindingKey) -> Option<NiriAction<'a>> {
+        self.binding(modifiers, key)
+            .map(|(_, binding)| binding.action)
+    }
+
+    pub fn binding(
+        self,
+        modifiers: BindingModifiers,
+        key: BindingKey,
+    ) -> Option<(usize, NiriBinding<'a>)> {
         self.entries[..self.length]
             .iter()
             .flatten()
-            .find(|binding| binding.modifiers == modifiers && binding.key == key)
-            .map(|binding| binding.action)
+            .copied()
+            .enumerate()
+            .find(|(_, binding)| binding.modifiers == modifiers && binding.key == key)
     }
 
     fn push(&mut self, binding: NiriBinding<'a>) -> Result<(), NiriConfigError> {
@@ -568,9 +579,22 @@ impl<'a> ShellConfigParser<'a> {
                 KdlToken::RightBrace => return Ok(()),
                 KdlToken::Word(hotkey) => {
                     let (modifiers, key) = parse_hotkey(hotkey)?;
+                    let mut cooldown_ms = None;
                     loop {
                         match self.next() {
                             KdlToken::LeftBrace => break,
+                            KdlToken::Word("cooldown-ms") if cooldown_ms.is_none() => {
+                                if self.next() != KdlToken::Equal {
+                                    return Err(NiriConfigError::InvalidBinding);
+                                }
+                                let KdlToken::Word(value) = self.next() else {
+                                    return Err(NiriConfigError::InvalidBinding);
+                                };
+                                cooldown_ms = Some(parse_decimal_u16(value)?);
+                            }
+                            KdlToken::Word("cooldown-ms") => {
+                                return Err(NiriConfigError::InvalidBinding);
+                            }
                             KdlToken::End | KdlToken::RightBrace => {
                                 return Err(NiriConfigError::InvalidBinding);
                             }
@@ -591,6 +615,7 @@ impl<'a> ShellConfigParser<'a> {
                     bindings.push(NiriBinding {
                         modifiers,
                         key,
+                        cooldown_ms,
                         action,
                     })?;
                 }
@@ -2937,6 +2962,15 @@ mod tests {
             Some(NiriAction::FocusWorkspaceDown)
         );
         assert_eq!(
+            config
+                .bindings
+                .binding(BindingModifiers::MOD, BindingKey::WheelScrollDown)
+                .unwrap()
+                .1
+                .cooldown_ms,
+            Some(150)
+        );
+        assert_eq!(
             config.bindings.action(
                 BindingModifiers::MOD.with(BindingModifiers::CTRL),
                 BindingKey::WheelScrollUp
@@ -3437,6 +3471,11 @@ mod tests {
             r#"binds { Mod+1 { focus-workspace "missing"; } } workspace "main""#,
             r#"binds { Mod+1 { move-column-to-workspace; } }"#,
             r#"binds { Mod+1 { move-window-to-workspace "missing"; } } workspace "main""#,
+            r#"binds { Mod+Q cooldown-ms=-1 { close-window; } }"#,
+            r#"binds { Mod+Q cooldown-ms=1.5 { close-window; } }"#,
+            r#"binds { Mod+Q cooldown-ms=65536 { close-window; } }"#,
+            r#"binds { Mod+Q cooldown-ms 150 { close-window; } }"#,
+            r#"binds { Mod+Q cooldown-ms=10 cooldown-ms=20 { close-window; } }"#,
         ] {
             assert_eq!(
                 parse_niri_shell_config(input),

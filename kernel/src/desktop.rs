@@ -8,10 +8,10 @@ use crate::serial::serialln;
 use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
     BarButton, BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers,
-    ColumnDisplay, ImgRequest, NiriAction, NiriShellConfig, PpmImage, ResizeMode,
-    ResolvedWaybarStyle, SwwwCommand, SwwwDaemonError, SwwwDefaults, TransitionType,
-    WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference, WorkspaceSet, format_bar_text,
-    parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
+    ColumnDisplay, ImgRequest, MAX_NIRI_BINDINGS, NiriAction, NiriBinding, NiriShellConfig,
+    PpmImage, ResizeMode, ResolvedWaybarStyle, SwwwCommand, SwwwDaemonError, SwwwDefaults,
+    TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference, WorkspaceSet,
+    format_bar_text, parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
     parse_swww_environment, parse_waybar_config, parse_waybar_style, transition_pixel,
 };
 
@@ -51,6 +51,7 @@ pub struct Desktop {
     windows: [Window; WINDOW_COUNT],
     workspaces: WorkspaceSet<WORKSPACE_CAPACITY, WINDOW_COUNT, WINDOW_COUNT>,
     niri: NiriShellConfig<'static>,
+    bind_cooldown_until: [u64; MAX_NIRI_BINDINGS],
     bar: WaybarConfig<'static>,
     bar_style: WaybarStyle<'static>,
     bar_alternate_formats: u32,
@@ -298,6 +299,7 @@ impl Desktop {
             ],
             workspaces,
             niri,
+            bind_cooldown_until: [0; MAX_NIRI_BINDINGS],
             bar,
             bar_style,
             bar_alternate_formats: 0,
@@ -952,6 +954,7 @@ impl Desktop {
 
         self.workspaces = workspaces;
         self.niri = niri;
+        self.bind_cooldown_until = [0; MAX_NIRI_BINDINGS];
         self.bar = bar;
         self.bar_style = bar_style;
         self.bar_alternate_formats = 0;
@@ -1249,13 +1252,11 @@ impl Desktop {
     }
 
     fn keyboard(&mut self, event: KeyEvent) -> bool {
+        let modifiers = binding_modifiers(event.modifiers);
         if let Some(key) = binding_key(event.key)
-            && let Some(action) = self
-                .niri
-                .bindings
-                .action(binding_modifiers(event.modifiers), key)
+            && let Some((index, binding)) = self.niri.bindings.binding(modifiers, key)
         {
-            self.execute_niri_action(action);
+            self.execute_niri_binding(index, binding, modifiers, "keyboard", None);
             return false;
         }
         if event.modifiers.logo || event.modifiers.control || event.modifiers.alt {
@@ -1477,14 +1478,14 @@ impl Desktop {
             (BindingKey::WheelScrollDown, "down")
         };
         let modifiers = binding_modifiers(modifiers);
-        if let Some(action) = self.niri.bindings.action(modifiers, key) {
-            serialln(format_args!(
-                "SLOPOS-NIRI: wheel binding direction={} modifiers={:#x} action={} source=ps2-intellimouse",
-                direction,
-                modifiers.bits(),
-                action_name(action)
-            ));
-            self.execute_niri_action(action);
+        if let Some((index, binding)) = self.niri.bindings.binding(modifiers, key) {
+            self.execute_niri_binding(
+                index,
+                binding,
+                modifiers,
+                "ps2-intellimouse",
+                Some(direction),
+            );
             return false;
         }
 
@@ -1500,6 +1501,64 @@ impl Desktop {
             (config.on_scroll_down, "scroll-down")
         };
         action.is_some_and(|action| self.execute_bar_action(module, action, button))
+    }
+
+    fn execute_niri_binding(
+        &mut self,
+        index: usize,
+        binding: NiriBinding<'static>,
+        modifiers: BindingModifiers,
+        source: &'static str,
+        wheel_direction: Option<&'static str>,
+    ) {
+        let now = crate::timer::ticks();
+        let cooldown_ms = binding.cooldown_ms.unwrap_or(0);
+        let deadline = self.bind_cooldown_until[index];
+        if cooldown_ms != 0 && now < deadline {
+            let remaining_ms = deadline.saturating_sub(now).saturating_mul(10);
+            if let Some(direction) = wheel_direction {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: wheel binding direction={} modifiers={:#x} action={} source={} accepted=false cooldown_ms={} remaining_ms={}",
+                    direction,
+                    modifiers.bits(),
+                    action_name(binding.action),
+                    source,
+                    cooldown_ms,
+                    remaining_ms
+                ));
+            } else {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: binding modifiers={:#x} action={} source={} accepted=false cooldown_ms={} remaining_ms={}",
+                    modifiers.bits(),
+                    action_name(binding.action),
+                    source,
+                    cooldown_ms,
+                    remaining_ms
+                ));
+            }
+            return;
+        }
+        let cooldown_ticks = u64::from(cooldown_ms).div_ceil(10);
+        self.bind_cooldown_until[index] = now.saturating_add(cooldown_ticks);
+        if let Some(direction) = wheel_direction {
+            serialln(format_args!(
+                "SLOPOS-NIRI: wheel binding direction={} modifiers={:#x} action={} source={} accepted=true cooldown_ms={}",
+                direction,
+                modifiers.bits(),
+                action_name(binding.action),
+                source,
+                cooldown_ms
+            ));
+        } else if cooldown_ms != 0 {
+            serialln(format_args!(
+                "SLOPOS-NIRI: binding modifiers={:#x} action={} source={} accepted=true cooldown_ms={}",
+                modifiers.bits(),
+                action_name(binding.action),
+                source,
+                cooldown_ms
+            ));
+        }
+        self.execute_niri_action(binding.action);
     }
 
     fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {

@@ -95,6 +95,32 @@ qmp_wheel() {
     } | socat - "UNIX-CONNECT:${qmp_socket}" >/dev/null
 }
 
+qmp_wheel_burst() {
+    local direction="$1"
+    local button
+
+    # QEMU's PS/2 IntelliMouse packet sign is opposite the QMP wheel-button name.
+    case "${direction}" in
+        down) button="wheel-up" ;;
+        up) button="wheel-down" ;;
+        *) return 2 ;;
+    esac
+
+    {
+        printf '%s\n' '{"execute":"qmp_capabilities"}'
+        printf '%s\n' \
+            '{"execute":"input-send-event","arguments":{"events":[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"meta_l"}}}]}}'
+        sleep 0.03
+        printf '%s\n' \
+            "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[{\"type\":\"btn\",\"data\":{\"down\":true,\"button\":\"${button}\"}},{\"type\":\"btn\",\"data\":{\"down\":false,\"button\":\"${button}\"}}]}}"
+        printf '%s\n' \
+            "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[{\"type\":\"btn\",\"data\":{\"down\":true,\"button\":\"${button}\"}},{\"type\":\"btn\",\"data\":{\"down\":false,\"button\":\"${button}\"}}]}}"
+        sleep 0.03
+        printf '%s\n' \
+            '{"execute":"input-send-event","arguments":{"events":[{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"meta_l"}}}]}}'
+    } | socat - "UNIX-CONNECT:${qmp_socket}" >/dev/null
+}
+
 {
     sleep 6
     monitor_type "status"
@@ -182,6 +208,11 @@ qmp_wheel() {
     echo "sendkey meta_l-shift-pgup 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-workspace-moved-up.ppm"
+    qmp_wheel_burst down
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-wheel-cooldown.ppm"
+    qmp_wheel mod up
+    sleep 1
     qmp_wheel mod down
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-wheel-workspace-down.ppm"
@@ -570,6 +601,15 @@ grep -Fq "SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 n
 grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace reordered action=move-workspace-up workspace=1 name=main previous=2 focused=0 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-workspace-up changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=false cooldown_ms=150" "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=true cooldown_ms=150" "${serial_log}")" -ne 2 ]]; then
+    echo "niri cooldown did not accept exactly one event from the two-packet burst" >&2
+    exit 1
+fi
+if [[ "$(grep -Fc "source=ps2-intellimouse accepted=false cooldown_ms=150" "${serial_log}")" -ne 1 ]]; then
+    echo "niri cooldown suppressed an unexpected number of wheel events" >&2
+    exit 1
+fi
 grep -Fq "SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: wheel binding direction=up modifiers=0x1 action=focus-workspace-up source=ps2-intellimouse" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: wheel binding direction=down modifiers=0x5 action=focus-column-right source=ps2-intellimouse" "${serial_log}"
@@ -730,6 +770,7 @@ test -s "${repo_dir}/evidence/niri-focus-column-first.ppm"
 test -s "${repo_dir}/evidence/niri-workspace-moved-down.ppm"
 test -s "${repo_dir}/evidence/niri-workspace-reordered-name.ppm"
 test -s "${repo_dir}/evidence/niri-workspace-moved-up.ppm"
+test -s "${repo_dir}/evidence/niri-wheel-cooldown.ppm"
 test -s "${repo_dir}/evidence/niri-wheel-workspace-down.ppm"
 test -s "${repo_dir}/evidence/niri-wheel-column-focus-right.ppm"
 test -s "${repo_dir}/evidence/niri-wheel-column-workspace-down.ppm"
@@ -810,6 +851,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-workspace-reordered-name.png"
     pnmtopng "${repo_dir}/evidence/niri-workspace-moved-up.ppm" \
         >"${repo_dir}/evidence/niri-workspace-moved-up.png"
+    pnmtopng "${repo_dir}/evidence/niri-wheel-cooldown.ppm" \
+        >"${repo_dir}/evidence/niri-wheel-cooldown.png"
     pnmtopng "${repo_dir}/evidence/niri-wheel-workspace-down.ppm" \
         >"${repo_dir}/evidence/niri-wheel-workspace-down.png"
     pnmtopng "${repo_dir}/evidence/niri-wheel-column-focus-right.ppm" \
