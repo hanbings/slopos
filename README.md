@@ -38,7 +38,7 @@ QEMU 另挂载一个可重复生成的 256 MiB、双 block-group ext4 root disk�
 - 系统状态窗口；
 - 配置 surface。
 
-桌面现在已有跨运行时 reload 的双向用户态服务边界，但尚未整体迁出内核。`/sbin/slop-shell` 是 lifecycle-aware 的常驻 policy/provider 进程：它验证 root VFS 的 Waybar/swww 配置、等待每一代 `policy-applied` 与 `config-applied`，并在有效配置更新后重新读取和提交；PID 1 则常驻 `wait4` 作为 supervisor。kernel 仍持有配置文件发现/parse bank、niri 状态机、输入、swww daemon state、GOP renderer 与窗口 surface。系统内还没有普通配置编辑器或文件变更 watcher，Waybar 没有完整 GTK CSS、Pango、action 或硬件 backend；swww `img <path>` 已能经异步 block task 从 root VFS 加载最多 8 KiB 的 P3/P6 PNM，以及非交错的 1/2/4/8/16-bit 灰度、8/16-bit 灰度透明/RGB/RGBA、1/2/4/8-bit indexed palette 与 `tRNS` PNG。policy provider 还不是 Unix-socket/Wayland layer-shell daemon，PNG 也仍受固定压缩与解码 bank 限制。完整兼容边界见 [docs/desktop-shell.md](docs/desktop-shell.md)，保守完成度见 [docs/status.md](docs/status.md)。
+桌面现在已有跨运行时 reload 的双向用户态服务边界，但尚未整体迁出内核。`/sbin/slop-shell` 是 lifecycle-aware 的常驻 policy/provider 进程：它验证 root VFS 的 Waybar/swww 配置、等待每一代 `policy-applied` 与 `config-applied`，并在有效配置更新后重新读取和提交；PID 1 则常驻 `wait4` 作为 supervisor。kernel 仍持有配置文件发现/parse bank、niri 状态机、输入、swww daemon state、GOP renderer 与窗口 surface。系统内还没有普通配置编辑器或文件变更 watcher，Waybar 没有完整 GTK CSS、Pango、action 或硬件 backend；swww `img <path>` 已能经异步 block task 从 root VFS 加载最多 8 KiB 的 P3/P6 PNM，以及 non-interlaced/Adam7 的 1/2/4/8/16-bit 灰度、8/16-bit 灰度透明/RGB/RGBA、1/2/4/8-bit indexed palette 与 `tRNS` PNG。policy provider 还不是 Unix-socket/Wayland layer-shell daemon，PNG 也仍受固定压缩与解码 bank 限制。完整兼容边界见 [docs/desktop-shell.md](docs/desktop-shell.md)，保守完成度见 [docs/status.md](docs/status.md)。
 
 ## 构建与运行
 

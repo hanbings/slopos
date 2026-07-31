@@ -2,6 +2,15 @@
 
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
 const MAX_BITS: usize = 15;
+const ADAM7_PASSES: [(usize, usize, usize, usize); 7] = [
+    (0, 0, 8, 8),
+    (4, 0, 8, 8),
+    (0, 4, 4, 8),
+    (2, 0, 4, 4),
+    (0, 2, 2, 4),
+    (1, 0, 2, 2),
+    (0, 1, 1, 2),
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PngError {
@@ -59,6 +68,7 @@ struct PngMetadata {
     palette: [u32; 256],
     palette_length: usize,
     transparency: Transparency,
+    interlaced: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -81,33 +91,56 @@ pub fn decode_png_rgb(input: &mut [u8], output: &mut [u8]) -> Result<DecodedPng,
         .map(|bits| bits / 8)
         .ok_or(PngError::OutputTooLarge)?;
     let filter_bytes_per_pixel = bits_per_pixel.div_ceil(8).max(1);
-    let decompressed_length = row_bytes
-        .checked_add(1)
-        .and_then(|stride| stride.checked_mul(metadata.height))
-        .ok_or(PngError::OutputTooLarge)?;
+    let decompressed_length = if metadata.interlaced {
+        adam7_decompressed_length(metadata.width, metadata.height, bits_per_pixel)?
+    } else {
+        row_bytes
+            .checked_add(1)
+            .and_then(|stride| stride.checked_mul(metadata.height))
+            .ok_or(PngError::OutputTooLarge)?
+    };
     let rgb_length = metadata
         .width
         .checked_mul(metadata.height)
         .and_then(|pixels| pixels.checked_mul(3))
         .ok_or(PngError::OutputTooLarge)?;
-    if decompressed_length.max(rgb_length) > output.len() {
+    let scratch_start = if metadata.interlaced { rgb_length } else { 0 };
+    let required_length = if metadata.interlaced {
+        rgb_length
+            .checked_add(decompressed_length)
+            .ok_or(PngError::OutputTooLarge)?
+    } else {
+        decompressed_length.max(rgb_length)
+    };
+    if required_length > output.len() {
         return Err(PngError::OutputTooLarge);
     }
     compact_idat(input, metadata.idat_length)?;
     let produced = inflate_zlib(
         &input[..metadata.idat_length],
-        &mut output[..decompressed_length],
+        &mut output[scratch_start..scratch_start + decompressed_length],
     )?;
     if produced != decompressed_length {
         return Err(PngError::InvalidDeflate);
     }
-    unfilter_scanlines(
-        &mut output[..decompressed_length],
-        row_bytes,
-        metadata.height,
-        filter_bytes_per_pixel,
-    )?;
-    compact_rgb(output, &metadata)?;
+    if metadata.interlaced {
+        decode_adam7_rgb(
+            output,
+            scratch_start,
+            decompressed_length,
+            bits_per_pixel,
+            filter_bytes_per_pixel,
+            &metadata,
+        )?;
+    } else {
+        unfilter_scanlines(
+            &mut output[..decompressed_length],
+            row_bytes,
+            metadata.height,
+            filter_bytes_per_pixel,
+        )?;
+        compact_rgb(output, &metadata)?;
+    }
     Ok(DecodedPng {
         width: metadata.width as u16,
         height: metadata.height as u16,
@@ -166,7 +199,7 @@ fn validate_png(input: &[u8]) -> Result<PngMetadata, PngError> {
             b"PLTE" => {
                 let (color_type, bit_depth) = header
                     .as_ref()
-                    .map(|(_, _, color_type, bit_depth, _)| (*color_type, *bit_depth))
+                    .map(|(_, _, color_type, bit_depth, _, _)| (*color_type, *bit_depth))
                     .ok_or(PngError::InvalidChunkOrder)?;
                 if saw_palette
                     || saw_transparency
@@ -189,7 +222,7 @@ fn validate_png(input: &[u8]) -> Result<PngMetadata, PngError> {
             b"tRNS" => {
                 let (color_type, bit_depth) = header
                     .as_ref()
-                    .map(|(_, _, color_type, bit_depth, _)| (*color_type, *bit_depth))
+                    .map(|(_, _, color_type, bit_depth, _, _)| (*color_type, *bit_depth))
                     .ok_or(PngError::InvalidChunkOrder)?;
                 if saw_transparency || saw_idat {
                     return Err(PngError::InvalidChunkOrder);
@@ -247,7 +280,8 @@ fn validate_png(input: &[u8]) -> Result<PngMetadata, PngError> {
     if idat_length == 0 {
         return Err(PngError::MissingImageData);
     }
-    let (width, height, color_type, bit_depth, channels) = header.ok_or(PngError::MissingHeader)?;
+    let (width, height, color_type, bit_depth, channels, interlaced) =
+        header.ok_or(PngError::MissingHeader)?;
     if color_type == 3 && !saw_palette {
         return Err(PngError::MissingPalette);
     }
@@ -261,6 +295,7 @@ fn validate_png(input: &[u8]) -> Result<PngMetadata, PngError> {
         palette,
         palette_length,
         transparency,
+        interlaced,
     })
 }
 
@@ -305,7 +340,7 @@ fn png_chunk(input: &[u8], offset: usize) -> Result<PngChunk<'_>, PngError> {
     Ok(PngChunk { kind, data, next })
 }
 
-fn parse_header(data: &[u8]) -> Result<(usize, usize, u8, u8, usize), PngError> {
+fn parse_header(data: &[u8]) -> Result<(usize, usize, u8, u8, usize, bool), PngError> {
     if data.len() != 13 {
         return Err(PngError::InvalidHeader);
     }
@@ -332,10 +367,46 @@ fn parse_header(data: &[u8]) -> Result<(usize, usize, u8, u8, usize), PngError> 
     if data[10] != 0 || data[11] != 0 {
         return Err(PngError::InvalidHeader);
     }
-    if data[12] != 0 {
+    if data[12] > 1 {
         return Err(PngError::UnsupportedInterlace);
     }
-    Ok((width, height, data[9], data[8], channels))
+    Ok((width, height, data[9], data[8], channels, data[12] == 1))
+}
+
+fn adam7_decompressed_length(
+    width: usize,
+    height: usize,
+    bits_per_pixel: usize,
+) -> Result<usize, PngError> {
+    let mut length = 0usize;
+    for (start_x, start_y, step_x, step_y) in ADAM7_PASSES {
+        let pass_width = pass_extent(width, start_x, step_x);
+        let pass_height = pass_extent(height, start_y, step_y);
+        if pass_width == 0 || pass_height == 0 {
+            continue;
+        }
+        let row_bytes = pass_width
+            .checked_mul(bits_per_pixel)
+            .and_then(|bits| bits.checked_add(7))
+            .map(|bits| bits / 8)
+            .ok_or(PngError::OutputTooLarge)?;
+        let pass_length = row_bytes
+            .checked_add(1)
+            .and_then(|stride| stride.checked_mul(pass_height))
+            .ok_or(PngError::OutputTooLarge)?;
+        length = length
+            .checked_add(pass_length)
+            .ok_or(PngError::OutputTooLarge)?;
+    }
+    Ok(length)
+}
+
+fn pass_extent(size: usize, start: usize, step: usize) -> usize {
+    if size <= start {
+        0
+    } else {
+        (size - start).div_ceil(step)
+    }
 }
 
 fn compact_idat(input: &mut [u8], expected: usize) -> Result<(), PngError> {
@@ -791,6 +862,155 @@ fn paeth(left: u8, up: u8, upper_left: u8) -> u8 {
     }
 }
 
+fn decode_adam7_rgb(
+    bytes: &mut [u8],
+    scratch_start: usize,
+    decompressed_length: usize,
+    bits_per_pixel: usize,
+    filter_bytes_per_pixel: usize,
+    metadata: &PngMetadata,
+) -> Result<(), PngError> {
+    let (rgb, scratch) = bytes.split_at_mut(scratch_start);
+    let scratch = &mut scratch[..decompressed_length];
+    let mut offset = 0usize;
+    for (start_x, start_y, step_x, step_y) in ADAM7_PASSES {
+        let pass_width = pass_extent(metadata.width, start_x, step_x);
+        let pass_height = pass_extent(metadata.height, start_y, step_y);
+        if pass_width == 0 || pass_height == 0 {
+            continue;
+        }
+        let row_bytes = (pass_width * bits_per_pixel).div_ceil(8);
+        let stride = row_bytes + 1;
+        let pass_length = stride * pass_height;
+        let pass_end = offset + pass_length;
+        unfilter_scanlines(
+            &mut scratch[offset..pass_end],
+            row_bytes,
+            pass_height,
+            filter_bytes_per_pixel,
+        )?;
+        for pass_y in 0..pass_height {
+            let source_start = offset + pass_y * stride + 1;
+            let source_row = &scratch[source_start..source_start + row_bytes];
+            let y = start_y + pass_y * step_y;
+            for pass_x in 0..pass_width {
+                let (red, green, blue) = decode_row_pixel(source_row, pass_x, metadata)?;
+                let x = start_x + pass_x * step_x;
+                let destination = (y * metadata.width + x) * 3;
+                rgb[destination] = red;
+                rgb[destination + 1] = green;
+                rgb[destination + 2] = blue;
+            }
+        }
+        offset = pass_end;
+    }
+    if offset != decompressed_length {
+        return Err(PngError::InvalidDeflate);
+    }
+    Ok(())
+}
+
+fn decode_row_pixel(
+    row: &[u8],
+    pixel: usize,
+    metadata: &PngMetadata,
+) -> Result<(u8, u8, u8), PngError> {
+    if metadata.color_type == 3 {
+        let sample = packed_sample(row, pixel, metadata.bit_depth);
+        let index = usize::from(sample);
+        if index >= metadata.palette_length {
+            return Err(PngError::InvalidPaletteIndex);
+        }
+        let color = metadata.palette[index];
+        let alpha = (color >> 24) as u8;
+        return Ok((
+            alpha_blend_black((color >> 16) as u8, alpha),
+            alpha_blend_black((color >> 8) as u8, alpha),
+            alpha_blend_black(color as u8, alpha),
+        ));
+    }
+
+    if metadata.color_type == 0 && metadata.bit_depth < 8 {
+        let sample = packed_sample(row, pixel, metadata.bit_depth);
+        let maximum = u8::MAX >> (8 - metadata.bit_depth);
+        let value = if matches!(metadata.transparency, Transparency::Gray(key) if u16::from(sample) == key)
+        {
+            0
+        } else {
+            scale_gray_sample(sample, maximum)
+        };
+        return Ok((value, value, value));
+    }
+
+    let sample_bytes = usize::from(metadata.bit_depth / 8);
+    let source = pixel * metadata.channels * sample_bytes;
+    let sample =
+        |channel| read_png_sample(row, source + channel * sample_bytes, metadata.bit_depth);
+    match metadata.color_type {
+        0 => {
+            let gray = sample(0);
+            let value = if matches!(metadata.transparency, Transparency::Gray(key) if gray == key) {
+                0
+            } else {
+                scale_png_sample(gray, metadata.bit_depth)
+            };
+            Ok((value, value, value))
+        }
+        2 => {
+            let color = (sample(0), sample(1), sample(2));
+            if matches!(
+                metadata.transparency,
+                Transparency::Rgb(red, green, blue) if color == (red, green, blue)
+            ) {
+                Ok((0, 0, 0))
+            } else {
+                Ok((
+                    scale_png_sample(color.0, metadata.bit_depth),
+                    scale_png_sample(color.1, metadata.bit_depth),
+                    scale_png_sample(color.2, metadata.bit_depth),
+                ))
+            }
+        }
+        4 => {
+            let gray = scale_png_sample(sample(0), metadata.bit_depth);
+            let alpha = scale_png_sample(sample(1), metadata.bit_depth);
+            let value = alpha_blend_black(gray, alpha);
+            Ok((value, value, value))
+        }
+        6 => {
+            let alpha = scale_png_sample(sample(3), metadata.bit_depth);
+            Ok((
+                alpha_blend_black(scale_png_sample(sample(0), metadata.bit_depth), alpha),
+                alpha_blend_black(scale_png_sample(sample(1), metadata.bit_depth), alpha),
+                alpha_blend_black(scale_png_sample(sample(2), metadata.bit_depth), alpha),
+            ))
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn packed_sample(row: &[u8], pixel: usize, bit_depth: u8) -> u8 {
+    let bit = pixel * usize::from(bit_depth);
+    let shift = 8 - usize::from(bit_depth) - bit % 8;
+    row[bit / 8] >> shift & (u8::MAX >> (8 - bit_depth))
+}
+
+fn read_png_sample(row: &[u8], offset: usize, bit_depth: u8) -> u16 {
+    if bit_depth == 8 {
+        u16::from(row[offset])
+    } else {
+        read_u16_sample(row, offset)
+    }
+}
+
+fn scale_png_sample(sample: u16, bit_depth: u8) -> u8 {
+    if bit_depth == 8 {
+        sample as u8
+    } else {
+        scale_u16_sample(sample)
+    }
+}
+
 fn compact_rgb(bytes: &mut [u8], metadata: &PngMetadata) -> Result<(), PngError> {
     let width = metadata.width;
     let height = metadata.height;
@@ -1036,6 +1256,11 @@ mod tests {
     const RGB16_TRANSPARENT_PNG: [u8; 106] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x02\x10\x02\x00\x00\x00\xad\x44\x46\x30\x00\x00\x00\x06tRNS\x10\x00\x20\x00\x30\x00\x12\x04\x9c\xc7\x00\x00\x00\x1fIDAT\x78\xda\x63\x10\x60\x50\x60\x30\x60\xf8\xff\xbf\x81\x01\x08\x84\x4c\xc2\x2a\x66\xed\x61\x60\x04\xf2\x19\x00\x4f\x71\x07\x48\x8d\xc0\x36\x63\x00\x00\x00\x00IEND\xae\x42\x60\x82";
     const GRAY_ALPHA16_PNG: [u8; 80] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x02\x10\x04\x00\x00\x00\x88\x2f\x19\xec\x00\x00\x00\x17IDAT\x78\xda\x63\xf8\xff\xbf\x81\xa1\x81\xe1\xff\x7f\x06\x07\x20\x04\x52\x0c\x00\x4e\x55\x07\x7b\x42\x5e\x0b\x60\x00\x00\x00\x00IEND\xae\x42\x60\x82";
     const RGBA16_PNG: [u8; 87] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x02\x10\x06\x00\x00\x00\x22\x26\xd1\x67\x00\x00\x00\x1eIDAT\x78\xda\x63\xf8\xff\x9f\x01\x08\x1a\xc0\xf8\x3f\x10\x30\x38\x00\x19\x07\x80\xe4\x7f\x30\x60\x60\x00\x00\xde\xf2\x0e\xb5\x36\xd1\x93\xb8\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const ADAM7_INDEX2_PNG: [u8; 141] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x05\x00\x00\x00\x05\x02\x03\x00\x00\x01\x87\x06\xfe\xe0\x00\x00\x00\x0cPLTE\xff\x00\x00\x00\xff\x00\x00\x00\xff\xff\xff\xff\xfb\x00\x60\xf6\x00\x00\x00\x04tRNS\xff\x80\x00\xff\xa1\xa1\x94\x66\x00\x00\x00\x10IDAT\x78\xda\x63\x60\x60\x64\x60\x62\x60\x6e\x60\x61\x60\x51\x60\x28\x35\xe3\x8d\x9a\x00\x00\x00\x10IDAT\x60\x2c\x60\x62\x60\xdc\x78\x9e\x89\x81\x01\x00\x1a\xbb\x03\x15\xcf\xfa\x27\x27\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const ADAM7_GRAY4_PNG: [u8; 118] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x05\x00\x00\x00\x05\x04\x00\x00\x00\x01\x1a\xf3\xa4\xae\x00\x00\x00\x02tRNS\x00\x05\x06\xf9\x39\xb7\x00\x00\x00\x12IDAT\x78\xda\x63\x60\x60\x74\x60\x3a\xc0\xac\xc0\x72\x80\x25\xc3\x82\x41\x98\x6a\x87\x36\x88\x00\x00\x00\x11IDAT\xb1\x92\x29\x8d\xd1\x44\x49\x8a\x29\x2d\x2d\x01\x00\x40\x81\x05\x23\x14\xfd\xa8\x4b\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const ADAM7_RGB16_PNG: [u8; 165] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x10\x02\x00\x00\x01\x01\x04\xe5\xfc\x00\x00\x00\x06tRNS\x11\x11\x22\x22\x33\x33\x81\xe5\x99\x80\x00\x00\x00\x27IDAT\x78\xda\x25\x8b\x51\x11\xc0\x20\x0c\x43\xc3\x98\x92\x58\xa8\x85\x5a\xa8\x85\x5a\xc0\x42\x2d\x60\x01\x51\xb3\x80\x85\x8d\x25\x1f\xef\x92\x7b\x17\xe0\x4f\xcf\xce\xf3\x6b\x33\x00\x00\x00\x27IDAT\x04\xdc\x6f\xa0\xca\x5d\x03\x66\x00\x39\x27\x90\xd9\xcc\xaa\x32\x65\xda\x01\x29\xff\x7c\xd9\xbb\x8a\x8c\xb8\xf4\x17\x23\xd6\x1a\x43\xfd\x05\x7c\xfa\x1b\x08\xbc\xe4\x23\x55\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const ADAM7_GRAY_ALPHA16_PNG: [u8; 129] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x05\x00\x00\x00\x03\x10\x04\x00\x00\x01\xd6\xa8\xe1\xa6\x00\x00\x00\x1eIDAT\x78\xda\x63\x60\x00\x02\x46\x17\x97\xd0\x10\x66\x25\xa5\x55\xab\x58\x5c\x5c\xd2\xd2\x94\x94\x56\xaf\x02\x71\x18\x04\x05\x48\x79\x19\xe8\x00\x00\x00\x1eIDAT\x43\x43\x8d\x8d\xff\xff\x67\x0c\x0d\xdd\xbd\x1b\x24\xca\xa8\xa4\x64\x6c\x0c\x12\x85\xe0\x30\x30\x0d\x00\x54\xf7\x12\x1d\x97\x88\x65\x52\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const ADAM7_RGBA16_PNG: [u8; 147] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x04\x00\x00\x00\x04\x10\x06\x00\x00\x01\x8e\x66\x72\xab\x00\x00\x00\x27IDAT\x78\xda\x6d\x8c\x51\x0d\x80\x30\x0c\x05\x6f\x80\x92\x5a\xa8\x85\x22\x61\x16\xaa\xa5\x48\x98\x85\x6a\x99\x28\x96\x40\x7f\x08\xf7\x73\xc9\xcb\xe5\xc1\xcb\xee\xaf\x53\x67\x43\x00\x00\x00\x27IDAT\x0e\x66\x11\x07\x64\xda\xa2\x06\x54\x41\xc4\x6c\x0c\x70\x9f\xb3\xa9\x66\xba\x47\x3c\xc5\x15\x0d\x7a\x97\x45\x95\x5f\x6f\xf5\xf9\xef\xd3\x6e\x18\x93\x20\x54\x4f\x57\x89\x13\x00\x00\x00\x00IEND\xae\x42\x60\x82";
 
     #[test]
     fn inflates_stored_fixed_and_dynamic_blocks() {
@@ -1072,7 +1297,7 @@ mod tests {
     #[test]
     fn decodes_multichunk_filtered_rgb_and_rgba_pngs() {
         let mut rgb_png = RGB_PNG;
-        let mut output = [0u8; 128];
+        let mut output = [0u8; 512];
         let decoded = decode_png_rgb(&mut rgb_png, &mut output).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (3, 2));
         assert_eq!(decoded.rgb_length(), 18);
@@ -1178,13 +1403,53 @@ mod tests {
             &output[..decoded.rgb_length()],
             b"\x80\x00\x00\x00\x80\xff\x10\x20\x30\x00\x00\x00"
         );
+
+        let mut adam7_index2_png = ADAM7_INDEX2_PNG;
+        assert_eq!(
+            decode_png_rgb(&mut adam7_index2_png, &mut output[..98]),
+            Err(PngError::OutputTooLarge)
+        );
+        let mut adam7_index2_png = ADAM7_INDEX2_PNG;
+        let decoded = decode_png_rgb(&mut adam7_index2_png, &mut output).unwrap();
+        assert_eq!(
+            &output[..decoded.rgb_length()],
+            b"\xff\x00\x00\x00\x80\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x80\x00\x00\x00\x00\xff\x00\x00\x00\x80\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x80\x00\x00\x00\x00\xff\x00\x00\x00\x80\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00"
+        );
+
+        let mut adam7_gray4_png = ADAM7_GRAY4_PNG;
+        let decoded = decode_png_rgb(&mut adam7_gray4_png, &mut output).unwrap();
+        assert_eq!(
+            &output[..decoded.rgb_length()],
+            b"\x00\x00\x00\x11\x11\x11\x22\x22\x22\x33\x33\x33\x44\x44\x44\x33\x33\x33\x44\x44\x44\x00\x00\x00\x66\x66\x66\x77\x77\x77\x66\x66\x66\x77\x77\x77\x88\x88\x88\x99\x99\x99\xaa\xaa\xaa\x99\x99\x99\xaa\xaa\xaa\xbb\xbb\xbb\xcc\xcc\xcc\xdd\xdd\xdd\xcc\xcc\xcc\xdd\xdd\xdd\xee\xee\xee\xff\xff\xff\x00\x00\x00"
+        );
+
+        let mut adam7_rgb16_png = ADAM7_RGB16_PNG;
+        let decoded = decode_png_rgb(&mut adam7_rgb16_png, &mut output).unwrap();
+        assert_eq!(
+            &output[..decoded.rgb_length()],
+            b"\x00\x00\x00\x33\x00\x22\x66\x00\x44\x99\x00\x66\x00\x44\x22\x33\x44\x44\x00\x00\x00\x99\x44\x88\x00\x88\x44\x33\x88\x66\x66\x88\x88\x99\x88\xaa\x00\xcc\x66\x33\xcc\x88\x66\xcc\xaa\x99\xcc\xcc"
+        );
+
+        let mut adam7_gray_alpha16_png = ADAM7_GRAY_ALPHA16_PNG;
+        let decoded = decode_png_rgb(&mut adam7_gray_alpha16_png, &mut output).unwrap();
+        assert_eq!(
+            &output[..decoded.rgb_length()],
+            b"\x00\x00\x00\x06\x06\x06\x17\x17\x17\x33\x33\x33\x17\x17\x17\x07\x07\x07\x1b\x1b\x1b\x3b\x3b\x3b\x11\x11\x11\x36\x36\x36\x1b\x1b\x1b\x3e\x3e\x3e\x07\x07\x07\x30\x30\x30\x64\x64\x64"
+        );
+
+        let mut adam7_rgba16_png = ADAM7_RGBA16_PNG;
+        let decoded = decode_png_rgb(&mut adam7_rgba16_png, &mut output).unwrap();
+        assert_eq!(
+            &output[..decoded.rgb_length()],
+            b"\x00\x00\x00\x0e\x00\x09\x36\x00\x24\x7a\x00\x52\x00\x0b\x05\x14\x22\x1b\x44\x39\x44\x8f\x4f\x7f\x00\x2d\x12\x1b\x5b\x36\x52\x88\x6d\x0a\x0b\x0b\x00\x66\x29\x22\xaa\x5b\x5f\xee\x9f\x1f\x33\x29"
+        );
     }
 
     #[test]
     fn rejects_corrupt_png_boundaries() {
         let mut png = RGB_PNG;
         png[20] ^= 1;
-        let mut output = [0u8; 128];
+        let mut output = [0u8; 512];
         assert_eq!(
             decode_png_rgb(&mut png, &mut output),
             Err(PngError::InvalidChunkCrc)

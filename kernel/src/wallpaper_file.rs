@@ -10,6 +10,7 @@ use slopos_shell::{
 
 pub const WALLPAPER_FILE_CAPACITY: usize = 8 * 1024;
 const MAX_DECODED_PIXELS: usize = 2_048;
+const WALLPAPER_DECODE_CAPACITY: usize = MAX_DECODED_PIXELS * 12;
 const RESULT_BANKS: usize = 2;
 const OUTPUT_CAPACITY: usize = 32;
 const NO_BANK: usize = usize::MAX;
@@ -217,7 +218,7 @@ struct WallpaperFileBank {
     request: WallpaperFileRequest,
     image: [u8; WALLPAPER_FILE_CAPACITY],
     image_length: usize,
-    decoded: [u8; WALLPAPER_FILE_CAPACITY],
+    decoded: [u8; WALLPAPER_DECODE_CAPACITY],
     decoded_length: usize,
     decoded_dimensions: (u16, u16),
     format: WallpaperFileFormat,
@@ -230,7 +231,7 @@ impl WallpaperFileBank {
             request: WallpaperFileRequest::empty(),
             image: [0; WALLPAPER_FILE_CAPACITY],
             image_length: 0,
-            decoded: [0; WALLPAPER_FILE_CAPACITY],
+            decoded: [0; WALLPAPER_DECODE_CAPACITY],
             decoded_length: 0,
             decoded_dimensions: (0, 0),
             format: WallpaperFileFormat::P3,
@@ -299,7 +300,7 @@ impl WallpaperFileWriter {
             if bank.image[..self.length].starts_with(b"\x89PNG\r\n\x1a\n") {
                 match decode_png_rgb(
                     &mut bank.image[..self.length],
-                    &mut bank.decoded[..WALLPAPER_FILE_CAPACITY],
+                    &mut bank.decoded[..WALLPAPER_DECODE_CAPACITY],
                 ) {
                     Ok(decoded)
                         if usize::from(decoded.width())
