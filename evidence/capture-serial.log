@@ -4,8 +4,8 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=796352
-SLOPOS-UEFI: kernel mapped 0x4000000..0x40ab000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=806568
+SLOPOS-UEFI: kernel mapped 0x4000000..0x40af000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: user ELF loaded bytes=26344 base=0xdf47000
 SLOPOS-UEFI: Boot Services exited descriptors=118
@@ -17,7 +17,7 @@ SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
 SLOPOS-KERNEL: user ELF available base=0xdf47000 bytes=26344
 SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
 SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
-SLOPOS-MM: frame allocator initialized regions=8 free_frames=52855 probe=0x100000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=52851 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
@@ -43,11 +43,11 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26344 blocks=7 matches_boot=true
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-VFS: executable loaded path=/sbin/slop-shell inode=24 bytes=38176 blocks=10 matches_boot=not-required role=desktop-service
-SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64 entry=0x40000000 segments=1 file_bytes=26344 load_bytes=2608 memory_bytes=2608 address_space=0x21b000 user_code=0x40000000 user_stack=0x40006000 code_frames=0x21f000/0x220000/0x221000 stack_frames=0x222000/0x223000/0x224000 code=user-readonly stack=user-writable kernel=supervisor
-SLOPOS-PROCESS: pid=1 initial_stack abi=linux-x86_64 rsp=0x40005ec0 aligned=16 stack_pages=3 argc=2 argv0=/sbin/slop-init argv1=--system envc=3 auxv_pairs=9 bytes=320
-SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-shell argv1=--session format=elf64 entry=0x40000000 segments=1 file_bytes=38176 load_bytes=11592 memory_bytes=11592 address_space=0x225000 user_code=0x40000000 user_stack=0x40006000 code_frames=0x229000/0x22a000/0x22b000 stack_frames=0x22c000/0x22d000/0x22e000 code=user-readonly stack=user-writable kernel=supervisor
-SLOPOS-PROCESS: pid=2 initial_stack abi=linux-x86_64 rsp=0x40005ea0 aligned=16 stack_pages=3 argc=2 argv0=/sbin/slop-shell argv1=--session envc=4 auxv_pairs=9 bytes=352
+SLOPOS-VFS: executable loaded path=/sbin/slop-shell inode=24 bytes=40960 blocks=10 matches_boot=not-required role=desktop-service
+SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64 entry=0x40000000 segments=1 file_bytes=26344 load_bytes=2608 memory_bytes=2608 address_space=0x21b000 user_code=0x40000000 user_stack=0x40007000 code_frames=0x21f000/0x220000/0x221000/0x222000 stack_frames=0x223000/0x224000/0x225000 code=user-readonly stack=user-writable kernel=supervisor
+SLOPOS-PROCESS: pid=1 initial_stack abi=linux-x86_64 rsp=0x40006ec0 aligned=16 stack_pages=3 argc=2 argv0=/sbin/slop-init argv1=--system envc=3 auxv_pairs=9 bytes=320
+SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-shell argv1=--session format=elf64 entry=0x40000000 segments=1 file_bytes=40960 load_bytes=12984 memory_bytes=12984 address_space=0x226000 user_code=0x40000000 user_stack=0x40007000 code_frames=0x22a000/0x22b000/0x22c000/0x22d000 stack_frames=0x22e000/0x22f000/0x230000 code=user-readonly stack=user-writable kernel=supervisor
+SLOPOS-PROCESS: pid=2 initial_stack abi=linux-x86_64 rsp=0x40006ea0 aligned=16 stack_pages=3 argc=2 argv0=/sbin/slop-shell argv1=--session envc=4 auxv_pairs=9 bytes=352
 SLOPOS-PROCESS: table initialized capacity=4 processes=2 pids=1/2 roles=init/desktop-service states=ready/ready fd_capacity=8 per_process_fds=true
 SLOPOS-SYSCALL: fast path ready instruction=syscall return=sysretq star=0x10000800000000 lstar=0x40013e3 fmask=0x47700 efer_sce=true
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
@@ -114,25 +114,11 @@ SLOPOS-VFS: process close complete pid=2 fd=3 inode=17 async=false
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=1 protocol=1 capabilities=waybar-provider/swww-policy/wayland-surface cpu=0 memory=36 wallpaper=aurora config_hashes=0xd34d4a92c88d065b/0xb6ea39f5fd14c33a
 SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=sysretq nr=1397489665 commit_bytes=40 generation=1 origin=cpl3 result=0
-SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=policy-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=64 user_pages=2 origin=cpl3
 SLOPOS-SWWW: policy applied owner_pid=2 image=/usr/share/backgrounds/slopos-aurora.ppm output=SLOPOS-1 transition=simple step=32 fps=30
 SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2 capabilities=waybar-provider/swww-policy/wayland-surface cpu=0 memory=36 wallpaper=/usr/share/backgrounds/slopos-aurora.ppm renderer=kernel-mechanism
 SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=1 owner_pid=2 event=policy-applied wake=block-task
-SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=41 socket domain=AF_UNIX type=SOCK_STREAM protocol=0 fd=3 origin=cpl3
-SLOPOS-IPC: AF_UNIX connected pid=2 path=/run/slopos/wayland-0 client=1:1 server=2:1 transport=bounded-stream
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=42 connect fd=3 family=AF_UNIX path=/run/slopos/wayland-0 origin=cpl3 result=0
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=12 user_pages=1 origin=cpl3
-SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=write requested=12 bytes=12 user_pages=1 async=true
-SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
-SLOPOS-WAYLAND-SERVER: registry advertised pid=2 sequence=1 registry=2 globals=wl_compositor/wl_shm/wl_seat/wl_output/xdg_wm_base wire_bytes=156
-SLOPOS-WAYLAND-SERVER: request received pid=2 transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes=12 scm_rights=false
-SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=1 sequence=1 wire_bytes=156 read_bytes=156
-SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=156 user_pages=1 async=true
-SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
-SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
-SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=64 user_pages=2 origin=cpl3
 SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true flushed=true
 SLOPOS-SCHED: pid=1 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
@@ -153,45 +139,107 @@ SLOPOS-SCHED: pid=1 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=18 origin=cpl3 result=18
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=61 wait4 child=any state=blocked origin=cpl3
 SLOPOS-SCHED: cooperative switch from=1 to=2 next_state=Runnable independent_cr3=true
+SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=policy-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=41 socket domain=AF_UNIX type=SOCK_STREAM protocol=0 fd=3 origin=cpl3
+SLOPOS-IPC: AF_UNIX connected pid=2 path=/run/slopos/wayland-0 client=1:1 server=2:1 transport=bounded-stream
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=42 connect fd=3 family=AF_UNIX path=/run/slopos/wayland-0 origin=cpl3 result=0
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=12 user_pages=1 origin=cpl3
+SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=write requested=12 bytes=12 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-WAYLAND-SERVER: registry advertised pid=2 sequence=1 registry=2 globals=wl_compositor/wl_shm/wl_seat/wl_output/xdg_wm_base wire_bytes=156
+SLOPOS-WAYLAND-SERVER: request received pid=2 transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes=12 scm_rights=false
+SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=1 sequence=1 wire_bytes=156 read_bytes=156 scm_rights=false
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=156 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=256 user_pages=1 origin=cpl3
 SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=write requested=256 bytes=256 user_pages=1 async=true
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=40 user_pages=1 origin=cpl3
-SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=write requested=40 bytes=40 user_pages=1 async=true
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=52 user_pages=1 origin=cpl3
+SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=write requested=52 bytes=52 user_pages=1 async=true
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
-SLOPOS-WAYLAND-SERVER: configure emitted pid=2 sequence=2 serial=1 seat=12 capabilities=pointer pointer=14 output=13 output_name=SLOPOS-1 mode=1024x768@60000 scale=1 shm=4 formats=argb8888/xrgb8888 xdg_surface=9 toplevel=10 geometry=32x24 states=empty wire_bytes=256
-SLOPOS-WAYLAND-SERVER: request received pid=2 transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes=296 scm_rights=false
-SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=2 sequence=2 wire_bytes=256 read_bytes=256
-SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=256 user_pages=1 async=true
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=47 recvmsg fd=3 requested=256 control_capacity=24 user_pages=1 origin=cpl3
+SLOPOS-WAYLAND-SERVER: configure emitted pid=2 sequence=2 serial=1 seat=12 capabilities=pointer/keyboard pointer=14 keyboard=15 keymap=xkb_v1 keymap_bytes=3307 repeat=25/600 output=13 output_name=SLOPOS-1 mode=1024x768@60000 scale=1 shm=4 formats=argb8888/xrgb8888 xdg_surface=9 toplevel=10 geometry=32x24 states=empty wire_bytes=288
+SLOPOS-WAYLAND-SERVER: request received pid=2 transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes=308 scm_rights=false
+SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=2 sequence=2 wire_bytes=288 read_bytes=256 scm_rights=true
+SLOPOS-IPC: process recvmsg complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=256 control=SCM_RIGHTS rights_fd=4 user_pages=1 async=true
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=319 memfd_create name=slopos-wayland-shm flags=0 fd=4 object=0:1 origin=cpl3
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=77 ftruncate fd=4 bytes=3072 object=0:1 origin=cpl3 result=0
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=9 mmap address=0x40006000 bytes=4096 prot=read/write flags=MAP_SHARED fd=4 offset=0 object=0:1 object_bytes=3072 physical=0x22f000 origin=cpl3
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=32 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=32 bytes=32 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=0 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=256 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=512 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=768 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=1024 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=1280 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=1536 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=1792 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=2048 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=2304 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=2560 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=2816 requested=256 bytes=256 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=235 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=3072 requested=235 bytes=235 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=1 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=3307 requested=1 bytes=0 object_bytes=3307 user_pages=1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd=4 origin=cpl3
+SLOPOS-IPC: process close complete pid=2 fd=4 object=memfd shared=0:1 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=319 memfd_create name=slopos-wayland-shm flags=0 fd=4 object=1:1 origin=cpl3
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=77 ftruncate fd=4 bytes=3072 object=1:1 origin=cpl3 result=0
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=9 mmap address=0x40007000 bytes=4096 prot=read/write flags=MAP_SHARED fd=4 offset=0 object=1:1 object_bytes=3072 physical=0x232000 origin=cpl3
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=46 sendmsg fd=3 requested=148 control=SCM_RIGHTS rights_fd=4 user_pages=1 origin=cpl3
 SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=sendmsg/SCM_RIGHTS requested=148 bytes=148 user_pages=1 async=true
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
-SLOPOS-WAYLAND-SERVER: commit accepted pid=2 generation=1 transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle=registry/configure/ack-configure objects=registry/compositor/shm/seat/pointer/output/xdg_toplevel surface=6 buffer=8 callback=11 seat=12 pointer=14 output=13 geometry=32x24 stride=128 format=1 title="SlopOS Userspace" app_id=slopos-system wire_bytes=148 pixel_bytes=3072
+SLOPOS-WAYLAND-SERVER: commit accepted pid=2 generation=1 transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle=registry/configure/ack-configure objects=registry/compositor/shm/seat/pointer/keyboard/output/xdg_toplevel surface=6 buffer=8 callback=11 seat=12 pointer=14 keyboard=15 output=13 geometry=32x24 stride=128 format=1 title="SlopOS Userspace" app_id=slopos-system wire_bytes=148 pixel_bytes=3072
 SLOPOS-WAYLAND-SERVER: request received pid=2 transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes=148 scm_rights=true
-SLOPOS-WAYLAND-SERVER: commit acknowledged generation=1 renderer=desktop active_bank=0 event_sequence=3 events=wl_pointer.enter/wl_buffer.release/wl_callback.done/wl_display.delete_id callback_data=1
+SLOPOS-WAYLAND-SERVER: commit acknowledged generation=1 renderer=desktop active_bank=0 event_sequence=3 events=wl_pointer.enter/wl_keyboard.enter/wl_buffer.release/wl_callback.done/wl_display.delete_id callback_data=1
 SLOPOS-WAYLAND-COMPOSITOR: surface rendered generation=1 owner_pid=2 app_id=slopos-system title="SlopOS Userspace" geometry=32x24 destination=system-window scale=3 buffer_format=xrgb8888 frame_callback=11
-SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=3 sequence=3 wire_bytes=56 read_bytes=56
-SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=56 user_pages=1 async=true
+SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=3 sequence=3 wire_bytes=76 read_bytes=76 scm_rights=false
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=76 user_pages=1 async=true
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=64 user_pages=1 origin=cpl3
 SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=write requested=64 bytes=64 user_pages=1 async=true
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
-SLOPOS-WAYLAND-SERVER: commit accepted pid=2 generation=2 transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle=configured-buffer-reuse objects=registry/compositor/shm/seat/pointer/output/xdg_toplevel surface=6 buffer=8 callback=11 seat=12 pointer=14 output=13 geometry=32x24 stride=128 format=1 title="SlopOS Userspace" app_id=slopos-system wire_bytes=64 pixel_bytes=3072
+SLOPOS-WAYLAND-SERVER: commit accepted pid=2 generation=2 transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle=configured-buffer-reuse objects=registry/compositor/shm/seat/pointer/keyboard/output/xdg_toplevel surface=6 buffer=8 callback=11 seat=12 pointer=14 keyboard=15 output=13 geometry=32x24 stride=128 format=1 title="SlopOS Userspace" app_id=slopos-system wire_bytes=64 pixel_bytes=3072
 SLOPOS-WAYLAND-SERVER: request received pid=2 transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes=64 scm_rights=false
 SLOPOS-WAYLAND-SERVER: commit acknowledged generation=2 renderer=desktop active_bank=1 event_sequence=4 events=wl_buffer.release/wl_callback.done/wl_display.delete_id callback_data=2
 SLOPOS-WAYLAND-COMPOSITOR: surface rendered generation=2 owner_pid=2 app_id=slopos-system title="SlopOS Userspace" geometry=32x24 destination=system-window scale=3 buffer_format=xrgb8888 frame_callback=11
-SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=3 sequence=4 wire_bytes=32 read_bytes=32
+SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=3 sequence=4 wire_bytes=32 read_bytes=32 scm_rights=false
 SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=32 user_pages=1 async=true
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd=4 origin=cpl3
-SLOPOS-IPC: process close complete pid=2 fd=4 object=memfd shared=0:1 async=false
+SLOPOS-IPC: process close complete pid=2 fd=4 object=memfd shared=1:1 async=false
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=28 origin=cpl3 result=28
 SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=config-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3

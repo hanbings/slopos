@@ -6,18 +6,18 @@
 - const-generic mount table，以 component 边界上的最长前缀选择 filesystem；
 - 最多 256-byte 的规范化 mount path；
 - const-generic fd table，从 fd 3 开始分配；
-- 每个 descriptor 保存 file node、local-socket generation handle或shared-memory generation handle；file object另保存 size、offset和read/write access mode；
+- 每个 descriptor 保存 file node、local-socket generation handle或shared-memory generation handle；file与shared-memory object都保存offset和read/write access mode，收到的keymap descriptor只能read；
 - bounded read/write window、成功后 offset advance、absolute seek 与 close。
 
-内核当前建立容量 4 的 namespace，把 ext4 注册为 filesystem 1 并挂到 `/`。mount/recovery 后，block task 经同一个 component walker 打开 inode 23 的 `/sbin/slop-init` 与 inode 24 的 `/sbin/slop-shell`，分别跨七/十个逻辑块读出 26344/38176 bytes。init 与 BootInfo 保留的引导副本完全匹配后，两份 VFS bytes 分别交给 ELF/process loader。
+内核当前建立容量 4 的 namespace，把 ext4 注册为 filesystem 1 并挂到 `/`。mount/recovery 后，block task 经同一个 component walker 打开 inode 23 的 `/sbin/slop-init` 与 inode 24 的 `/sbin/slop-shell`，分别跨七/十个逻辑块读出 26344/40960 bytes。init 与 BootInfo 保留的引导副本完全匹配后，两份 VFS bytes 分别交给 ELF/process loader。
 
-PID 1 与 PID 2 通过 `sched_yield` cooperative 交错，也在各自无 syscall TSC 窗口被 100 Hz timer 双向抢占。PID 1 发出 Linux x86-64 `openat(AT_FDCWD, "/etc/slopos/system.conf", O_RDONLY)`，root namespace 解析 inode 18；PID 2 首轮依次打开 inode 20 `/etc/slopos/waybar.jsonc` 与 inode 17 `/etc/slopos/swww.env`。fast handler 保存对应 user frame并回到 block task，各自容量 8 的 fd table 都可返回 fd 3；`Ext4File` 存在按 PID 分隔的 backing array 中，因此同号 fd 不会碰撞。首代 policy 后 PID 2 用 `socket/connect` 把 local socket object固定在fd 3，再以 `memfd_create` 把shared-memory object放在fd 4；该fd经 `sendmsg(SCM_RIGHTS)` 附着到Wayland batch并在第二帧后关闭，后续配置热重读因而继续使用fd 4。file read暂停上下文，异步ext4/virtio completion推进offset；socket read/write/sendmsg走相同suspend/resume boundary，但分派到全双工byte ring、rights slot与Wayland server Future。completion都把结果写回对应user stack/frame并恢复原RIP/RSP/GPR。
+PID 1 与 PID 2 通过 `sched_yield` cooperative 交错，也在各自无 syscall TSC 窗口被 100 Hz timer 双向抢占。PID 1 发出 Linux x86-64 `openat(AT_FDCWD, "/etc/slopos/system.conf", O_RDONLY)`，root namespace 解析 inode 18；PID 2 首轮依次打开 inode 20 `/etc/slopos/waybar.jsonc` 与 inode 17 `/etc/slopos/swww.env`。fast handler 保存对应 user frame并回到 block task，各自容量 8 的 fd table 都可返回 fd 3；`Ext4File` 存在按 PID 分隔的 backing array 中，因此同号 fd 不会碰撞。首代 policy 后 PID 2 用 `socket/connect` 把 local socket object固定在fd 3；server先经`recvmsg(SCM_RIGHTS)`把只读keymap object安装为fd 4，desktop按共享offset读到EOF并关闭。随后`memfd_create`复用fd 4，该surface object再经`sendmsg(SCM_RIGHTS)`反向附着到Wayland batch并在第二帧后关闭，后续配置热重读继续使用fd 4。file read暂停上下文，异步ext4/virtio completion推进offset；socket read/write/sendmsg/recvmsg走相同suspend/resume boundary，但分派到全双工byte ring、rights slot与Wayland server Future。completion都把结果写回对应user stack/frame并恢复原RIP/RSP/GPR。
 
 PID 1 随后以 `O_RDWR` 打开 `/usr/share/slopos/write-probe.bin`，复用 fd 3。`lseek(3, 123, SEEK_SET)` 直接更新独立 descriptor offset；`write(3, patch, 64)` 的 input 故意横跨两个 user stack page。kernel 先验证完整 range，再逐页翻译各自的 physical frame并复制到 pending request，让 block task 对 inode 31 执行 read-modify-write、virtio write/flush 与 cache invalidation。用户态 read 也跨两页写回并验证 patch，随后以同样路径恢复 64 个 `P` bytes并再次读回。PID 1 显式 close fd 3，再进入常驻 `wait4(-1)`；PID 2 的每轮 Waybar/swww 读取也完整 close，因此稳定 runtime 不保留 backing object。所有需要 I/O 的同步 ABI 调用与阻塞式 process/event wait 都通过 suspend/completion 或 scheduler wake 实现，没有在 syscall handler 内 busy-wait。
 
 启动 probe 另有一张 block-task 局部容量 8 的 fd table：它为规范化的 `/etc/./slopos/../slopos/system.conf` 分配 fd 3，使用 17-byte request 分五次读完同一 inode，seek 到 offset 7 再读取 11 bytes，最后 close。关闭后的 fd 3 会被复用于 inode 31 的 `ReadWrite` descriptor；它 seek 到 offset 123，写入 73 bytes，通过同一 fd 读回边界内容，再恢复原始 bytes。
 
-`make test-vfs` 的 7 项宿主测试覆盖路径规范化、root/`/mnt`/`/mnt/data` 最长挂载匹配、fd offset生命周期、EOF growth、access mode，以及socket/shared-memory object不会被误当file seek/read/write-window。`make test-boot` 验证同一状态机驱动真实ext4 cache、virtio DMA、AF_UNIX Wayland stream和shared backing descriptor。
+`make test-vfs` 的 7 项宿主测试覆盖路径规范化、root/`/mnt`/`/mnt/data` 最长挂载匹配、fd offset生命周期、EOF growth、access mode，以及socket/shared-memory object区分与shared object offset/EOF。`make test-boot` 验证同一状态机驱动真实ext4 cache、virtio DMA、AF_UNIX Wayland stream、只读keymap descriptor和shared backing descriptor。
 
 `slopos-process` 的每个 process slot 内嵌一张独立 `FileDescriptorTable`。`make test-process` 会生成 parent/child 两个 record，让它们对同一 `FileNode` 各自取得 fd 3，再给 parent插入generation-checked socket与shared-memory object并验证child的同号fd仍是file；process exit后所有descriptor operation都被拒绝。裸机PID 2已让socket fd 3与memfd/file fd 4按生命周期复用；fd 1仍由syscall handler特判，`Ext4File` backing object暂存在block task的固定二维数组中。
 
@@ -27,6 +27,6 @@ ext4 mount 后，block task 还用可失败的 component walker 按 user/system/
 
 - mount table 与按 PID 分隔的 ext4 backing-object array 仍只活在 block task；process fd table 已独立，但没有并发全局 vnode/reference layer；
 - 只有一个 root filesystem，没有 mount/unmount 生命周期或引用计数；
-- 用户 syscall 目前只有 root regular-file `O_RDONLY`/`O_RDWR openat`、最多256-byte且限于三页code/三页stack/一页shared mapping的read/write、`SEEK_SET lseek`、close、`sched_yield`，以及特判stdout write；Wayland另有严格限定的memfd_create/ftruncate、单页固定地址MAP_SHARED mmap和单iovec/单rights-fd sendmsg。没有通用grow/truncate/stat、directory fd、dup、poll、anonymous/file mmap、munmap、owner/mode权限或任意并发请求；
+- 用户 syscall 目前只有 root regular-file `O_RDONLY`/`O_RDWR openat`、最多256-byte且限于四页code/三页stack/一页shared mapping的read/write、`SEEK_SET lseek`、close、`sched_yield`，以及特判stdout write；Wayland另有严格限定的memfd_create/ftruncate、单页固定地址MAP_SHARED mmap、单iovec/单rights-fd sendmsg和对应的recvmsg。没有通用grow/truncate/stat、directory fd、dup、poll、anonymous/file mmap、munmap、owner/mode权限或任意并发请求；
 - fd write 可覆写已有 initialized block；在 descriptor 位于 EOF 时还可取得 append window，由 ext4 五-home transaction 分配一个连续 block，随后更新 node size/offset并经同一 fd 读回。truncate probe 把 offset/size 与 block metadata 一起恢复。当前只支持单块增长；create/unlink 也仍未抽象为通用 VFS namespace API。
 - create transaction checkpoint 后，path walker 将新 inode 32 转为 `FileNode`，固定表复用读写 fd 3，空文件 read 返回 EOF；close 后才执行 unlink transaction。它证明 ext4 namespace mutation 与 descriptor 生命周期相接，但尚未抽象为可复用 VFS create/unlink API。

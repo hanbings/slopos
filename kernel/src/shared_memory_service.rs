@@ -120,6 +120,30 @@ pub fn create(owner_pid: u32) -> Result<SharedMemoryHandle, SharedMemoryError> {
     })
 }
 
+pub fn create_initialized(
+    owner_pid: u32,
+    bytes: &[u8],
+    nul_terminated: bool,
+) -> Result<SharedMemoryHandle, SharedMemoryError> {
+    let length = bytes
+        .len()
+        .checked_add(usize::from(nul_terminated))
+        .ok_or(SharedMemoryError::InvalidLength)?;
+    if bytes.is_empty() || length > PAGE_SIZE || (nul_terminated && bytes.contains(&0)) {
+        return Err(SharedMemoryError::InvalidLength);
+    }
+    let handle = create(owner_pid)?;
+    if let Err(error) = truncate(owner_pid, handle, length) {
+        let _ = release(handle);
+        return Err(error);
+    }
+    let (frame, _) = frame_and_length(handle)?;
+    // SAFETY: create returned an exclusive zeroed page retained by this
+    // object. `length <= PAGE_SIZE`, and the optional terminator remains zero.
+    unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), frame as *mut u8, bytes.len()) };
+    Ok(handle)
+}
+
 pub fn truncate(
     owner_pid: u32,
     handle: SharedMemoryHandle,
@@ -184,4 +208,18 @@ pub fn bytes(handle: SharedMemoryHandle) -> Result<&'static [u8], SharedMemoryEr
     // only while its owning process is suspended in the kernel, so user writes
     // cannot race this immutable borrow on the current single-core runtime.
     Ok(unsafe { core::slice::from_raw_parts(frame as *const u8, length) })
+}
+
+pub fn read_at(
+    handle: SharedMemoryHandle,
+    offset: usize,
+    output: &mut [u8],
+) -> Result<usize, SharedMemoryError> {
+    let bytes = bytes(handle)?;
+    let remaining = bytes
+        .get(offset..)
+        .ok_or(SharedMemoryError::InvalidLength)?;
+    let length = output.len().min(remaining.len());
+    output[..length].copy_from_slice(&remaining[..length]);
+    Ok(length)
 }

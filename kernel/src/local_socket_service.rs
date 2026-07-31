@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: 0BSD
 
 use core::cell::UnsafeCell;
+use slopos_desktop_protocol::WAYLAND_EVENT_CONFIGURE;
 use slopos_ipc::{AncillaryRights, LocalSocketTable, SocketError, SocketHandle};
+use slopos_wayland::SLOPOS_XKB_KEYMAP_TEXT;
 
 const SOCKET_CAPACITY: usize = 8;
 const SOCKET_BACKLOG: usize = 2;
@@ -18,6 +20,7 @@ struct Connection {
     server: SocketHandle,
     event_sequence: u64,
     backing: Option<crate::shared_memory_service::SharedMemoryHandle>,
+    keymap: Option<crate::shared_memory_service::SharedMemoryHandle>,
 }
 
 struct ServiceState {
@@ -57,6 +60,12 @@ pub enum LocalSocketServiceError {
     Socket(SocketError),
     PermissionDenied,
     WaylandProtocol,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SocketReceive {
+    pub length: usize,
+    pub rights: Option<crate::shared_memory_service::SharedMemoryHandle>,
 }
 
 impl From<SocketError> for LocalSocketServiceError {
@@ -121,6 +130,7 @@ pub fn connect(pid: u32, client: SocketHandle, path: &[u8]) -> Result<(), LocalS
         server,
         event_sequence: 0,
         backing: None,
+        keymap: None,
     });
     crate::serial::serialln(format_args!(
         "SLOPOS-IPC: AF_UNIX connected pid={pid} path=/run/slopos/wayland-0 client={}:{} server={}:{} transport=bounded-stream",
@@ -171,6 +181,27 @@ pub async fn recv(
     client: SocketHandle,
     output: &mut [u8],
 ) -> Result<usize, LocalSocketServiceError> {
+    let received = receive(pid, client, output, false).await?;
+    if received.rights.is_some() {
+        return Err(LocalSocketServiceError::WaylandProtocol);
+    }
+    Ok(received.length)
+}
+
+pub async fn recv_with_rights(
+    pid: u32,
+    client: SocketHandle,
+    output: &mut [u8],
+) -> Result<SocketReceive, LocalSocketServiceError> {
+    receive(pid, client, output, true).await
+}
+
+async fn receive(
+    pid: u32,
+    client: SocketHandle,
+    output: &mut [u8],
+    receive_rights: bool,
+) -> Result<SocketReceive, LocalSocketServiceError> {
     let after_sequence = {
         let state = state_mut();
         let index = state
@@ -179,7 +210,7 @@ pub async fn recv(
         let connection = state.connections[index].ok_or(SocketError::InvalidState)?;
         let readiness = state.table.readiness(client)?;
         if readiness.readable {
-            return Ok(state.table.recv(client, output)?);
+            return pop_client(state, client, output, receive_rights);
         }
 
         let mut request = [0u8; SOCKET_BYTES];
@@ -237,30 +268,90 @@ pub async fn recv(
     };
 
     let event = crate::wayland_service::next_event(after_sequence).await;
-    let length = {
+    let received = {
         let state = state_mut();
         let index = state
             .connection_index(pid, client)
             .ok_or(LocalSocketServiceError::PermissionDenied)?;
-        let connection = state.connections[index]
-            .as_mut()
-            .ok_or(SocketError::InvalidState)?;
-        let sent = state.table.send(connection.server, event.wire)?;
+        let connection = state.connections[index].ok_or(SocketError::InvalidState)?;
+        let carries_keymap = event.header.kind == WAYLAND_EVENT_CONFIGURE;
+        let sent = if carries_keymap {
+            let keymap = if let Some(keymap) = connection.keymap {
+                keymap
+            } else {
+                let keymap = crate::shared_memory_service::create_initialized(
+                    0,
+                    SLOPOS_XKB_KEYMAP_TEXT,
+                    true,
+                )
+                .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+                state.connections[index]
+                    .as_mut()
+                    .ok_or(SocketError::InvalidState)?
+                    .keymap = Some(keymap);
+                keymap
+            };
+            crate::shared_memory_service::retain(keymap)
+                .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+            let rights = AncillaryRights::new(keymap.index(), keymap.generation());
+            match state
+                .table
+                .send_with_rights(connection.server, event.wire, rights)
+            {
+                Ok(sent) => sent,
+                Err(error) => {
+                    let _ = crate::shared_memory_service::release(keymap);
+                    return Err(error.into());
+                }
+            }
+        } else {
+            state.table.send(connection.server, event.wire)?
+        };
         if sent != event.wire.len() {
             return Err(SocketError::WouldBlock.into());
         }
-        connection.event_sequence = event.header.sequence;
-        let received = state.table.recv(client, output)?;
+        state.connections[index]
+            .as_mut()
+            .ok_or(SocketError::InvalidState)?
+            .event_sequence = event.header.sequence;
+        let received = pop_client(state, client, output, receive_rights)?;
         crate::serial::serialln(format_args!(
-            "SLOPOS-WAYLAND-SERVER: event sent pid={pid} transport=AF_UNIX/SOCK_STREAM kind={} sequence={} wire_bytes={} read_bytes={received}",
+            "SLOPOS-WAYLAND-SERVER: event sent pid={pid} transport=AF_UNIX/SOCK_STREAM kind={} sequence={} wire_bytes={} read_bytes={} scm_rights={carries_keymap}",
             event.header.kind,
             event.header.sequence,
-            event.wire.len()
+            event.wire.len(),
+            received.length
         ));
         received
     };
     crate::wayland_service::acknowledge_event(event.header.sequence);
-    Ok(length)
+    Ok(received)
+}
+
+fn pop_client(
+    state: &mut ServiceState,
+    client: SocketHandle,
+    output: &mut [u8],
+    receive_rights: bool,
+) -> Result<SocketReceive, LocalSocketServiceError> {
+    if !receive_rights {
+        return Ok(SocketReceive {
+            length: state.table.recv(client, output)?,
+            rights: None,
+        });
+    }
+    let (length, rights) = state.table.recv_with_rights(client, output)?;
+    let rights = rights.map(|rights| {
+        crate::shared_memory_service::SharedMemoryHandle::from_parts(
+            rights.object(),
+            rights.generation(),
+        )
+    });
+    if let Some(handle) = rights {
+        crate::shared_memory_service::frame_and_length(handle)
+            .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+    }
+    Ok(SocketReceive { length, rights })
 }
 
 pub fn close(pid: u32, client: SocketHandle) -> Result<(), LocalSocketServiceError> {
@@ -269,15 +360,21 @@ pub fn close(pid: u32, client: SocketHandle) -> Result<(), LocalSocketServiceErr
         let connection = state.connections[index]
             .take()
             .ok_or(SocketError::InvalidState)?;
-        if let Some(rights) = state.table.take_rights(connection.server)? {
-            let handle = crate::shared_memory_service::SharedMemoryHandle::from_parts(
-                rights.object(),
-                rights.generation(),
-            );
+        for endpoint in [connection.server, connection.client] {
+            if let Some(rights) = state.table.take_rights(endpoint)? {
+                let handle = crate::shared_memory_service::SharedMemoryHandle::from_parts(
+                    rights.object(),
+                    rights.generation(),
+                );
+                crate::shared_memory_service::release(handle)
+                    .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+            }
+        }
+        if let Some(handle) = connection.backing {
             crate::shared_memory_service::release(handle)
                 .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
         }
-        if let Some(handle) = connection.backing {
+        if let Some(handle) = connection.keymap {
             crate::shared_memory_service::release(handle)
                 .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
         }

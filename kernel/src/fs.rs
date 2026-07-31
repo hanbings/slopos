@@ -60,7 +60,7 @@ const INIT_EXECUTABLE_DISPLAY: &str = "/sbin/slop-init";
 const DESKTOP_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-shell"];
 const DESKTOP_EXECUTABLE_DISPLAY: &str = "/sbin/slop-shell";
 const INIT_EXECUTABLE_CAPACITY: usize = 32 * 1024;
-const DESKTOP_EXECUTABLE_CAPACITY: usize = 40 * 1024;
+const DESKTOP_EXECUTABLE_CAPACITY: usize = 48 * 1024;
 const PROCESS_FILE_CAPACITY: usize = 8;
 const LINUX_ENOENT: i64 = -2;
 const LINUX_EBADF: i64 = -9;
@@ -840,6 +840,9 @@ async fn drive_user_processes(
             crate::process::ProcessEvent::Read(request) => {
                 complete_process_read(mount, device, open_files, request).await
             }
+            crate::process::ProcessEvent::RecvMsg(request) => {
+                complete_process_recvmsg(request).await
+            }
             crate::process::ProcessEvent::Write(request) => {
                 complete_process_write(mount, device, open_files, request).await
             }
@@ -972,8 +975,47 @@ async fn complete_process_read(
             return crate::process::resume_probe(pid, bytes as i64, Some(&output[..bytes]));
         }
         Ok(DescriptorObject::File(_)) => {}
-        Ok(DescriptorObject::SharedMemory { .. }) => {
-            return crate::process::resume_probe(pid, LINUX_EBADF, None);
+        Ok(DescriptorObject::SharedMemory { index, generation }) => {
+            let Ok((DescriptorObject::SharedMemory { .. }, offset)) =
+                crate::process::readable_descriptor_object(pid, request.fd)
+            else {
+                return crate::process::resume_probe(pid, LINUX_EBADF, None);
+            };
+            let handle =
+                crate::shared_memory_service::SharedMemoryHandle::from_parts(index, generation);
+            let Ok((_, object_length)) = crate::shared_memory_service::frame_and_length(handle)
+            else {
+                return crate::process::resume_probe(pid, LINUX_EBADF, None);
+            };
+            let Ok(offset) = usize::try_from(offset) else {
+                return crate::process::resume_probe(pid, LINUX_EBADF, None);
+            };
+            let mut output = [0u8; crate::process::PROCESS_SYSCALL_IO_CAPACITY];
+            let bytes = match crate::shared_memory_service::read_at(
+                handle,
+                offset,
+                &mut output[..request.requested],
+            ) {
+                Ok(bytes) => bytes,
+                Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
+            };
+            if crate::process::advance_descriptor_object(
+                pid,
+                request.fd,
+                bytes,
+                object_length as u64,
+            )
+            .is_err()
+            {
+                return crate::process::resume_probe(pid, LINUX_EBADF, None);
+            }
+            crate::serial::serialln(format_args!(
+                "SLOPOS-IPC: process read complete pid={pid} fd={} object=memfd shared={index}:{generation} offset={offset} requested={} bytes={bytes} object_bytes={object_length} user_pages={} async=false",
+                request.fd,
+                request.requested,
+                request.user_pages()
+            ));
+            return crate::process::resume_probe(pid, bytes as i64, Some(&output[..bytes]));
         }
         Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
     }
@@ -1015,6 +1057,64 @@ async fn complete_process_read(
         request.user_pages() > 1
     ));
     crate::process::resume_probe(pid, bytes as i64, Some(&output[..bytes]))
+}
+
+async fn complete_process_recvmsg(
+    request: crate::process::RecvMsgRequest,
+) -> crate::process::ProcessEvent {
+    let pid = request.pid;
+    let DescriptorObject::LocalSocket { index, generation } =
+        (match crate::process::descriptor_object(pid, request.fd) {
+            Ok(object) => object,
+            Err(_) => {
+                return crate::process::resume_recvmsg(request, LINUX_EBADF, &[], None);
+            }
+        })
+    else {
+        return crate::process::resume_recvmsg(request, LINUX_EBADF, &[], None);
+    };
+    let handle = slopos_ipc::SocketHandle::from_parts(index, generation);
+    let mut output = [0u8; crate::process::PROCESS_SYSCALL_IO_CAPACITY];
+    let received = match crate::local_socket_service::recv_with_rights(
+        pid,
+        handle,
+        &mut output[..request.requested],
+    )
+    .await
+    {
+        Ok(received) => received,
+        Err(_) => return crate::process::resume_recvmsg(request, LINUX_EBADF, &[], None),
+    };
+    let rights_fd = if let Some(shared) = received.rights {
+        match crate::process::open_shared_memory_read_only(pid, shared) {
+            Ok(fd) => Some(fd),
+            Err(_) => {
+                let _ = crate::shared_memory_service::release(shared);
+                return crate::process::resume_recvmsg(request, LINUX_EMFILE, &[], None);
+            }
+        }
+    } else {
+        None
+    };
+    crate::serial::serialln(format_args!(
+        "SLOPOS-IPC: process recvmsg complete pid={pid} fd={} family=AF_UNIX type=SOCK_STREAM requested={} bytes={} control={} rights_fd={} user_pages={} async=true",
+        request.fd,
+        request.requested,
+        received.length,
+        if rights_fd.is_some() {
+            "SCM_RIGHTS"
+        } else {
+            "none"
+        },
+        rights_fd.map_or(-1, |fd| fd as i32),
+        request.user_pages()
+    ));
+    crate::process::resume_recvmsg(
+        request,
+        received.length as i64,
+        &output[..received.length],
+        rights_fd,
+    )
 }
 
 async fn complete_process_write(

@@ -11,12 +11,13 @@ use slopos_desktop_protocol::{
     WaylandServerEvent, WaylandSurfaceCommit,
 };
 use slopos_wayland::{
-    CORE_GLOBALS, CommittedSurface, SingleSurfaceSession, SurfaceSessionEvent,
-    encode_buffer_release, encode_callback_done, encode_display_delete_id,
-    encode_output_description, encode_output_done, encode_output_geometry, encode_output_mode,
-    encode_output_name, encode_output_scale, encode_pointer_enter, encode_registry_global,
-    encode_seat_capabilities, encode_seat_name, encode_shm_format, encode_xdg_surface_configure,
-    encode_xdg_toplevel_configure,
+    CORE_GLOBALS, CommittedSurface, SLOPOS_XKB_KEYMAP_TEXT, SingleSurfaceSession,
+    SurfaceSessionEvent, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, encode_buffer_release,
+    encode_callback_done, encode_display_delete_id, encode_keyboard_enter, encode_keyboard_keymap,
+    encode_keyboard_repeat_info, encode_output_description, encode_output_done,
+    encode_output_geometry, encode_output_mode, encode_output_name, encode_output_scale,
+    encode_pointer_enter, encode_registry_global, encode_seat_capabilities, encode_seat_name,
+    encode_shm_format, encode_xdg_surface_configure, encode_xdg_toplevel_configure,
 };
 
 const DESKTOP_SERVICE_PID: u32 = 2;
@@ -24,6 +25,7 @@ const SURFACE_BANKS: usize = 2;
 const NO_BANK: usize = usize::MAX;
 const CONFIGURE_SERIAL: u32 = 1;
 const POINTER_ENTER_SERIAL: u32 = 2;
+const KEYBOARD_ENTER_SERIAL: u32 = 3;
 const SERVER_SHM_FD: i32 = 1;
 
 struct SurfaceBank {
@@ -209,6 +211,7 @@ fn submit_parts(
             shm,
             seat,
             pointer,
+            keyboard,
             output,
             xdg_surface,
             toplevel,
@@ -216,10 +219,22 @@ fn submit_parts(
         } => {
             let mut wire = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
             let mut cursor = 0;
-            cursor += encode_seat_capabilities(&mut wire[cursor..], seat, 1)
+            cursor += encode_seat_capabilities(&mut wire[cursor..], seat, 3)
                 .map_err(|_| WaylandServiceError::InvalidProtocol)?
                 .len();
             cursor += encode_seat_name(&mut wire[cursor..], seat, "seat0")
+                .map_err(|_| WaylandServiceError::InvalidProtocol)?
+                .len();
+            cursor += encode_keyboard_keymap(
+                &mut wire[cursor..],
+                keyboard,
+                WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
+                u32::try_from(SLOPOS_XKB_KEYMAP_TEXT.len() + 1)
+                    .map_err(|_| WaylandServiceError::InvalidProtocol)?,
+            )
+            .map_err(|_| WaylandServiceError::InvalidProtocol)?
+            .len();
+            cursor += encode_keyboard_repeat_info(&mut wire[cursor..], keyboard, 25, 600)
                 .map_err(|_| WaylandServiceError::InvalidProtocol)?
                 .len();
             cursor += encode_output_geometry(
@@ -266,7 +281,8 @@ fn submit_parts(
                 .len();
             let sequence = publish_event(WAYLAND_EVENT_CONFIGURE, &wire[..cursor])?;
             crate::serial::serialln(format_args!(
-                "SLOPOS-WAYLAND-SERVER: configure emitted pid={pid} sequence={sequence} serial={serial} seat={seat} capabilities=pointer pointer={pointer} output={output} output_name=SLOPOS-1 mode=1024x768@60000 scale=1 shm={shm} formats=argb8888/xrgb8888 xdg_surface={xdg_surface} toplevel={toplevel} geometry=32x24 states=empty wire_bytes={cursor}"
+                "SLOPOS-WAYLAND-SERVER: configure emitted pid={pid} sequence={sequence} serial={serial} seat={seat} capabilities=pointer/keyboard pointer={pointer} keyboard={keyboard} keymap=xkb_v1 keymap_bytes={} repeat=25/600 output={output} output_name=SLOPOS-1 mode=1024x768@60000 scale=1 shm={shm} formats=argb8888/xrgb8888 xdg_surface={xdg_surface} toplevel={toplevel} geometry=32x24 states=empty wire_bytes={cursor}",
+                SLOPOS_XKB_KEYMAP_TEXT.len() + 1
             ));
             WaylandSubmission::Configure {
                 event_sequence: sequence,
@@ -317,12 +333,13 @@ fn publish_surface(
     GENERATION.store(next_generation, Ordering::Release);
     crate::executor::wake_task(crate::executor::INPUT_TASK);
     crate::serial::serialln(format_args!(
-        "SLOPOS-WAYLAND-SERVER: commit accepted pid={pid} generation={next_generation} transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle={lifecycle} objects=registry/compositor/shm/seat/pointer/output/xdg_toplevel surface={} buffer={} callback={} seat={} pointer={} output={} geometry={}x{} stride={} format={} title=\"{}\" app_id={} wire_bytes={} pixel_bytes={}",
+        "SLOPOS-WAYLAND-SERVER: commit accepted pid={pid} generation={next_generation} transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle={lifecycle} objects=registry/compositor/shm/seat/pointer/keyboard/output/xdg_toplevel surface={} buffer={} callback={} seat={} pointer={} keyboard={} output={} geometry={}x{} stride={} format={} title=\"{}\" app_id={} wire_bytes={} pixel_bytes={}",
         metadata.surface,
         metadata.buffer,
         metadata.frame_callback,
         metadata.seat,
         metadata.pointer,
+        metadata.keyboard,
         metadata.output,
         metadata.width,
         metadata.height,
@@ -458,6 +475,15 @@ pub fn acknowledge(generation: u64) {
         )
         .unwrap_or_else(|_| crate::fatal("Wayland pointer enter encoding failed"))
         .len();
+        cursor += encode_keyboard_enter(
+            &mut wire[cursor..],
+            presented.keyboard,
+            KEYBOARD_ENTER_SERIAL,
+            presented.surface,
+            &[],
+        )
+        .unwrap_or_else(|_| crate::fatal("Wayland keyboard enter encoding failed"))
+        .len();
     }
     cursor += encode_buffer_release(&mut wire[cursor..], presented.buffer)
         .unwrap_or_else(|_| crate::fatal("Wayland buffer release encoding failed"))
@@ -476,7 +502,7 @@ pub fn acknowledge(generation: u64) {
         .unwrap_or_else(|_| crate::fatal("Wayland presentation event remained pending"));
     *current = Some(candidate);
     let events = if generation == 1 {
-        "wl_pointer.enter/wl_buffer.release/wl_callback.done/wl_display.delete_id"
+        "wl_pointer.enter/wl_keyboard.enter/wl_buffer.release/wl_callback.done/wl_display.delete_id"
     } else {
         "wl_buffer.release/wl_callback.done/wl_display.delete_id"
     };

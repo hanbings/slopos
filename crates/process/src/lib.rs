@@ -273,6 +273,18 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
             .map_err(ProcessError::Vfs)
     }
 
+    pub fn open_shared_memory_read_only(
+        &mut self,
+        pid: ProcessId,
+        index: u16,
+        generation: u16,
+    ) -> Result<u32, ProcessError> {
+        self.live_slot_mut(pid)?
+            .descriptors
+            .open_shared_memory_read_only(index, generation)
+            .map_err(ProcessError::Vfs)
+    }
+
     pub fn descriptor_object(
         &self,
         pid: ProcessId,
@@ -281,6 +293,17 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
         self.live_slot(pid)?
             .descriptors
             .object(fd)
+            .map_err(ProcessError::Vfs)
+    }
+
+    pub fn readable_descriptor_object(
+        &self,
+        pid: ProcessId,
+        fd: u32,
+    ) -> Result<(DescriptorObject, u64), ProcessError> {
+        self.live_slot(pid)?
+            .descriptors
+            .readable_object(fd)
             .map_err(ProcessError::Vfs)
     }
 
@@ -326,6 +349,19 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
         self.live_slot_mut(pid)?
             .descriptors
             .advance(fd, length)
+            .map_err(ProcessError::Vfs)
+    }
+
+    pub fn advance_descriptor_object(
+        &mut self,
+        pid: ProcessId,
+        fd: u32,
+        length: usize,
+        object_size: u64,
+    ) -> Result<(), ProcessError> {
+        self.live_slot_mut(pid)?
+            .descriptors
+            .advance_object(fd, length, object_size)
             .map_err(ProcessError::Vfs)
     }
 
@@ -830,6 +866,26 @@ mod tests {
                 index: 6,
                 generation: 2,
             })
+        );
+        assert_eq!(
+            table.readable_descriptor_object(first, shared_fd),
+            Ok((
+                DescriptorObject::SharedMemory {
+                    index: 6,
+                    generation: 2,
+                },
+                0,
+            ))
+        );
+        table
+            .advance_descriptor_object(first, shared_fd, 4, 8)
+            .unwrap();
+        assert_eq!(
+            table
+                .readable_descriptor_object(first, shared_fd)
+                .unwrap()
+                .1,
+            4
         );
     }
 

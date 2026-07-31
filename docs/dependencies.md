@@ -10,4 +10,4 @@
 
 项目曾在开发中评估高层 `uefi` crate，但发现其当前依赖图包含 MPL-2.0 的 `ucs2`。该依赖在首次提交前已经彻底移除；当前 `Cargo.lock` 不包含它。
 
-宿主构建工具 QEMU、OVMF、Rust、LLVM、mtools、dosfstools、e2fsprogs、socat 和 netpbm 不链接进 SlopOS 镜像，属于外部构建/测试工具。`mke2fs`/`debugfs` 只生成可重复的 ext4 测试 root disk；socat 只连接交互回归的本地 QMP Unix socket，以显式保持跨 PS/2 键盘/鼠标设备的 modifier key-down。
+宿主构建工具 QEMU、OVMF、Rust、LLVM、mtools、dosfstools、e2fsprogs、socat、netpbm 和可选的 libxkbcommon-tools 不链接进 SlopOS 镜像，属于外部构建/测试工具。`mke2fs`/`debugfs` 只生成可重复的 ext4 测试 root disk；socat 只连接交互回归的本地 QMP Unix socket，以显式保持跨 PS/2 键盘/鼠标设备的 modifier key-down；`xkbcli compile-keymap --from-xkb` 只独立校验仓库内 0BSD `assets/slopos-keymap.xkb` 的语法与自包含性。

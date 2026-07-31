@@ -300,6 +300,17 @@ impl<const N: usize> FileDescriptorTable<N> {
         )
     }
 
+    pub fn open_shared_memory_read_only(
+        &mut self,
+        index: u16,
+        generation: u16,
+    ) -> Result<u32, VfsError> {
+        self.open_object(
+            DescriptorObject::SharedMemory { index, generation },
+            AccessMode::ReadOnly,
+        )
+    }
+
     fn open_object(
         &mut self,
         object: DescriptorObject,
@@ -429,6 +440,33 @@ impl<const N: usize> FileDescriptorTable<N> {
 
     pub fn object(&self, fd: u32) -> Result<DescriptorObject, VfsError> {
         Ok(self.descriptor(fd)?.object)
+    }
+
+    pub fn readable_object(&self, fd: u32) -> Result<(DescriptorObject, u64), VfsError> {
+        let descriptor = self.descriptor(fd)?;
+        if !descriptor.access_mode.readable() {
+            return Err(VfsError::NotReadable);
+        }
+        Ok((descriptor.object, descriptor.offset))
+    }
+
+    pub fn advance_object(
+        &mut self,
+        fd: u32,
+        length: usize,
+        object_size: u64,
+    ) -> Result<(), VfsError> {
+        let descriptor = self.descriptor_mut(fd)?;
+        let length = u64::try_from(length).map_err(|_| VfsError::InvalidOffset)?;
+        let new_offset = descriptor
+            .offset
+            .checked_add(length)
+            .ok_or(VfsError::InvalidOffset)?;
+        if new_offset > object_size {
+            return Err(VfsError::InvalidOffset);
+        }
+        descriptor.offset = new_offset;
+        Ok(())
     }
 
     pub fn snapshot_objects(&self, output: &mut [Option<DescriptorObject>]) -> usize {
@@ -611,6 +649,25 @@ mod tests {
             Err(VfsError::BadFileDescriptor)
         );
         assert_eq!(descriptors.seek(fd, 0), Err(VfsError::BadFileDescriptor));
+        assert_eq!(
+            descriptors.readable_object(fd),
+            Ok((
+                DescriptorObject::SharedMemory {
+                    index: 2,
+                    generation: 7,
+                },
+                0,
+            ))
+        );
+        descriptors.advance_object(fd, 6, 10).unwrap();
+        assert_eq!(descriptors.readable_object(fd).unwrap().1, 6);
+        assert_eq!(
+            descriptors.advance_object(fd, 5, 10),
+            Err(VfsError::InvalidOffset)
+        );
+        descriptors.close(fd).unwrap();
+        let fd = descriptors.open_shared_memory_read_only(3, 8).unwrap();
+        assert_eq!(descriptors.readable_object(fd).unwrap().1, 0);
     }
 
     #[test]

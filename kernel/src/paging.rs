@@ -14,7 +14,7 @@ const CACHE_DISABLE: u64 = 1 << 4;
 const USER_ACCESSIBLE: u64 = 1 << 2;
 const HUGE: u64 = 1 << 7;
 pub const USER_CODE_BASE: u64 = 0x4000_0000;
-pub const USER_CODE_PAGES: usize = 3;
+pub const USER_CODE_PAGES: usize = 4;
 pub const USER_STACK_PAGES: usize = 3;
 pub const USER_STACK_BASE: u64 = USER_CODE_BASE + USER_CODE_PAGES as u64 * PAGE_SIZE;
 pub const USER_STACK_TOP: u64 = USER_STACK_BASE + USER_STACK_PAGES as u64 * PAGE_SIZE;
@@ -135,7 +135,7 @@ pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressS
 
     let user_directory = table_frame();
     let user_table = table_frame();
-    let code_frames = [data_frame(), data_frame(), data_frame()];
+    let code_frames = [data_frame(), data_frame(), data_frame(), data_frame()];
     let stack_frames = [data_frame(), data_frame(), data_frame()];
     for (index, frame) in code_frames.iter().copied().enumerate() {
         let source_start = index * PAGE_SIZE as usize;

@@ -12,12 +12,13 @@ use slopos_desktop_protocol::{
     WAYLAND_EVENT_MAX_WIRE_SIZE, WAYLAND_SURFACE_MAX_WIRE_SIZE, config_hash_extend,
 };
 use slopos_wayland::{
-    ArgumentReader, CORE_GLOBALS, DISPLAY_OBJECT_ID, Frame, MessageBuilder, WireError,
+    ArgumentReader, CORE_GLOBALS, DISPLAY_OBJECT_ID, Frame, MessageBuilder, SLOPOS_XKB_KEYMAP_HASH,
+    SLOPOS_XKB_KEYMAP_SIZE, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, WireError,
 };
 
 const USER_ENTRY: u64 = 0x4000_0000;
-const INITIAL_STACK_BASE: u64 = 0x4000_5000;
-const USER_STACK_TOP: u64 = 0x4000_6000;
+const INITIAL_STACK_BASE: u64 = 0x4000_6000;
+const USER_STACK_TOP: u64 = 0x4000_7000;
 const INITIAL_STACK_WORDS: usize = 27;
 const INITIAL_ARGC: u64 = 2;
 const INITIAL_ENVC: usize = 4;
@@ -38,6 +39,7 @@ const SYS_SCHED_YIELD: u64 = 24;
 const SYS_SOCKET: u64 = 41;
 const SYS_CONNECT: u64 = 42;
 const SYS_SENDMSG: u64 = 46;
+const SYS_RECVMSG: u64 = 47;
 const SYS_EXIT: u64 = 60;
 const SYS_FTRUNCATE: u64 = 77;
 const SYS_OPENAT: u64 = 257;
@@ -72,6 +74,8 @@ const FRAME_CALLBACK: u32 = 11;
 const SEAT: u32 = 12;
 const OUTPUT: u32 = 13;
 const POINTER: u32 = 14;
+const KEYBOARD: u32 = 15;
+const CONFIGURE_EVENT_WIRE_SIZE: usize = 288;
 const SURFACE_WIDTH: usize = 32;
 const SURFACE_HEIGHT: usize = 24;
 const SURFACE_PIXEL_LENGTH: usize = SURFACE_WIDTH * SURFACE_HEIGHT * 4;
@@ -90,7 +94,7 @@ static EXPECTED_ENVIRONMENT: [&[u8]; INITIAL_ENVC] = [
 
 #[repr(C)]
 struct IoVec {
-    base: *const u8,
+    base: *mut u8,
     length: usize,
 }
 
@@ -101,7 +105,7 @@ struct MessageHeader {
     name_padding: u32,
     vectors: *const IoVec,
     vector_count: usize,
-    control: *const RightsControl,
+    control: *mut RightsControl,
     control_length: usize,
     flags: i32,
     flags_padding: u32,
@@ -248,7 +252,7 @@ fn send_wayland_wire(socket: i64, mut wire: &[u8]) {
 
 fn send_wayland_wire_with_fd(socket: i64, wire: &[u8], fd: i64) {
     let vector = IoVec {
-        base: wire.as_ptr(),
+        base: wire.as_ptr().cast_mut(),
         length: wire.len(),
     };
     let control = RightsControl {
@@ -264,7 +268,7 @@ fn send_wayland_wire_with_fd(socket: i64, wire: &[u8], fd: i64) {
         name_padding: 0,
         vectors: &raw const vector,
         vector_count: 1,
-        control: &raw const control,
+        control: (&raw const control).cast_mut(),
         control_length: size_of::<RightsControl>(),
         flags: 0,
         flags_padding: 0,
@@ -387,6 +391,10 @@ fn build_initial_surface_wire(wire: &mut [u8]) -> Option<usize> {
     }
     append_message(wire, &mut cursor, SEAT, 0, |message| {
         message.object(POINTER)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, SEAT, 1, |message| {
+        message.object(KEYBOARD)
     })
     .ok()?;
     append_message(wire, &mut cursor, COMPOSITOR, 0, |message| {
@@ -514,13 +522,44 @@ fn wait_registry(socket: i64) -> Option<()> {
 
 fn wait_configure(socket: i64) -> Option<u32> {
     let mut event_bytes = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
-    let mut wire = receive_wayland_event(socket, &mut event_bytes)?;
-
-    let mut arguments = take_event(&mut wire, SEAT, 0)?;
-    if arguments.uint().ok()? != 1 || arguments.finish().is_err() {
+    let (mut event_length, keymap_fd) = receive_wayland_event_with_fd(socket, &mut event_bytes)?;
+    while event_length < CONFIGURE_EVENT_WIRE_SIZE {
+        let requested = (CONFIGURE_EVENT_WIRE_SIZE - event_length).min(CONFIG_READ_CAPACITY);
+        let length = syscall3(
+            SYS_READ,
+            socket as u64,
+            event_bytes[event_length..].as_mut_ptr() as u64,
+            requested as u64,
+        );
+        if length <= 0 || length as usize > requested {
+            return None;
+        }
+        event_length += length as usize;
+    }
+    if event_length != CONFIGURE_EVENT_WIRE_SIZE {
         return None;
     }
-    take_event(&mut wire, SEAT, 1)?;
+    let mut wire = &event_bytes[..event_length];
+
+    let mut arguments = take_event(&mut wire, SEAT, 0)?;
+    if arguments.uint().ok()? != 3 || arguments.finish().is_err() {
+        return None;
+    }
+    let mut arguments = take_event(&mut wire, SEAT, 1)?;
+    if arguments.string().ok()? != "seat0" || arguments.finish().is_err() {
+        return None;
+    }
+    let mut arguments = take_event(&mut wire, KEYBOARD, 0)?;
+    if arguments.uint().ok()? != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1
+        || usize::try_from(arguments.uint().ok()?).ok()? != SLOPOS_XKB_KEYMAP_SIZE
+        || arguments.finish().is_err()
+    {
+        return None;
+    }
+    let mut arguments = take_event(&mut wire, KEYBOARD, 5)?;
+    if arguments.int().ok()? != 25 || arguments.int().ok()? != 600 || arguments.finish().is_err() {
+        return None;
+    }
     take_event(&mut wire, OUTPUT, 0)?;
     let mut arguments = take_event(&mut wire, OUTPUT, 1)?;
     if arguments.uint().ok()? != 3
@@ -557,7 +596,13 @@ fn wait_configure(socket: i64) -> Option<u32> {
     }
     let mut arguments = take_event(&mut wire, XDG_SURFACE, 0)?;
     let serial = arguments.uint().ok()?;
-    if serial == 0 || arguments.finish().is_err() || !wire.is_empty() {
+    if serial == 0
+        || arguments.finish().is_err()
+        || !wire.is_empty()
+        || keymap_fd != FIRST_DYNAMIC_FD + 1
+        || !validate_keymap_fd(keymap_fd)
+        || syscall1(SYS_CLOSE, keymap_fd as u64) != 0
+    {
         return None;
     }
     Some(serial)
@@ -572,6 +617,14 @@ fn wait_presented(socket: i64, callback_data: u32) -> Option<()> {
             || enter.object().ok()? != SURFACE
             || enter.fixed().ok()? != 16 << 8
             || enter.fixed().ok()? != 12 << 8
+            || enter.finish().is_err()
+        {
+            return None;
+        }
+        let mut enter = take_event(&mut wire, KEYBOARD, 1)?;
+        if enter.uint().ok()? != 3
+            || enter.object().ok()? != SURFACE
+            || !enter.array().ok()?.is_empty()
             || enter.finish().is_err()
         {
             return None;
@@ -616,6 +669,74 @@ fn receive_wayland_event(
         return None;
     }
     Some(&destination[..length as usize])
+}
+
+fn receive_wayland_event_with_fd(
+    socket: i64,
+    destination: &mut [u8; WAYLAND_EVENT_MAX_WIRE_SIZE],
+) -> Option<(usize, i64)> {
+    let vector = IoVec {
+        base: destination.as_mut_ptr(),
+        length: CONFIG_READ_CAPACITY,
+    };
+    let mut control = RightsControl {
+        length: 0,
+        level: 0,
+        kind: 0,
+        fd: -1,
+        padding: 0,
+    };
+    let mut header = MessageHeader {
+        name: core::ptr::null(),
+        name_length: 0,
+        name_padding: 0,
+        vectors: &raw const vector,
+        vector_count: 1,
+        control: &raw mut control,
+        control_length: size_of::<RightsControl>(),
+        flags: 0,
+        flags_padding: 0,
+    };
+    let length = syscall3(SYS_RECVMSG, socket as u64, (&raw mut header) as u64, 0);
+    if length <= 0
+        || length as usize > CONFIG_READ_CAPACITY
+        || header.control_length != size_of::<RightsControl>()
+        || header.flags != 0
+        || control.length != 20
+        || control.level != SOL_SOCKET
+        || control.kind != SCM_RIGHTS
+        || control.fd < 0
+    {
+        return None;
+    }
+    Some((length as usize, i64::from(control.fd)))
+}
+
+fn validate_keymap_fd(fd: i64) -> bool {
+    let mut buffer = [0u8; CONFIG_READ_CAPACITY];
+    let mut length = 0usize;
+    let mut hash = CONFIG_HASH_OFFSET;
+    let mut final_byte = 1u8;
+    while length < SLOPOS_XKB_KEYMAP_SIZE {
+        let requested = buffer.len().min(SLOPOS_XKB_KEYMAP_SIZE - length);
+        let bytes = syscall3(
+            SYS_READ,
+            fd as u64,
+            buffer.as_mut_ptr() as u64,
+            requested as u64,
+        );
+        if bytes <= 0 || bytes as usize > requested {
+            return false;
+        }
+        let bytes = bytes as usize;
+        hash = config_hash_extend(hash, &buffer[..bytes]);
+        final_byte = buffer[bytes - 1];
+        length += bytes;
+    }
+    length == SLOPOS_XKB_KEYMAP_SIZE
+        && final_byte == 0
+        && hash == SLOPOS_XKB_KEYMAP_HASH
+        && syscall3(SYS_READ, fd as u64, buffer.as_mut_ptr() as u64, 1) == 0
 }
 
 fn append_message(

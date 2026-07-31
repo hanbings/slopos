@@ -7,6 +7,26 @@ use core::str;
 pub const HEADER_SIZE: usize = 8;
 pub const DISPLAY_OBJECT_ID: u32 = 1;
 pub const MAX_MESSAGE_SIZE: usize = u16::MAX as usize & !3;
+pub const WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1: u32 = 1;
+pub const SLOPOS_XKB_KEYMAP_TEXT: &[u8] = include_bytes!("../../../assets/slopos-keymap.xkb");
+pub const SLOPOS_XKB_KEYMAP_SIZE: usize = SLOPOS_XKB_KEYMAP_TEXT.len() + 1;
+pub const SLOPOS_XKB_KEYMAP_HASH: u64 = keymap_hash(SLOPOS_XKB_KEYMAP_TEXT);
+
+const fn keymap_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut index = 0;
+    while index <= bytes.len() {
+        let byte = if index == bytes.len() {
+            0
+        } else {
+            bytes[index]
+        };
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        index += 1;
+    }
+    hash
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WireError {
@@ -469,6 +489,98 @@ pub fn encode_seat_name<'a>(
 ) -> Result<&'a [u8], WireError> {
     let mut message = MessageBuilder::new(bytes, seat, 1)?;
     message.string(name)?;
+    message.finish()
+}
+
+/// Encodes the wire portion of `wl_keyboard.keymap`.
+///
+/// The file descriptor is deliberately absent: Wayland transfers `fd`
+/// arguments through the UNIX socket control message, in protocol order.
+pub fn encode_keyboard_keymap(
+    bytes: &mut [u8],
+    keyboard: u32,
+    format: u32,
+    size: u32,
+) -> Result<&[u8], WireError> {
+    if format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 || size == 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, keyboard, 0)?;
+    message.uint(format)?;
+    message.uint(size)?;
+    message.finish()
+}
+
+pub fn encode_keyboard_enter<'a>(
+    bytes: &'a mut [u8],
+    keyboard: u32,
+    serial: u32,
+    surface: u32,
+    pressed_keys: &[u8],
+) -> Result<&'a [u8], WireError> {
+    if serial == 0 || pressed_keys.len() % 4 != 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, keyboard, 1)?;
+    message.uint(serial)?;
+    message.object(surface)?;
+    message.array(pressed_keys)?;
+    message.finish()
+}
+
+pub fn encode_keyboard_key(
+    bytes: &mut [u8],
+    keyboard: u32,
+    serial: u32,
+    time: u32,
+    key: u32,
+    state: u32,
+) -> Result<&[u8], WireError> {
+    if serial == 0 || state > 1 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, keyboard, 3)?;
+    message.uint(serial)?;
+    message.uint(time)?;
+    message.uint(key)?;
+    message.uint(state)?;
+    message.finish()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_keyboard_modifiers(
+    bytes: &mut [u8],
+    keyboard: u32,
+    serial: u32,
+    depressed: u32,
+    latched: u32,
+    locked: u32,
+    group: u32,
+) -> Result<&[u8], WireError> {
+    if serial == 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, keyboard, 4)?;
+    message.uint(serial)?;
+    message.uint(depressed)?;
+    message.uint(latched)?;
+    message.uint(locked)?;
+    message.uint(group)?;
+    message.finish()
+}
+
+pub fn encode_keyboard_repeat_info(
+    bytes: &mut [u8],
+    keyboard: u32,
+    rate: i32,
+    delay: i32,
+) -> Result<&[u8], WireError> {
+    if rate < 0 || delay < 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, keyboard, 5)?;
+    message.int(rate)?;
+    message.int(delay)?;
     message.finish()
 }
 
@@ -1523,6 +1635,7 @@ pub struct CommittedSurface {
     pub frame_callback: u32,
     pub seat: u32,
     pub pointer: u32,
+    pub keyboard: u32,
     pub output: u32,
     pub width: u32,
     pub height: u32,
@@ -1558,6 +1671,7 @@ pub enum SurfaceSessionEvent {
         shm: u32,
         seat: u32,
         pointer: u32,
+        keyboard: u32,
         output: u32,
         xdg_surface: u32,
         toplevel: u32,
@@ -1572,6 +1686,7 @@ pub struct PresentedSurface {
     pub buffer: u32,
     pub frame_callback: u32,
     pub pointer: u32,
+    pub keyboard: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1602,6 +1717,7 @@ pub struct SingleSurfaceSession<const OBJECTS: usize> {
     shm: Option<u32>,
     seat: Option<u32>,
     pointer: Option<u32>,
+    keyboard: Option<u32>,
     output: Option<u32>,
     wm_base: Option<u32>,
     surface: Option<u32>,
@@ -1643,6 +1759,7 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
             shm: None,
             seat: None,
             pointer: None,
+            keyboard: None,
             output: None,
             wm_base: None,
             surface: None,
@@ -1706,6 +1823,7 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                     || self.shm.is_none()
                     || self.seat.is_none()
                     || self.pointer.is_none()
+                    || self.keyboard.is_none()
                     || self.output.is_none()
                     || self.wm_base.is_none()
                     || self.surface.is_none()
@@ -1722,6 +1840,7 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                     shm: self.shm.ok_or(SurfaceError::IncompleteLifecycle)?,
                     seat: self.seat.ok_or(SurfaceError::IncompleteLifecycle)?,
                     pointer: self.pointer.ok_or(SurfaceError::IncompleteLifecycle)?,
+                    keyboard: self.keyboard.ok_or(SurfaceError::IncompleteLifecycle)?,
                     output: self.output.ok_or(SurfaceError::IncompleteLifecycle)?,
                     xdg_surface: self.xdg_surface.ok_or(SurfaceError::IncompleteLifecycle)?,
                     toplevel: self.toplevel.ok_or(SurfaceError::IncompleteLifecycle)?,
@@ -1769,6 +1888,11 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                 if self.seat == Some(seat) =>
             {
                 set_once(&mut self.pointer, pointer)?;
+            }
+            (SurfacePhase::AwaitInitialCommit, Request::SeatGetKeyboard { seat, keyboard })
+                if self.seat == Some(seat) =>
+            {
+                set_once(&mut self.keyboard, keyboard)?;
             }
             (
                 SurfacePhase::AwaitInitialCommit,
@@ -1971,6 +2095,7 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                 .frame_callback
                 .ok_or(SurfaceError::IncompleteLifecycle)?,
             pointer: self.pointer.ok_or(SurfaceError::IncompleteLifecycle)?,
+            keyboard: self.keyboard.ok_or(SurfaceError::IncompleteLifecycle)?,
         };
         self.connection
             .objects
@@ -1998,6 +2123,7 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                 .ok_or(SurfaceError::IncompleteLifecycle)?,
             seat: self.seat.ok_or(SurfaceError::IncompleteLifecycle)?,
             pointer: self.pointer.ok_or(SurfaceError::IncompleteLifecycle)?,
+            keyboard: self.keyboard.ok_or(SurfaceError::IncompleteLifecycle)?,
             output: self.output.ok_or(SurfaceError::IncompleteLifecycle)?,
             width: buffer.width,
             height: buffer.height,
@@ -2352,6 +2478,7 @@ mod tests {
         const SEAT: u32 = 12;
         const OUTPUT: u32 = 13;
         const POINTER: u32 = 14;
+        const KEYBOARD: u32 = 15;
 
         let mut bytes = [0; 768];
         let mut cursor = 0;
@@ -2371,6 +2498,9 @@ mod tests {
         }
         append_message(&mut bytes, &mut cursor, SEAT, 0, |message| {
             message.object(POINTER).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, SEAT, 1, |message| {
+            message.object(KEYBOARD).unwrap();
         });
         append_message(&mut bytes, &mut cursor, COMPOSITOR, 0, |message| {
             message.object(SURFACE).unwrap();
@@ -2498,6 +2628,7 @@ mod tests {
                 shm: 4,
                 seat: 12,
                 pointer: 14,
+                keyboard: 15,
                 output: 13,
                 xdg_surface: 9,
                 toplevel: 10,
@@ -2515,8 +2646,13 @@ mod tests {
         assert_eq!(surface.buffer, 8);
         assert_eq!(surface.frame_callback, 11);
         assert_eq!(
-            (surface.seat, surface.pointer, surface.output),
-            (12, 14, 13)
+            (
+                surface.seat,
+                surface.pointer,
+                surface.keyboard,
+                surface.output,
+            ),
+            (12, 14, 15, 13)
         );
         assert_eq!(
             (surface.width, surface.height, surface.stride),
@@ -2532,6 +2668,7 @@ mod tests {
                 buffer: 8,
                 frame_callback: 11,
                 pointer: 14,
+                keyboard: 15,
             }
         );
 
@@ -2550,6 +2687,7 @@ mod tests {
                 buffer: 8,
                 frame_callback: 11,
                 pointer: 14,
+                keyboard: 15,
             }
         );
     }
@@ -2661,6 +2799,50 @@ mod tests {
         let (frame, _) = Frame::decode(frame).unwrap();
         assert_eq!(frame.header.object_id, 12);
         assert_eq!(ArgumentReader::new(frame.payload).uint().unwrap(), 1);
+
+        let keymap_size = u32::try_from(SLOPOS_XKB_KEYMAP_TEXT.len() + 1).unwrap();
+        let frame = encode_keyboard_keymap(
+            &mut bytes,
+            15,
+            WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
+            keymap_size,
+        )
+        .unwrap();
+        let (frame, _) = Frame::decode(frame).unwrap();
+        let mut arguments = ArgumentReader::new(frame.payload);
+        assert_eq!(frame.header.object_id, 15);
+        assert_eq!(arguments.uint().unwrap(), WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1);
+        assert_eq!(arguments.uint().unwrap(), keymap_size);
+
+        let frame = encode_keyboard_enter(&mut bytes, 15, 3, 6, &[]).unwrap();
+        let (frame, _) = Frame::decode(frame).unwrap();
+        let mut arguments = ArgumentReader::new(frame.payload);
+        assert_eq!(arguments.uint().unwrap(), 3);
+        assert_eq!(arguments.object().unwrap(), 6);
+        assert!(arguments.array().unwrap().is_empty());
+
+        let frame = encode_keyboard_repeat_info(&mut bytes, 15, 25, 600).unwrap();
+        let (frame, _) = Frame::decode(frame).unwrap();
+        let mut arguments = ArgumentReader::new(frame.payload);
+        assert_eq!(arguments.int().unwrap(), 25);
+        assert_eq!(arguments.int().unwrap(), 600);
+
+        let frame = encode_keyboard_key(&mut bytes, 15, 4, 1200, 30, 1).unwrap();
+        let (frame, _) = Frame::decode(frame).unwrap();
+        let mut arguments = ArgumentReader::new(frame.payload);
+        assert_eq!(arguments.uint().unwrap(), 4);
+        assert_eq!(arguments.uint().unwrap(), 1200);
+        assert_eq!(arguments.uint().unwrap(), 30);
+        assert_eq!(arguments.uint().unwrap(), 1);
+
+        let frame = encode_keyboard_modifiers(&mut bytes, 15, 5, 1, 2, 4, 0).unwrap();
+        let (frame, _) = Frame::decode(frame).unwrap();
+        let mut arguments = ArgumentReader::new(frame.payload);
+        assert_eq!(arguments.uint().unwrap(), 5);
+        assert_eq!(arguments.uint().unwrap(), 1);
+        assert_eq!(arguments.uint().unwrap(), 2);
+        assert_eq!(arguments.uint().unwrap(), 4);
+        assert_eq!(arguments.uint().unwrap(), 0);
 
         let frame = encode_pointer_enter(&mut bytes, 14, 2, 6, 16 << 8, 12 << 8).unwrap();
         let (frame, _) = Frame::decode(frame).unwrap();

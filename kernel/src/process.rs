@@ -36,6 +36,7 @@ const LINUX_SYS_SCHED_YIELD: u64 = 24;
 const LINUX_SYS_SOCKET: u64 = 41;
 const LINUX_SYS_CONNECT: u64 = 42;
 const LINUX_SYS_SENDMSG: u64 = 46;
+const LINUX_SYS_RECVMSG: u64 = 47;
 const LINUX_SYS_EXIT: u64 = 60;
 const LINUX_SYS_WAIT4: u64 = 61;
 const LINUX_SYS_FTRUNCATE: u64 = 77;
@@ -159,6 +160,23 @@ pub struct ReadRequest {
     user_pages: u8,
 }
 
+#[derive(Clone, Copy)]
+pub struct RecvMsgRequest {
+    pub pid: u32,
+    pub fd: u32,
+    pub requested: usize,
+    destination: u64,
+    header: u64,
+    control: u64,
+    user_pages: u8,
+}
+
+impl RecvMsgRequest {
+    pub const fn user_pages(&self) -> u8 {
+        self.user_pages
+    }
+}
+
 impl ReadRequest {
     pub const fn user_pages(&self) -> u8 {
         self.user_pages
@@ -246,6 +264,7 @@ impl WaylandWaitRequest {
 enum PendingSyscall {
     OpenAt(OpenAtRequest),
     Read(ReadRequest),
+    RecvMsg(RecvMsgRequest),
     Write(WriteRequest),
     Close(CloseRequest),
     Yield,
@@ -258,6 +277,7 @@ enum PendingSyscall {
 pub enum ProcessEvent {
     OpenAt(OpenAtRequest),
     Read(ReadRequest),
+    RecvMsg(RecvMsgRequest),
     Write(WriteRequest),
     Close(CloseRequest),
     Yielded { pid: u32 },
@@ -502,7 +522,7 @@ fn spawn_user_process(
     let argv0 = core::str::from_utf8(arguments[0]).unwrap_or("<non-utf8>");
     let argv1 = core::str::from_utf8(arguments[1]).unwrap_or("<non-utf8>");
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={pid} parent={} source={source} path={path} argv1={argv1} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frames={:#x}/{:#x}/{:#x} stack_frames={:#x}/{:#x}/{:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        "SLOPOS-PROCESS: pid={pid} parent={} source={source} path={path} argv1={argv1} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frames={:#x}/{:#x}/{:#x}/{:#x} stack_frames={:#x}/{:#x}/{:#x} code=user-readonly stack=user-writable kernel=supervisor",
         parent.unwrap_or(0),
         elf.entry(),
         elf.load_segment_count(),
@@ -515,6 +535,7 @@ fn spawn_user_process(
         address_space.code_frames[0],
         address_space.code_frames[1],
         address_space.code_frames[2],
+        address_space.code_frames[3],
         address_space.stack_frames[0],
         address_space.stack_frames[1],
         address_space.stack_frames[2]
@@ -590,8 +611,22 @@ pub fn open_shared_memory(
     process_table_mut().open_shared_memory(pid, handle.index(), handle.generation())
 }
 
+pub fn open_shared_memory_read_only(
+    pid: u32,
+    handle: crate::shared_memory_service::SharedMemoryHandle,
+) -> Result<u32, ProcessError> {
+    process_table_mut().open_shared_memory_read_only(pid, handle.index(), handle.generation())
+}
+
 pub fn descriptor_object(pid: u32, fd: u32) -> Result<DescriptorObject, ProcessError> {
     process_table().descriptor_object(pid, fd)
+}
+
+pub fn readable_descriptor_object(
+    pid: u32,
+    fd: u32,
+) -> Result<(DescriptorObject, u64), ProcessError> {
+    process_table().readable_descriptor_object(pid, fd)
 }
 
 pub fn descriptor_objects(
@@ -611,6 +646,15 @@ pub fn write_window(pid: u32, fd: u32, requested: usize) -> Result<WriteWindow, 
 
 pub fn advance_fd(pid: u32, fd: u32, length: usize) -> Result<(), ProcessError> {
     process_table_mut().advance_fd(pid, fd, length)
+}
+
+pub fn advance_descriptor_object(
+    pid: u32,
+    fd: u32,
+    length: usize,
+    object_size: u64,
+) -> Result<(), ProcessError> {
+    process_table_mut().advance_descriptor_object(pid, fd, length, object_size)
 }
 
 pub fn seek_fd(pid: u32, fd: u32, offset: u64) -> Result<(), ProcessError> {
@@ -791,6 +835,9 @@ pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> Proces
                 crate::fatal("non-read completion carried output bytes");
             }
         }
+        PendingSyscall::RecvMsg(_) => {
+            crate::fatal("recvmsg was sent through ordinary I/O completion")
+        }
         PendingSyscall::Yield
         | PendingSyscall::Wait(_)
         | PendingSyscall::DesktopWait(_)
@@ -798,6 +845,71 @@ pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> Proces
             crate::fatal("scheduler syscall was sent through I/O completion")
         }
     }
+    finish_io_resume(pid, result)
+}
+
+pub fn resume_recvmsg(
+    request: RecvMsgRequest,
+    result: i64,
+    output: &[u8],
+    rights_fd: Option<u32>,
+) -> ProcessEvent {
+    let pid = request.pid;
+    let pending = pending_syscall(pid)
+        .unwrap_or_else(|| crate::fatal("recvmsg resume has no pending syscall"));
+    let PendingSyscall::RecvMsg(pending_request) = pending else {
+        crate::fatal("recvmsg resumed a different pending syscall");
+    };
+    if pending_request.fd != request.fd
+        || pending_request.destination != request.destination
+        || pending_request.header != request.header
+        || pending_request.control != request.control
+        || pending_request.requested != request.requested
+    {
+        crate::fatal("recvmsg completion request changed while blocked");
+    }
+    if result < 0 {
+        if !output.is_empty() || rights_fd.is_some() {
+            crate::fatal("failed recvmsg completion carried data or rights");
+        }
+        return finish_io_resume(pid, result);
+    }
+    let length = usize::try_from(result)
+        .unwrap_or_else(|_| crate::fatal("recvmsg completion length overflow"));
+    if length > request.requested || output.len() != length {
+        crate::fatal("recvmsg completion output length mismatch");
+    }
+    copy_to_user(pid, request.destination, output)
+        .unwrap_or_else(|| crate::fatal("recvmsg data destination became invalid"));
+
+    let control_length = if let Some(fd) = rights_fd {
+        let mut control = [0u8; LINUX_CMSG_SPACE_ONE_FD];
+        control[0..8].copy_from_slice(&LINUX_CMSG_LEN_ONE_FD.to_ne_bytes());
+        control[8..12].copy_from_slice(&LINUX_SOL_SOCKET.to_ne_bytes());
+        control[12..16].copy_from_slice(&LINUX_SCM_RIGHTS.to_ne_bytes());
+        control[16..20].copy_from_slice(&fd.to_ne_bytes());
+        copy_to_user(pid, request.control, &control)
+            .unwrap_or_else(|| crate::fatal("recvmsg control destination became invalid"));
+        LINUX_CMSG_SPACE_ONE_FD as u64
+    } else {
+        0
+    };
+    let control_length_address = request
+        .header
+        .checked_add(40)
+        .unwrap_or_else(|| crate::fatal("recvmsg header control offset overflow"));
+    copy_to_user(pid, control_length_address, &control_length.to_ne_bytes())
+        .unwrap_or_else(|| crate::fatal("recvmsg control length destination became invalid"));
+    let flags_address = request
+        .header
+        .checked_add(48)
+        .unwrap_or_else(|| crate::fatal("recvmsg header flags offset overflow"));
+    copy_to_user(pid, flags_address, &0i32.to_ne_bytes())
+        .unwrap_or_else(|| crate::fatal("recvmsg flags destination became invalid"));
+    finish_io_resume(pid, result)
+}
+
+fn finish_io_resume(pid: u32, result: i64) -> ProcessEvent {
     clear_pending_syscall(pid);
     let frame = saved_syscall_frame_mut(pid);
     frame.rax = result as u64;
@@ -1182,6 +1294,114 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             suspend_io_syscall(pid, frame, PendingSyscall::Write(request));
             crate::serial::serialln(format_args!(
                 "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=46 sendmsg fd={fd} requested={requested} control=SCM_RIGHTS rights_fd={rights_fd} user_pages={user_pages} origin=cpl3"
+            ));
+            2
+        }
+        LINUX_SYS_RECVMSG => {
+            let Ok(fd) = u32::try_from(frame.rdi) else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            if frame.rdx != 0
+                || !matches!(
+                    descriptor_object(pid, fd),
+                    Ok(DescriptorObject::LocalSocket { .. })
+                )
+            {
+                frame.rax = if frame.rdx == 0 {
+                    LINUX_EBADF as u64
+                } else {
+                    LINUX_EINVAL as u64
+                };
+                return 0;
+            }
+            let mut header = [0u8; LINUX_MSGHDR_SIZE];
+            if copy_from_user(pid, frame.rsi, &mut header).is_none()
+                || !validate_user_range(pid, frame.rsi, header.len(), true)
+            {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let Some(name) = native_u64(&header, 0) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(name_length) = native_u32(&header, 8) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(iovec_address) = native_u64(&header, 16) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(iovec_count) = native_u64(&header, 24) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(control_address) = native_u64(&header, 32) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(control_length) = native_u64(&header, 40) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            if name != 0
+                || name_length != 0
+                || iovec_count != 1
+                || iovec_address == 0
+                || control_address == 0
+                || control_length != LINUX_CMSG_SPACE_ONE_FD as u64
+            {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let mut iovec = [0u8; LINUX_IOVEC_SIZE];
+            if copy_from_user(pid, iovec_address, &mut iovec).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let Some(output_address) = native_u64(&iovec, 0) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(output_length) = native_u64(&iovec, 8) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Ok(requested) = usize::try_from(output_length) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            if requested == 0
+                || requested > PROCESS_SYSCALL_IO_CAPACITY
+                || !validate_user_range(pid, output_address, requested, true)
+                || !validate_user_range(pid, control_address, LINUX_CMSG_SPACE_ONE_FD, true)
+            {
+                frame.rax = if requested == 0 || requested > PROCESS_SYSCALL_IO_CAPACITY {
+                    LINUX_EINVAL as u64
+                } else {
+                    LINUX_EFAULT as u64
+                };
+                return 0;
+            }
+            let user_pages = user_page_count(output_address, requested)
+                .unwrap_or_else(|| crate::fatal("validated recvmsg range has invalid page span"));
+            suspend_io_syscall(
+                pid,
+                frame,
+                PendingSyscall::RecvMsg(RecvMsgRequest {
+                    pid,
+                    fd,
+                    requested,
+                    destination: output_address,
+                    header: frame.rsi,
+                    control: control_address,
+                    user_pages,
+                }),
+            );
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=47 recvmsg fd={fd} requested={requested} control_capacity={LINUX_CMSG_SPACE_ONE_FD} user_pages={user_pages} origin=cpl3"
             ));
             2
         }
@@ -1706,6 +1926,7 @@ fn process_event_after_user(pid: u32) -> ProcessEvent {
     ) {
         (ProcessState::Blocked, PendingSyscall::OpenAt(request)) => ProcessEvent::OpenAt(request),
         (ProcessState::Blocked, PendingSyscall::Read(request)) => ProcessEvent::Read(request),
+        (ProcessState::Blocked, PendingSyscall::RecvMsg(request)) => ProcessEvent::RecvMsg(request),
         (ProcessState::Blocked, PendingSyscall::Write(request)) => ProcessEvent::Write(request),
         (ProcessState::Blocked, PendingSyscall::Close(request)) => ProcessEvent::Close(request),
         (ProcessState::Blocked, PendingSyscall::Wait(request)) => {

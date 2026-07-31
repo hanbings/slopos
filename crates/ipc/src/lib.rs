@@ -510,6 +510,17 @@ mod tests {
         assert_eq!(&bytes[..4], b"pool");
         assert_eq!(table.take_rights(server), Ok(None));
         assert_eq!(table.send_with_rights(client, b"next", rights), Ok(4));
+        assert_eq!(
+            table.recv_with_rights(server, &mut bytes),
+            Ok((4, Some(rights)))
+        );
+        let keymap = AncillaryRights::new(7, 11);
+        assert_eq!(table.send_with_rights(server, b"keymap", keymap), Ok(6));
+        assert_eq!(
+            table.recv_with_rights(client, &mut bytes),
+            Ok((6, Some(keymap)))
+        );
+        assert_eq!(&bytes[..6], b"keymap");
     }
 
     #[test]
