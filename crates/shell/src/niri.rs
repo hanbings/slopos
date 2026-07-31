@@ -225,6 +225,7 @@ pub struct NiriWindowRule<'a> {
     pub open_on_workspace: Option<&'a str>,
     pub open_floating: Option<bool>,
     pub open_maximized: Option<bool>,
+    pub default_column_width: Option<ColumnWidth>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -283,6 +284,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         maximized
+    }
+
+    pub fn column_width_for(self, app_id: &str) -> Option<ColumnWidth> {
+        let mut width = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.default_column_width {
+                    width = Some(value);
+                }
+            }
+        }
+        width
     }
 
     fn push(&mut self, rule: NiriWindowRule<'a>) -> Result<(), NiriConfigError> {
@@ -480,6 +493,7 @@ impl<'a> ShellConfigParser<'a> {
             open_on_workspace: None,
             open_floating: None,
             open_maximized: None,
+            default_column_width: None,
         };
         loop {
             match self.next_non_end() {
@@ -526,6 +540,9 @@ impl<'a> ShellConfigParser<'a> {
                     });
                     self.finish_node()?;
                 }
+                KdlToken::Word("default-column-width") => {
+                    rule.default_column_width = Some(self.parse_rule_column_width()?);
+                }
                 KdlToken::Word(_) | KdlToken::String(_) | KdlToken::Equal => {
                     self.skip_node()?;
                 }
@@ -533,6 +550,41 @@ impl<'a> ShellConfigParser<'a> {
                 KdlToken::RightBrace => return Ok(rule),
                 KdlToken::End => return Err(NiriConfigError::UnexpectedEnd),
                 KdlToken::EndNode => {}
+            }
+        }
+    }
+
+    fn parse_rule_column_width(&mut self) -> Result<ColumnWidth, NiriConfigError> {
+        self.expect_left_brace()?;
+        let mut width = ColumnWidth::Client;
+        let mut seen = false;
+        loop {
+            match self.next_non_end() {
+                KdlToken::RightBrace => return Ok(width),
+                KdlToken::Word("proportion") if !seen => {
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    width = ColumnWidth::Proportion(
+                        super::parse_thousandths(value)
+                            .map_err(|_| NiriConfigError::InvalidWindowRule)?,
+                    );
+                    seen = true;
+                    self.finish_node()?;
+                }
+                KdlToken::Word("fixed") if !seen => {
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    width = ColumnWidth::Fixed(
+                        super::parse_rounded_u16(value)
+                            .map_err(|_| NiriConfigError::InvalidWindowRule)?,
+                    );
+                    seen = true;
+                    self.finish_node()?;
+                }
+                KdlToken::End => return Err(NiriConfigError::UnexpectedEnd),
+                _ => return Err(NiriConfigError::InvalidWindowRule),
             }
         }
     }
@@ -1330,11 +1382,20 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn open_window(&mut self, workspace: usize, window: u32) -> Result<(), WorkspaceError> {
+        self.open_window_with_width(workspace, window, None)
+    }
+
+    pub fn open_window_with_width(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        width: Option<ColumnWidth>,
+    ) -> Result<(), WorkspaceError> {
         self.layouts
             .get_mut(workspace)
             .filter(|_| workspace < self.count)
             .ok_or(WorkspaceError::InvalidWorkspace)?
-            .open_window(window)
+            .open_window_with_width(window, width)
             .map_err(WorkspaceError::Layout)
     }
 
@@ -2142,18 +2203,21 @@ mod tests {
             }
             window-rule {
                 open-maximized true
+                default-column-width { fixed 600; }
             }
             window-rule {
                 match app-id="slopos-config"
                 open-on-workspace "main"
                 open-floating true
                 open-maximized true
+                default-column-width { proportion 0.333; }
             }
             window-rule {
                 match app-id="slopos-config"
                 open-on-workspace "config"
                 open-floating false
                 open-maximized false
+                default-column-width { proportion 0.667; }
             }
             "#,
         )
@@ -2574,6 +2638,14 @@ mod tests {
             config.window_rules.maximized_for("slopos-config"),
             Some(false)
         );
+        assert_eq!(
+            config.window_rules.column_width_for("slopos-terminal"),
+            Some(ColumnWidth::Fixed(600))
+        );
+        assert_eq!(
+            config.window_rules.column_width_for("slopos-config"),
+            Some(ColumnWidth::Proportion(667))
+        );
     }
 
     #[test]
@@ -2597,6 +2669,23 @@ mod tests {
         assert_eq!(
             parse_niri_shell_config("window-rule { open-maximized maybe; }"),
             Err(NiriConfigError::InvalidWindowRule)
+        );
+        for input in [
+            "window-rule { default-column-width { proportion 1.5; } }",
+            "window-rule { default-column-width { fixed nope; } }",
+            "window-rule { default-column-width { fixed 200; fixed 300; } }",
+        ] {
+            assert_eq!(
+                parse_niri_shell_config(input),
+                Err(NiriConfigError::InvalidWindowRule)
+            );
+        }
+        assert_eq!(
+            parse_niri_shell_config("window-rule { default-column-width {} }")
+                .unwrap()
+                .window_rules
+                .column_width_for("anything"),
+            Some(ColumnWidth::Client)
         );
         assert!(
             parse_niri_shell_config(

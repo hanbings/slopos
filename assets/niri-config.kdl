@@ -83,6 +83,7 @@ window-rule {
     open-on-workspace "config"
     open-floating false
     open-maximized false
+    default-column-width { proportion 0.5; }
 }
 
 layout {

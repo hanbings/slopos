@@ -10,6 +10,7 @@ serial_log="${repo_dir}/evidence/custom-config-serial.log"
 debug_log="${repo_dir}/evidence/custom-config-uefi-debugcon.log"
 qemu_log="${repo_dir}/evidence/custom-config-qemu.log"
 workspace_screenshot="${repo_dir}/evidence/custom-config-workspace-click.ppm"
+column_width_screenshot="${repo_dir}/evidence/custom-config-default-column-width.ppm"
 action_screenshot="${repo_dir}/evidence/custom-config-on-click.ppm"
 format_restored_screenshot="${repo_dir}/evidence/custom-config-format-restored.ppm"
 right_action_screenshot="${repo_dir}/evidence/custom-config-on-click-right.ppm"
@@ -64,9 +65,10 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
 sed \
     -e '1i// user open-maximized override accepted by the SlopOS desktop service' \
     -e 's/open-maximized false/open-maximized true/' \
+    -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     "${repo_dir}/assets/niri-config.kdl" >"${custom_niri}"
 custom_niri_bytes="$(wc -c <"${custom_niri}")"
-if (( custom_niri_bytes <= 3918 || custom_niri_bytes > 4096 )); then
+if (( custom_niri_bytes <= 3963 || custom_niri_bytes > 4096 )); then
     echo "custom niri fixture has unexpected size: ${custom_niri_bytes}" >&2
     exit 1
 fi
@@ -106,6 +108,11 @@ set +e
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${workspace_screenshot}"
+    echo "sendkey meta_l-f 50"
+    sleep 1
+    echo "screendump ${column_width_screenshot}"
+    echo "sendkey meta_l-f 50"
+    sleep 1
     echo "mouse_move -24 0"
     echo "mouse_button 1"
     echo "mouse_button 0"
@@ -210,6 +217,13 @@ grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized value=true applied=true workspace=2 x=16 y=56 width=992 height=696 mode=maximized-column source=config" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-DESKTOP: window resized kind=CONFIG width=656 layout=scrolling" \
+    "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=maximize-column changed=true workspace=2 name=config focused=2" "${serial_log}")" -ne 2 ]]; then
+    echo "custom niri default-column-width did not survive one maximize restore cycle" >&2
+    exit 1
+fi
+grep -Fq \
     "SLOPOS-WAYBAR: workspace clicked index=1 name=main changed=true module=niri/workspaces" \
     "${serial_log}"
 grep -Fq \
@@ -242,6 +256,7 @@ grep -Fq "SLOPOS-TERMINAL: command=ABOUT" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=HELP" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=SWWW QUERY" "${serial_log}"
 test -s "${workspace_screenshot}"
+test -s "${column_width_screenshot}"
 test -s "${action_screenshot}"
 test -s "${format_restored_screenshot}"
 test -s "${right_action_screenshot}"
@@ -251,6 +266,8 @@ test -s "${scroll_down_screenshot}"
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${workspace_screenshot}" \
         >"${repo_dir}/evidence/custom-config-workspace-click.png"
+    pnmtopng "${column_width_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-default-column-width.png"
     pnmtopng "${action_screenshot}" \
         >"${repo_dir}/evidence/custom-config-on-click.png"
     pnmtopng "${format_restored_screenshot}" \
@@ -274,4 +291,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded niri/Waybar user configuration override, initial maximize, placement, actions, and alternate format verified"
+echo "SlopOS bounded niri/Waybar user configuration override, initial width/maximize, placement, actions, and alternate format verified"

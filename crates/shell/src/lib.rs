@@ -366,6 +366,14 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     }
 
     pub fn open_window(&mut self, window: u32) -> Result<(), LayoutError> {
+        self.open_window_with_width(window, None)
+    }
+
+    pub fn open_window_with_width(
+        &mut self,
+        window: u32,
+        width: Option<ColumnWidth>,
+    ) -> Result<(), LayoutError> {
         self.reject_duplicate(window)?;
         if self.column_count == COLUMNS {
             return Err(LayoutError::ColumnCapacity);
@@ -382,9 +390,8 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         column.windows[0] = window;
         column.window_count = 1;
         column.display = self.config.default_column_display;
-        column.width = self
-            .config
-            .default_column_width
+        column.width = width
+            .unwrap_or(self.config.default_column_width)
             .resolve(self.output_width, self.config.gaps);
         self.columns[insert_at] = column;
         self.column_count += 1;
@@ -2256,7 +2263,9 @@ mod tests {
     #[test]
     fn applies_initial_maximize_to_a_specific_column_without_stealing_focus() {
         let mut layout = ScrollLayout::<2, 1>::new(1000, 700, 30, LayoutConfig::default());
-        layout.open_window(1).unwrap();
+        layout
+            .open_window_with_width(1, Some(ColumnWidth::Proportion(667)))
+            .unwrap();
         layout.open_window(2).unwrap();
         assert_eq!(layout.focused_window(), Some(2));
 
@@ -2265,7 +2274,7 @@ mod tests {
         assert_eq!(layout.tile_rect(1).unwrap().width, 968);
         assert!(!layout.set_window_maximized(1, true).unwrap());
         assert!(layout.set_window_maximized(1, false).unwrap());
-        assert_eq!(layout.tile_rect(1).unwrap().width, 476);
+        assert_eq!(layout.tile_rect(1).unwrap().width, 640);
         assert_eq!(
             layout.set_window_maximized(99, true),
             Err(LayoutError::UnknownWindow)
