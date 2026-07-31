@@ -34,6 +34,8 @@ pub const DEFAULT_ACTIVE_COLOR: u32 = 0x7f_c8_ff;
 pub const DEFAULT_INACTIVE_COLOR: u32 = 0x50_50_50;
 pub const DEFAULT_BORDER_COLOR: u32 = 0xff_c8_7f;
 pub const DEFAULT_BACKGROUND_COLOR: u32 = 0x10_14_26;
+pub const DEFAULT_SHADOW_SOFTNESS: u16 = 30;
+pub const DEFAULT_SHADOW_SPREAD: i16 = 5;
 pub const MAX_PRESET_SIZES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -181,6 +183,24 @@ pub struct Border {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShadowColor {
+    pub rgb: u32,
+    pub opacity: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Shadow {
+    pub enabled: bool,
+    pub offset_x: i32,
+    pub offset_y: i32,
+    pub softness: u16,
+    pub spread: i16,
+    pub draw_behind_window: bool,
+    pub color: ShadowColor,
+    pub inactive_color: Option<ShadowColor>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LayoutConfig {
     pub gaps: u16,
     pub center_focused_column: CenterFocusedColumn,
@@ -191,6 +211,7 @@ pub struct LayoutConfig {
     pub preset_window_heights: PresetSizes,
     pub focus_ring: FocusRing,
     pub border: Border,
+    pub shadow: Shadow,
     pub background_color: u32,
 }
 
@@ -216,6 +237,19 @@ impl Default for LayoutConfig {
                 active_color: DEFAULT_BORDER_COLOR,
                 inactive_color: DEFAULT_INACTIVE_COLOR,
             },
+            shadow: Shadow {
+                enabled: false,
+                offset_x: 0,
+                offset_y: 5,
+                softness: DEFAULT_SHADOW_SOFTNESS,
+                spread: DEFAULT_SHADOW_SPREAD,
+                draw_behind_window: false,
+                color: ShadowColor {
+                    rgb: 0,
+                    opacity: 467,
+                },
+                inactive_color: None,
+            },
             background_color: DEFAULT_BACKGROUND_COLOR,
         }
     }
@@ -231,6 +265,7 @@ pub enum ConfigError {
     InvalidColumnDisplay,
     InvalidColumnWidth,
     InvalidFocusRing,
+    InvalidShadow,
 }
 
 pub fn parse_niri_layout(input: &str) -> Result<LayoutConfig, ConfigError> {
@@ -1619,6 +1654,10 @@ impl<'a> ConfigParser<'a> {
                     self.expect_block()?;
                     config.border = self.parse_border(config.border)?;
                 }
+                Token::Identifier("shadow") => {
+                    self.expect_block()?;
+                    config.shadow = self.parse_shadow(config.shadow)?;
+                }
                 Token::Identifier("background-color") => {
                     config.background_color = parse_color(self.value_string()?)?;
                     self.finish_node()?;
@@ -1752,6 +1791,83 @@ impl<'a> ConfigParser<'a> {
         }
     }
 
+    fn parse_shadow(&mut self, mut shadow: Shadow) -> Result<Shadow, ConfigError> {
+        loop {
+            match self.next_non_end_node() {
+                Token::RightBrace => return Ok(shadow),
+                Token::Identifier("on") => {
+                    shadow.enabled = true;
+                    self.finish_node()?;
+                }
+                Token::Identifier("off") => {
+                    shadow.enabled = false;
+                    self.finish_node()?;
+                }
+                Token::Identifier("softness") => {
+                    shadow.softness = parse_rounded_i32(self.value_number()?, 0, 1024)? as u16;
+                    self.finish_node()?;
+                }
+                Token::Identifier("spread") => {
+                    shadow.spread = parse_rounded_i32(self.value_number()?, -1024, 1024)? as i16;
+                    self.finish_node()?;
+                }
+                Token::Identifier("offset") => {
+                    let (x, y) = self.parse_shadow_offset()?;
+                    shadow.offset_x = x;
+                    shadow.offset_y = y;
+                }
+                Token::Identifier("draw-behind-window") => {
+                    shadow.draw_behind_window = match self.next() {
+                        Token::Identifier("true") => true,
+                        Token::Identifier("false") => false,
+                        _ => return Err(ConfigError::InvalidShadow),
+                    };
+                    self.finish_node()?;
+                }
+                Token::Identifier("color") => {
+                    shadow.color = parse_shadow_color(self.value_string()?)?;
+                    self.finish_node()?;
+                }
+                Token::Identifier("inactive-color") => {
+                    shadow.inactive_color = Some(parse_shadow_color(self.value_string()?)?);
+                    self.finish_node()?;
+                }
+                Token::Identifier(_) | Token::Other | Token::Number(_) | Token::String(_) => {
+                    self.skip_node()?
+                }
+                Token::End => return Err(ConfigError::UnexpectedEnd),
+                Token::LeftBrace | Token::EndNode => {}
+            }
+        }
+    }
+
+    fn parse_shadow_offset(&mut self) -> Result<(i32, i32), ConfigError> {
+        let mut x = 0;
+        let mut y = 0;
+        loop {
+            match self.next() {
+                Token::Identifier("x") => {
+                    if self.next() != Token::Other {
+                        return Err(ConfigError::InvalidShadow);
+                    }
+                    x = parse_rounded_i32(self.value_number()?, -65_535, 65_535)?;
+                }
+                Token::Identifier("y") => {
+                    if self.next() != Token::Other {
+                        return Err(ConfigError::InvalidShadow);
+                    }
+                    y = parse_rounded_i32(self.value_number()?, -65_535, 65_535)?;
+                }
+                Token::EndNode | Token::End => return Ok((x, y)),
+                Token::RightBrace => {
+                    self.push(Token::RightBrace);
+                    return Ok((x, y));
+                }
+                _ => return Err(ConfigError::InvalidShadow),
+            }
+        }
+    }
+
     fn expect_block(&mut self) -> Result<(), ConfigError> {
         loop {
             match self.next() {
@@ -1855,6 +1971,31 @@ fn parse_rounded_u16(value: &str) -> Result<u16, ConfigError> {
     u16::try_from(rounded).map_err(|_| ConfigError::InvalidNumber)
 }
 
+fn parse_rounded_i32(value: &str, minimum: i32, maximum: i32) -> Result<i32, ConfigError> {
+    let (negative, magnitude) = if let Some(value) = value.strip_prefix('-') {
+        (true, value)
+    } else if let Some(value) = value.strip_prefix('+') {
+        (false, value)
+    } else {
+        (false, value)
+    };
+    if magnitude.is_empty() {
+        return Err(ConfigError::InvalidNumber);
+    }
+    let rounded = i32::try_from(
+        parse_decimal_thousandths(magnitude)?
+            .checked_add(500)
+            .ok_or(ConfigError::InvalidNumber)?
+            / 1000,
+    )
+    .map_err(|_| ConfigError::InvalidNumber)?;
+    let value = if negative { -rounded } else { rounded };
+    if !(minimum..=maximum).contains(&value) {
+        return Err(ConfigError::InvalidNumber);
+    }
+    Ok(value)
+}
+
 fn parse_thousandths(value: &str) -> Result<u16, ConfigError> {
     let thousandths = parse_decimal_thousandths(value)?;
     if thousandths > 1000 {
@@ -1906,18 +2047,44 @@ fn parse_digits(value: &str) -> Result<u32, ConfigError> {
 }
 
 fn parse_color(value: &str) -> Result<u32, ConfigError> {
+    Ok(parse_shadow_color(value)?.rgb)
+}
+
+fn parse_shadow_color(value: &str) -> Result<ShadowColor, ConfigError> {
     let hex = value.strip_prefix('#').ok_or(ConfigError::InvalidColor)?;
-    if hex.len() != 6 && hex.len() != 8 {
-        return Err(ConfigError::InvalidColor);
-    }
-    let mut color = 0u32;
-    for byte in hex.bytes().take(6) {
-        color = color
-            .checked_mul(16)
-            .and_then(|current| hex_digit(byte).map(|digit| current + u32::from(digit)))
-            .ok_or(ConfigError::InvalidColor)?;
-    }
-    Ok(color)
+    let (red, green, blue, alpha) = match hex.len() {
+        3 | 4 => {
+            let mut digits = [0u8; 4];
+            for (index, byte) in hex.bytes().enumerate() {
+                digits[index] = hex_digit(byte).ok_or(ConfigError::InvalidColor)? * 17;
+            }
+            (
+                digits[0],
+                digits[1],
+                digits[2],
+                if hex.len() == 4 { digits[3] } else { 255 },
+            )
+        }
+        6 | 8 => {
+            let mut bytes = [0u8; 4];
+            for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+                let high = hex_digit(pair[0]).ok_or(ConfigError::InvalidColor)?;
+                let low = hex_digit(pair[1]).ok_or(ConfigError::InvalidColor)?;
+                bytes[index] = high * 16 + low;
+            }
+            (
+                bytes[0],
+                bytes[1],
+                bytes[2],
+                if hex.len() == 8 { bytes[3] } else { 255 },
+            )
+        }
+        _ => return Err(ConfigError::InvalidColor),
+    };
+    Ok(ShadowColor {
+        rgb: u32::from(red) << 16 | u32::from(green) << 8 | u32::from(blue),
+        opacity: ((u32::from(alpha) * 1000 + 127) / 255) as u16,
+    })
 }
 
 const fn hex_digit(byte: u8) -> Option<u8> {
@@ -1959,6 +2126,15 @@ mod tests {
                     width 3
                     active-color "#89b4fa"
                     inactive-color "#45475a80"
+                }
+                shadow {
+                    on
+                    softness 18.4
+                    spread -3.6
+                    offset x=-7.4 y=9.6
+                    draw-behind-window true
+                    color "#123b"
+                    inactive-color "#10203080"
                 }
                 background-color "#1e1e2e"
                 border {
@@ -2003,6 +2179,26 @@ mod tests {
         assert_eq!(config.border.width, 2);
         assert_eq!(config.border.active_color, 0xfa_b3_87);
         assert_eq!(config.border.inactive_color, 0x58_5b_70);
+        assert!(config.shadow.enabled);
+        assert_eq!(config.shadow.softness, 18);
+        assert_eq!(config.shadow.spread, -4);
+        assert_eq!(config.shadow.offset_x, -7);
+        assert_eq!(config.shadow.offset_y, 10);
+        assert!(config.shadow.draw_behind_window);
+        assert_eq!(
+            config.shadow.color,
+            ShadowColor {
+                rgb: 0x11_22_33,
+                opacity: 733,
+            }
+        );
+        assert_eq!(
+            config.shadow.inactive_color,
+            Some(ShadowColor {
+                rgb: 0x10_20_30,
+                opacity: 502,
+            })
+        );
         assert_eq!(config.background_color, 0x1e_1e_2e);
     }
 
@@ -2051,6 +2247,16 @@ mod tests {
             parse_niri_layout(r##"layout { background-color "#xyzxyz"; }"##),
             Err(ConfigError::InvalidColor)
         );
+        for input in [
+            "layout { shadow { softness -1; } }",
+            "layout { shadow { softness 1025; } }",
+            "layout { shadow { spread -1025; } }",
+            "layout { shadow { offset x=65536; } }",
+            "layout { shadow { draw-behind-window maybe; } }",
+            r##"layout { shadow { color "#12"; } }"##,
+        ] {
+            assert!(parse_niri_layout(input).is_err(), "{input}");
+        }
         assert_eq!(
             parse_niri_layout(
                 "layout { preset-window-heights {

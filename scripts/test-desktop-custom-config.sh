@@ -73,6 +73,7 @@ sed \
     -e 's/open-focused false/open-focused true/' \
     -e '/match app-id="slopos-config"/a\    focus-ring { off; }' \
     -e '/match app-id="slopos-config"/a\    border { on; width 4; active-color "#ffb86c"; inactive-color "#505050"; }' \
+    -e '/match app-id="slopos-config"/a\    shadow { on; softness 8; spread 2; offset x=6 y=4; draw-behind-window false; color "#000c"; inactive-color "#0006"; }' \
     -e '/match app-id="slopos-config"/a\    opacity 0.75' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 1\.0/proportion 0.5/' \
@@ -276,6 +277,9 @@ grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=border enabled=true width=4 active=0xffb86c inactive=0x505050 applied=true source=config" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=shadow enabled=true softness=8 spread=2 offset_x=6 offset_y=4 draw_behind_window=false color=0x000000 alpha=800/1000 inactive_color=0x000000 inactive_alpha=400/1000 applied=true source=config" \
+    "${serial_log}"
+grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=opacity value=750/1000 applied=true fullscreen_ignored=true source=config" \
     "${serial_log}"
 grep -Fq \
@@ -368,6 +372,10 @@ if [[ "$(ppm_pixel_hex "${workspace_screenshot}" 200 350)" != "171c2b" ]]; then
 fi
 if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 182 350)" != "ffb86c" ]]; then
     echo "custom niri border was not composited around the Config surface" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 844 200)" != "0a0a1f" ]]; then
+    echo "custom niri shadow did not apply its configured offset, spread, softness, and alpha" >&2
     exit 1
 fi
 

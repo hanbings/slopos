@@ -2,7 +2,7 @@
 
 use crate::{
     Border, ColumnDisplay, ColumnWidth, ColumnWidthChange, FocusRing, LayoutConfig, LayoutError,
-    Rect, ScrollLayout, TabbedColumnInfo,
+    Rect, ScrollLayout, Shadow, ShadowColor, TabbedColumnInfo,
 };
 
 pub const MAX_NIRI_WORKSPACES: usize = 8;
@@ -284,6 +284,14 @@ pub struct NiriWindowRule<'a> {
     pub border_width: Option<u16>,
     pub border_active_color: Option<u32>,
     pub border_inactive_color: Option<u32>,
+    pub shadow_off: bool,
+    pub shadow_on: bool,
+    pub shadow_offset: Option<(i32, i32)>,
+    pub shadow_softness: Option<u16>,
+    pub shadow_spread: Option<i16>,
+    pub shadow_draw_behind_window: Option<bool>,
+    pub shadow_color: Option<ShadowColor>,
+    pub shadow_inactive_color: Option<ShadowColor>,
     pub opacity: Option<i32>,
     pub default_floating_position: Option<FloatingPosition>,
     pub default_column_width: Option<ColumnWidth>,
@@ -457,6 +465,50 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         overridden.then_some(border)
+    }
+
+    pub fn shadow_for(self, app_id: &str, base: Shadow) -> Option<Shadow> {
+        let mut shadow = base;
+        let mut overridden = false;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_some() && rule.app_id != Some(app_id) {
+                continue;
+            }
+            if rule.shadow_off {
+                shadow.enabled = false;
+                overridden = true;
+            }
+            if rule.shadow_on {
+                shadow.enabled = true;
+                overridden = true;
+            }
+            if let Some((x, y)) = rule.shadow_offset {
+                shadow.offset_x = x;
+                shadow.offset_y = y;
+                overridden = true;
+            }
+            if let Some(softness) = rule.shadow_softness {
+                shadow.softness = softness;
+                overridden = true;
+            }
+            if let Some(spread) = rule.shadow_spread {
+                shadow.spread = spread;
+                overridden = true;
+            }
+            if let Some(draw_behind_window) = rule.shadow_draw_behind_window {
+                shadow.draw_behind_window = draw_behind_window;
+                overridden = true;
+            }
+            if let Some(color) = rule.shadow_color {
+                shadow.color = color;
+                overridden = true;
+            }
+            if let Some(color) = rule.shadow_inactive_color {
+                shadow.inactive_color = Some(color);
+                overridden = true;
+            }
+        }
+        overridden.then_some(shadow)
     }
 
     pub fn opacity_for(self, app_id: &str) -> Option<u16> {
@@ -729,6 +781,14 @@ impl<'a> ShellConfigParser<'a> {
             border_width: None,
             border_active_color: None,
             border_inactive_color: None,
+            shadow_off: false,
+            shadow_on: false,
+            shadow_offset: None,
+            shadow_softness: None,
+            shadow_spread: None,
+            shadow_draw_behind_window: None,
+            shadow_color: None,
+            shadow_inactive_color: None,
             opacity: None,
             default_floating_position: None,
             default_column_width: None,
@@ -806,6 +866,7 @@ impl<'a> ShellConfigParser<'a> {
                 }
                 KdlToken::Word("focus-ring") => self.parse_rule_focus_ring(&mut rule)?,
                 KdlToken::Word("border") => self.parse_rule_border(&mut rule)?,
+                KdlToken::Word("shadow") => self.parse_rule_shadow(&mut rule)?,
                 KdlToken::Word("opacity") => {
                     let KdlToken::Word(value) = self.next() else {
                         return Err(NiriConfigError::InvalidWindowRule);
@@ -940,6 +1001,105 @@ impl<'a> ShellConfigParser<'a> {
                 KdlToken::RightBrace => return Ok(()),
                 KdlToken::End => return Err(NiriConfigError::UnexpectedEnd),
                 KdlToken::EndNode => {}
+            }
+        }
+    }
+
+    fn parse_rule_shadow(&mut self, rule: &mut NiriWindowRule<'a>) -> Result<(), NiriConfigError> {
+        self.expect_left_brace()?;
+        loop {
+            match self.next_non_end() {
+                KdlToken::Word("off") => {
+                    rule.shadow_off = true;
+                    self.finish_node()?;
+                }
+                KdlToken::Word("on") => {
+                    rule.shadow_on = true;
+                    self.finish_node()?;
+                }
+                KdlToken::Word("softness") => {
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    rule.shadow_softness = Some(parse_rule_rounded_i32(value, 0, 1024)? as u16);
+                    self.finish_node()?;
+                }
+                KdlToken::Word("spread") => {
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    rule.shadow_spread = Some(parse_rule_rounded_i32(value, -1024, 1024)? as i16);
+                    self.finish_node()?;
+                }
+                KdlToken::Word("offset") => {
+                    rule.shadow_offset = Some(self.parse_rule_shadow_offset()?);
+                }
+                KdlToken::Word("draw-behind-window") => {
+                    rule.shadow_draw_behind_window = Some(match self.next() {
+                        KdlToken::Word("true") => true,
+                        KdlToken::Word("false") => false,
+                        _ => return Err(NiriConfigError::InvalidWindowRule),
+                    });
+                    self.finish_node()?;
+                }
+                KdlToken::Word("color") => {
+                    let KdlToken::String(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    rule.shadow_color = Some(
+                        super::parse_shadow_color(value)
+                            .map_err(|_| NiriConfigError::InvalidWindowRule)?,
+                    );
+                    self.finish_node()?;
+                }
+                KdlToken::Word("inactive-color") => {
+                    let KdlToken::String(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    rule.shadow_inactive_color = Some(
+                        super::parse_shadow_color(value)
+                            .map_err(|_| NiriConfigError::InvalidWindowRule)?,
+                    );
+                    self.finish_node()?;
+                }
+                KdlToken::Word(_) | KdlToken::String(_) | KdlToken::Equal => self.skip_node()?,
+                KdlToken::LeftBrace => self.skip_block()?,
+                KdlToken::RightBrace => return Ok(()),
+                KdlToken::End => return Err(NiriConfigError::UnexpectedEnd),
+                KdlToken::EndNode => {}
+            }
+        }
+    }
+
+    fn parse_rule_shadow_offset(&mut self) -> Result<(i32, i32), NiriConfigError> {
+        let mut x = 0;
+        let mut y = 0;
+        loop {
+            match self.next() {
+                KdlToken::Word("x") => {
+                    if self.next() != KdlToken::Equal {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    }
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    x = parse_rule_rounded_i32(value, -65_535, 65_535)?;
+                }
+                KdlToken::Word("y") => {
+                    if self.next() != KdlToken::Equal {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    }
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    y = parse_rule_rounded_i32(value, -65_535, 65_535)?;
+                }
+                KdlToken::EndNode | KdlToken::End => return Ok((x, y)),
+                KdlToken::RightBrace => {
+                    self.push(KdlToken::RightBrace);
+                    return Ok((x, y));
+                }
+                _ => return Err(NiriConfigError::InvalidWindowRule),
             }
         }
     }
@@ -1335,6 +1495,11 @@ fn parse_floating_coordinate(value: &str) -> Result<i32, NiriConfigError> {
     let coordinate = i32::try_from((thousandths + 500) / 1000)
         .map_err(|_| NiriConfigError::InvalidWindowRule)?;
     Ok(if negative { -coordinate } else { coordinate })
+}
+
+fn parse_rule_rounded_i32(value: &str, minimum: i32, maximum: i32) -> Result<i32, NiriConfigError> {
+    super::parse_rounded_i32(value, minimum, maximum)
+        .map_err(|_| NiriConfigError::InvalidWindowRule)
 }
 
 fn parse_rule_opacity(value: &str) -> Result<i32, NiriConfigError> {
@@ -3086,6 +3251,15 @@ mod tests {
                     width 2
                     active-color "#aabbcc"
                 }
+                shadow {
+                    on
+                    softness 12
+                    spread 2
+                    offset x=3 y=4
+                    draw-behind-window true
+                    color "#1238"
+                    inactive-color "#10203040"
+                }
                 default-floating-position x=10 y=20
                 default-column-width { fixed 600; }
                 default-window-height { fixed 400; }
@@ -3110,6 +3284,14 @@ mod tests {
                     width 4
                     inactive-color "#123456"
                 }
+                shadow {
+                    off
+                    softness 9
+                    spread -2
+                    offset x=-5.4 y=6.6
+                    draw-behind-window false
+                    inactive-color "#4455"
+                }
                 default-floating-position x=-10.4 y=200 relative-to="bottom-left"
                 default-column-width { proportion 0.333; }
                 default-window-height { proportion 0.333; }
@@ -3131,6 +3313,10 @@ mod tests {
                 border {
                     on
                     active-color "#ddeeff"
+                }
+                shadow {
+                    on
+                    color "#abc9"
                 }
                 default-floating-position x=32.6 y=48.4 relative-to="bottom-right"
                 default-column-width { proportion 0.667; }
@@ -3672,6 +3858,74 @@ mod tests {
             })
         );
         assert_eq!(
+            config.window_rules.shadow_for(
+                "slopos-terminal",
+                Shadow {
+                    enabled: false,
+                    offset_x: 0,
+                    offset_y: 5,
+                    softness: 30,
+                    spread: 5,
+                    draw_behind_window: false,
+                    color: ShadowColor {
+                        rgb: 0,
+                        opacity: 467,
+                    },
+                    inactive_color: None,
+                }
+            ),
+            Some(Shadow {
+                enabled: true,
+                offset_x: 3,
+                offset_y: 4,
+                softness: 12,
+                spread: 2,
+                draw_behind_window: true,
+                color: ShadowColor {
+                    rgb: 0x11_22_33,
+                    opacity: 533,
+                },
+                inactive_color: Some(ShadowColor {
+                    rgb: 0x10_20_30,
+                    opacity: 251,
+                }),
+            })
+        );
+        assert_eq!(
+            config.window_rules.shadow_for(
+                "slopos-config",
+                Shadow {
+                    enabled: false,
+                    offset_x: 0,
+                    offset_y: 5,
+                    softness: 30,
+                    spread: 5,
+                    draw_behind_window: false,
+                    color: ShadowColor {
+                        rgb: 0,
+                        opacity: 467,
+                    },
+                    inactive_color: None,
+                }
+            ),
+            Some(Shadow {
+                enabled: true,
+                offset_x: -5,
+                offset_y: 7,
+                softness: 9,
+                spread: -2,
+                draw_behind_window: false,
+                color: ShadowColor {
+                    rgb: 0xaa_bb_cc,
+                    opacity: 600,
+                },
+                inactive_color: Some(ShadowColor {
+                    rgb: 0x44_44_55,
+                    opacity: 333,
+                }),
+            })
+        );
+        assert_eq!(
             config.window_rules.focus_ring_for(
                 "slopos-config",
                 FocusRing {
@@ -3762,6 +4016,14 @@ mod tests {
             "window-rule { border { width 65536; } }",
             "window-rule { border { active-color #ffffff; } }",
             r##"window-rule { border { inactive-color "#zzzzzz"; } }"##,
+            "window-rule { shadow { softness -1; } }",
+            "window-rule { shadow { softness 1025; } }",
+            "window-rule { shadow { spread -1025; } }",
+            "window-rule { shadow { offset x=65536; } }",
+            "window-rule { shadow { offset x=1.2345; } }",
+            "window-rule { shadow { draw-behind-window maybe; } }",
+            "window-rule { shadow { color #0007; } }",
+            r##"window-rule { shadow { inactive-color "#zzzz"; } }"##,
         ] {
             assert_eq!(
                 parse_niri_shell_config(input),

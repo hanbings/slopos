@@ -9,10 +9,11 @@ use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
     BarButton, BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers,
     ColumnDisplay, ImgRequest, MAX_NIRI_BINDINGS, NiriAction, NiriBinding, NiriShellConfig,
-    PpmImage, ResizeMode, ResolvedWaybarStyle, SwwwCommand, SwwwDaemonError, SwwwDefaults,
-    TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference, WorkspaceSet,
-    format_bar_text, parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
-    parse_swww_environment, parse_waybar_config, parse_waybar_style, transition_pixel,
+    PpmImage, ResizeMode, ResolvedWaybarStyle, Shadow, ShadowColor, SwwwCommand, SwwwDaemonError,
+    SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference,
+    WorkspaceSet, format_bar_text, parse_niri_layout, parse_niri_shell_config, parse_ppm,
+    parse_swww_command, parse_swww_environment, parse_waybar_config, parse_waybar_style,
+    transition_pixel,
 };
 
 const WINDOW_COUNT: usize = 3;
@@ -122,6 +123,7 @@ impl Desktop {
             let open_focused = niri.window_rules.focused_for(app_id);
             let focus_ring = niri.window_rules.focus_ring_for(app_id, config.focus_ring);
             let border = niri.window_rules.border_for(app_id, config.border);
+            let shadow = niri.window_rules.shadow_for(app_id, config.shadow);
             let opacity = niri.window_rules.opacity_for(app_id);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating =
@@ -246,6 +248,22 @@ impl Desktop {
                     border.width,
                     border.active_color,
                     border.inactive_color
+                ));
+            }
+            if let Some(shadow) = shadow {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=shadow enabled={} softness={} spread={} offset_x={} offset_y={} draw_behind_window={} color={:#08x} alpha={}/1000 inactive_color={:#08x} inactive_alpha={}/1000 applied=true source=config",
+                    app_id,
+                    shadow.enabled,
+                    shadow.softness,
+                    shadow.spread,
+                    shadow.offset_x,
+                    shadow.offset_y,
+                    shadow.draw_behind_window,
+                    shadow.color.rgb,
+                    shadow.color.opacity,
+                    resolved_shadow_color(shadow, false).rgb,
+                    resolved_shadow_color(shadow, false).opacity
                 ));
             }
             if let Some(opacity) = opacity {
@@ -825,6 +843,7 @@ impl Desktop {
             let open_focused = niri.window_rules.focused_for(app_id);
             let focus_ring = niri.window_rules.focus_ring_for(app_id, layout.focus_ring);
             let border = niri.window_rules.border_for(app_id, layout.border);
+            let shadow = niri.window_rules.shadow_for(app_id, layout.shadow);
             let opacity = niri.window_rules.opacity_for(app_id);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating = niri
@@ -960,6 +979,22 @@ impl Desktop {
                     border.width,
                     border.active_color,
                     border.inactive_color
+                ));
+            }
+            if let Some(shadow) = shadow {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=shadow enabled={} softness={} spread={} offset_x={} offset_y={} draw_behind_window={} color={:#08x} alpha={}/1000 inactive_color={:#08x} inactive_alpha={}/1000 applied=true source=config",
+                    app_id,
+                    shadow.enabled,
+                    shadow.softness,
+                    shadow.spread,
+                    shadow.offset_x,
+                    shadow.offset_y,
+                    shadow.draw_behind_window,
+                    shadow.color.rgb,
+                    shadow.color.opacity,
+                    resolved_shadow_color(shadow, false).rgb,
+                    resolved_shadow_color(shadow, false).opacity
                 ));
             }
             if let Some(opacity) = opacity {
@@ -1199,28 +1234,17 @@ impl Desktop {
             .window_rules
             .border_for(app_id(window.kind), self.workspaces.config().border)
             .unwrap_or(self.workspaces.config().border);
+        let shadow = self
+            .niri
+            .window_rules
+            .shadow_for(app_id(window.kind), self.workspaces.config().shadow)
+            .unwrap_or(self.workspaces.config().shadow);
         let opacity = self
             .niri
             .window_rules
             .opacity_for(app_id(window.kind))
             .unwrap_or(1000);
-        // The early renderer models niri's shadow as hard right/bottom strips.
-        // Keep it outside the surface so an opacity rule reveals the wallpaper
-        // rather than an opaque shadow rectangle hidden underneath the window.
-        framebuffer.rect(
-            window.x + window.width,
-            window.y + 8,
-            7,
-            window.height,
-            0x080a12,
-        );
-        framebuffer.rect(
-            window.x + 7,
-            window.y + window.height,
-            window.width,
-            8,
-            0x080a12,
-        );
+        Self::render_shadow(framebuffer, window, shadow, active);
         // Like niri's default draw-border-with-background mode, decorations
         // are compositor backgrounds: a translucent surface shows them
         // through rather than changing their own opacity. Focus ring is only
@@ -1299,6 +1323,75 @@ impl Desktop {
                 y += segment_height + indicator_gap;
             }
         }
+    }
+
+    fn render_shadow(framebuffer: &mut Framebuffer, window: Window, shadow: Shadow, active: bool) {
+        if !shadow.enabled {
+            return;
+        }
+        let color = resolved_shadow_color(shadow, active);
+        if color.opacity == 0 {
+            return;
+        }
+
+        let spread = i32::from(shadow.spread);
+        let box_x = window
+            .x
+            .saturating_add(shadow.offset_x)
+            .saturating_sub(spread);
+        let box_y = window
+            .y
+            .saturating_add(shadow.offset_y)
+            .saturating_sub(spread);
+        let box_width = window.width.saturating_add(spread.saturating_mul(2)).max(1);
+        let box_height = window
+            .height
+            .saturating_add(spread.saturating_mul(2))
+            .max(1);
+        let blur = (i32::from(shadow.softness) * 3 + 1) / 2;
+        let left = box_x.saturating_sub(blur).max(0);
+        let top = box_y.saturating_sub(blur).max(0);
+        let right = box_x
+            .saturating_add(box_width)
+            .saturating_add(blur)
+            .min(framebuffer.width() as i32);
+        let bottom = box_y
+            .saturating_add(box_height)
+            .saturating_add(blur)
+            .min(framebuffer.height() as i32);
+        let denominator = u64::try_from(blur + 1).unwrap_or(1);
+        let denominator_squared = denominator.saturating_mul(denominator);
+        let previous_opacity = framebuffer.set_opacity(1000);
+
+        for y in top..bottom {
+            for x in left..right {
+                if !shadow.draw_behind_window
+                    && x >= window.x
+                    && x < window.x.saturating_add(window.width)
+                    && y >= window.y
+                    && y < window.y.saturating_add(window.height)
+                {
+                    continue;
+                }
+                let dx = axis_distance(x, box_x, box_width);
+                let dy = axis_distance(y, box_y, box_height);
+                let distance = dx.max(dy).saturating_add(dx.min(dy) / 2);
+                if distance > blur {
+                    continue;
+                }
+                let remaining = u64::try_from(blur - distance + 1).unwrap_or(0);
+                let opacity = u64::from(color.opacity)
+                    .saturating_mul(remaining)
+                    .saturating_mul(remaining)
+                    .saturating_add(denominator_squared / 2)
+                    / denominator_squared;
+                if opacity != 0 {
+                    framebuffer.set_opacity(opacity.min(1000) as u16);
+                    framebuffer.pixel(x, y, color.rgb);
+                }
+            }
+        }
+        framebuffer.set_opacity(previous_opacity);
     }
 
     fn render_terminal(&self, framebuffer: &mut Framebuffer, window: Window) {
@@ -2928,6 +3021,27 @@ fn module_selector(module: &str) -> &'static str {
 
 fn inside(x: i32, y: i32, window: Window) -> bool {
     x >= window.x && x < window.x + window.width && y >= window.y && y < window.y + window.height
+}
+
+fn axis_distance(coordinate: i32, start: i32, length: i32) -> i32 {
+    if coordinate < start {
+        start.saturating_sub(coordinate)
+    } else {
+        coordinate
+            .saturating_sub(start.saturating_add(length).saturating_sub(1))
+            .max(0)
+    }
+}
+
+fn resolved_shadow_color(shadow: Shadow, active: bool) -> ShadowColor {
+    if active {
+        shadow.color
+    } else {
+        shadow.inactive_color.unwrap_or(ShadowColor {
+            rgb: shadow.color.rgb,
+            opacity: ((u32::from(shadow.color.opacity) * 750 + 500) / 1000) as u16,
+        })
+    }
 }
 
 fn text_width(text: &str) -> i32 {
