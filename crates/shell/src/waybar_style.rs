@@ -114,6 +114,22 @@ impl<'a> WaybarStyle<'a> {
         defaults
     }
 
+    pub fn resolve_bar(
+        self,
+        name: Option<&str>,
+        mut defaults: ResolvedWaybarStyle,
+    ) -> ResolvedWaybarStyle {
+        for rule in self.rules[..self.length].iter().flatten() {
+            if rule.selector == "*"
+                || rule.selector == "window#waybar"
+                || name.is_some_and(|name| bar_class_selector_matches(rule.selector, name))
+            {
+                defaults.apply(rule.patch);
+            }
+        }
+        defaults
+    }
+
     fn push(&mut self, selector: &'a str, patch: StylePatch) -> Result<(), WaybarStyleError> {
         let selector = selector.trim();
         if selector.is_empty() || selector.len() > 64 {
@@ -126,6 +142,14 @@ impl<'a> WaybarStyle<'a> {
         self.length += 1;
         Ok(())
     }
+}
+
+fn bar_class_selector_matches(selector: &str, name: &str) -> bool {
+    selector
+        .strip_prefix('.')
+        .or_else(|| selector.strip_prefix("window."))
+        .or_else(|| selector.strip_prefix("window#waybar."))
+        == Some(name)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -413,6 +437,28 @@ mod tests {
         assert_eq!(network.background, None);
         assert_eq!(network.margin_left, 4);
         assert_eq!(network.margin_right, 3);
+    }
+
+    #[test]
+    fn resolves_optional_waybar_name_as_a_window_class() {
+        let style = parse_waybar_style(
+            r#"
+            window#waybar { background: #101010; }
+            .slop-main { color: #eeeeee; }
+            window.slop-main { border-bottom: 1px solid #123456; }
+            window#waybar.slop-main { background: #202640; }
+            window#waybar.other { background: #ffffff; }
+            "#,
+        )
+        .unwrap();
+        let unnamed = style.resolve_bar(None, ResolvedWaybarStyle::new(0, None));
+        assert_eq!(unnamed.background, Some(0x101010));
+        assert_eq!(unnamed.foreground, 0);
+        let named = style.resolve_bar(Some("slop-main"), ResolvedWaybarStyle::new(0, None));
+        assert_eq!(named.background, Some(0x202640));
+        assert_eq!(named.foreground, 0xeeeeee);
+        assert_eq!(named.border_bottom_width, 1);
+        assert_eq!(named.border_bottom_color, 0x123456);
     }
 
     #[test]

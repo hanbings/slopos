@@ -696,10 +696,9 @@ impl Desktop {
     fn render_bar(&self, framebuffer: &mut Framebuffer) {
         let (bar_x, bar_y, bar_width, bar_height) = self.bar_rect();
         let baseline = bar_y.saturating_add(((bar_height - 7) / 2).max(2));
-        let bar_style = self.bar_style.resolve(
-            "window#waybar",
-            ResolvedWaybarStyle::new(WHITE, Some(PANEL)),
-        );
+        let bar_style = self
+            .bar_style
+            .resolve_bar(self.bar.name, ResolvedWaybarStyle::new(WHITE, Some(PANEL)));
         if let Some(background) = bar_style.background {
             framebuffer.rect(bar_x, bar_y, bar_width, bar_height, background);
         }
@@ -1350,12 +1349,14 @@ impl Desktop {
             self.bar.reserved_top()
         ));
         serialln(format_args!(
-            "SLOPOS-WAYBAR: layout configured_width={} no_center={} expand={}/{}/{} source={source}",
+            "SLOPOS-WAYBAR: layout configured_width={} no_center={} expand={}/{}/{} name={} namespace={} source={source}",
             self.bar.width,
             self.bar.no_center,
             self.bar.expand_left,
             self.bar.expand_center,
-            self.bar.expand_right
+            self.bar.expand_right,
+            self.bar.name.unwrap_or("-"),
+            self.bar.namespace()
         ));
     }
 

@@ -31,6 +31,7 @@ runtime_root="${runtime_dir}/slopos-root.ext4"
 runtime_vars="${runtime_dir}/OVMF_VARS_4M.fd"
 custom_niri="${runtime_dir}/niri.kdl"
 custom_waybar="${runtime_dir}/waybar.jsonc"
+custom_waybar_style="${runtime_dir}/waybar.css"
 overlay_waybar="${runtime_dir}/waybar-overlay.jsonc"
 fsck_log="${runtime_dir}/fsck.log"
 debugfs=/usr/sbin/debugfs
@@ -43,6 +44,7 @@ cleanup() {
         "${runtime_vars}" \
         "${custom_niri}" \
         "${custom_waybar}" \
+        "${custom_waybar_style}" \
         "${overlay_waybar}" \
         "${fsck_log}"
     do
@@ -95,7 +97,7 @@ if (( custom_niri_bytes <= default_niri_bytes || custom_niri_bytes > 4096 )); th
 fi
 sed \
     -e '1i// user override accepted by the SlopOS desktop service' \
-    -e '/"spacing": 10,/a\    "margin": "4 12",\n    "fixed-center": false,\n    "expand-left": true,\n    "expand-center": true,\n    "expand-right": true,\n    "layer": "top",\n    "exclusive": true,' \
+    -e '/"spacing": 10,/a\    "name": "slop-main",\n    "margin": "4 12",\n    "fixed-center": false,\n    "expand-left": true,\n    "expand-center": true,\n    "expand-right": true,\n    "layer": "top",\n    "exclusive": true,' \
     -e '/"modules-left":/,/]/ s/"niri\/workspaces"/"niri\/window"/' \
     -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
     -e '/"clock": {/a\        "on-click": "status",' \
@@ -108,6 +110,16 @@ sed \
 custom_bytes="$(wc -c <"${custom_waybar}")"
 if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
     echo "custom Waybar fixture has unexpected size: ${custom_bytes}" >&2
+    exit 1
+fi
+sed '$a\
+\
+window#waybar.slop-main { background-color: #202640; }' \
+    "${repo_dir}/assets/waybar-style.css" >"${custom_waybar_style}"
+default_style_bytes="$(wc -c <"${repo_dir}/assets/waybar-style.css")"
+custom_style_bytes="$(wc -c <"${custom_waybar_style}")"
+if (( custom_style_bytes <= default_style_bytes || custom_style_bytes > 4096 )); then
+    echo "custom Waybar CSS fixture has unexpected size: ${custom_style_bytes}" >&2
     exit 1
 fi
 sed \
@@ -129,6 +141,11 @@ fi
 "${debugfs}" \
     -w \
     -R "write ${custom_waybar} /etc/slopos/waybar.jsonc" \
+    "${runtime_root}" >/dev/null 2>&1
+"${debugfs}" -w -R "rm /etc/slopos/waybar.css" "${runtime_root}" >/dev/null 2>&1
+"${debugfs}" \
+    -w \
+    -R "write ${custom_waybar_style} /etc/slopos/waybar.css" \
     "${runtime_root}" >/dev/null 2>&1
 
 set +e
@@ -289,7 +306,7 @@ grep -Fq \
     "SLOPOS-WAYBAR: geometry position=top x=12 y=4 width=1000 height=40 margin=4/12/4/12 spacing=10 fixed_center=false layer=top mode=default exclusive=true passthrough=false visible=true reserved_top=44 source=config" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=true/true/true source=config" \
+    "SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=true/true/true name=slop-main namespace=slop-main source=config" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-WAYBAR: surface clicked button=left consumed=true layer=top passthrough=false" \
@@ -421,10 +438,10 @@ if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 844 200)" != "0a0a1f" ]]; th
     exit 1
 fi
 if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 0 20)" != "111144" ]] \
-    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 12 20)" != "161a2a" ]] \
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 12 20)" != "202640" ]] \
     || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 20 2)" != "111144" ]] \
-    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 20 4)" != "161a2a" ]]; then
-    echo "custom Waybar margins did not constrain the rendered bar surface" >&2
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 20 4)" != "202640" ]]; then
+    echo "custom Waybar margins or name class style did not constrain the rendered bar surface" >&2
     exit 1
 fi
 if [[ "$(ppm_pixel_hex "${format_restored_screenshot}" 331 20)" != "f4f4f8" ]]; then
@@ -505,7 +522,7 @@ grep -Fq \
     "SLOPOS-WAYBAR: geometry position=top x=112 y=0 width=800 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=overlay mode=slop-overlay exclusive=false passthrough=true visible=true reserved_top=0 source=config" \
     "${overlay_serial_log}"
 grep -Fq \
-    "SLOPOS-WAYBAR: layout configured_width=800 no_center=true expand=false/false/false source=config" \
+    "SLOPOS-WAYBAR: layout configured_width=800 no_center=true expand=false/false/false name=- namespace=waybar source=config" \
     "${overlay_serial_log}"
 grep -Fq \
     "SLOPOS-DESKTOP: window closed kind=TERMINAL workspace=1" \

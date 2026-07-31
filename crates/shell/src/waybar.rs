@@ -5,6 +5,7 @@ pub const MAX_BAR_MODULE_CONFIGS: usize = 24;
 pub const MAX_BAR_TEXT: usize = 96;
 pub const MAX_BAR_MODES: usize = 8;
 pub const MAX_BAR_MODE_NAME: usize = 32;
+pub const MAX_BAR_NAME: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BarPosition {
@@ -370,6 +371,7 @@ impl<'a> BarModuleConfigList<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WaybarConfig<'a> {
+    pub name: Option<&'a str>,
     pub position: BarPosition,
     pub height: u16,
     pub width: u16,
@@ -405,6 +407,7 @@ impl Default for WaybarConfig<'_> {
         let shown_mode = BarModeState::preset("default");
         let hidden_mode = BarModeState::preset("invisible");
         Self {
+            name: None,
             position: BarPosition::Top,
             height: 30,
             width: 0,
@@ -438,6 +441,10 @@ impl Default for WaybarConfig<'_> {
 }
 
 impl<'a> WaybarConfig<'a> {
+    pub fn namespace(self) -> &'a str {
+        self.name.unwrap_or("waybar")
+    }
+
     pub fn reserved_top(self) -> u16 {
         if !self.visible || !self.exclusive || self.position != BarPosition::Top {
             return 0;
@@ -539,6 +546,7 @@ pub enum BarConfigError {
     InvalidModuleOption,
     TooManyModules,
     TooManyModuleConfigs,
+    InvalidName,
     InvalidMode,
     TooManyModes,
 }
@@ -835,6 +843,7 @@ impl<'a> JsonParser<'a> {
     const EXPAND_LEFT: u32 = 1 << 23;
     const EXPAND_CENTER: u32 = 1 << 24;
     const EXPAND_RIGHT: u32 = 1 << 25;
+    const NAME: u32 = 1 << 26;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -861,6 +870,10 @@ impl<'a> JsonParser<'a> {
                 Token::String(name) => {
                     self.expect(Token::Colon)?;
                     match name {
+                        "name" => {
+                            mark_once(&mut fields, Self::NAME)?;
+                            config.name = Some(self.bar_name_value()?);
+                        }
                         "position" => {
                             mark_once(&mut fields, Self::POSITION)?;
                             config.position = match self.string_value()? {
@@ -1176,6 +1189,13 @@ impl<'a> JsonParser<'a> {
         valid_mode_name(value)
             .then_some(value)
             .ok_or(BarConfigError::InvalidMode)
+    }
+
+    fn bar_name_value(&mut self) -> Result<&'a str, BarConfigError> {
+        let value = self.string_value()?;
+        valid_bar_name(value)
+            .then_some(value)
+            .ok_or(BarConfigError::InvalidName)
     }
 
     fn mode_bool_value(&mut self) -> Result<bool, BarConfigError> {
@@ -1497,6 +1517,14 @@ fn valid_mode_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+fn valid_bar_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_BAR_NAME
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 fn parse_usize(value: &str) -> Option<usize> {
     if value.is_empty() {
         return None;
@@ -1554,6 +1582,7 @@ mod tests {
             r#"
             {
                 // Waybar-compatible top-level fields.
+                "name": "slop-test",
                 "position": "top",
                 "height": 40,
                 "width": 800,
@@ -1589,6 +1618,8 @@ mod tests {
             "#,
         )
         .unwrap();
+        assert_eq!(config.name, Some("slop-test"));
+        assert_eq!(config.namespace(), "slop-test");
         assert_eq!(config.position, BarPosition::Top);
         assert_eq!(config.height, 40);
         assert_eq!(config.width, 800);
@@ -1651,6 +1682,8 @@ mod tests {
             }"#,
         )
         .unwrap();
+        assert_eq!(config.name, None);
+        assert_eq!(config.namespace(), "waybar");
         assert_eq!(config.position, BarPosition::Top);
         assert_eq!(config.height, 30);
         assert_eq!(config.width, 0);
@@ -1703,6 +1736,10 @@ mod tests {
             Err(BarConfigError::InvalidPosition)
         );
         for input in [
+            r#"{ "name": "" }"#,
+            r#"{ "name": "bad name" }"#,
+            r#"{ "name": "waybar.main" }"#,
+            r#"{ "name": 1 }"#,
             r#"{ "margin": "" }"#,
             r#"{ "margin": "1 2 3 4 5" }"#,
             r#"{ "margin": "1px" }"#,
