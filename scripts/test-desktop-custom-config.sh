@@ -64,10 +64,11 @@ cp --reflink=auto --sparse=always "${esp_image}" "${runtime_esp}"
 cp --reflink=auto --sparse=always "${root_image}" "${runtime_root}"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
 sed \
-    -e '1i// user overrides' \
+    -e '1i// user' \
     -e 's/open-maximized false/open-maximized true/' \
     -e 's/open-maximized-to-edges false/open-maximized-to-edges true/' \
     -e 's/open-fullscreen false/open-fullscreen true/' \
+    -e 's/open-focused false/open-focused true/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 1\.0/proportion 0.5/' \
     -e '/match app-id="slopos-config"/,/^}/ s/default-column-display "normal"/default-column-display "tabbed"/' \
@@ -128,6 +129,14 @@ set +e
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
+    echo "mouse_move 24 0"
+    echo "mouse_button 1"
+    echo "mouse_button 0"
+    sleep 1
+    echo "mouse_move -24 0"
+    echo "mouse_button 1"
+    echo "mouse_button 0"
+    sleep 1
     echo "sendkey a"
     echo "sendkey b"
     echo "sendkey o"
@@ -160,7 +169,7 @@ set +e
     sleep 1
     echo "screendump ${format_restored_screenshot}"
     echo "quit"
-} | timeout 24s qemu-system-x86_64 \
+} | timeout 28s qemu-system-x86_64 \
     -machine q35,accel=tcg \
     -cpu qemu64 \
     -m 256M \
@@ -224,6 +233,10 @@ fi
 grep -Fq \
     "SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=true module=niri/workspaces" \
     "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=true module=niri/workspaces" "${serial_log}")" -ne 1 ]]; then
+    echo "fullscreen click unexpectedly activated the hidden Waybar workspace target" >&2
+    exit 1
+fi
 grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized value=true applied=true workspace=2 x=16 y=56 width=992 height=340 mode=maximized-column source=config" \
     "${serial_log}"
@@ -232,6 +245,9 @@ grep -Fq \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=open-fullscreen value=true applied=true workspace=2 x=0 y=0 width=1024 height=768 mode=fullscreen source=config" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=open-focused value=true applied=true workspace=2 focused=2 activated=true source=config" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=default-column-display value=tabbed applied=true workspace=2 source=config" \

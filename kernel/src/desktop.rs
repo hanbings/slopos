@@ -105,6 +105,7 @@ impl Desktop {
             config,
         )
         .unwrap_or_else(|_| crate::fatal("niri workspace capacity mismatch"));
+        let mut opening_focus = None;
         for window in 0..WINDOW_COUNT {
             let app_id = app_id(window_kind(window));
             let workspace = niri
@@ -117,6 +118,7 @@ impl Desktop {
                 .maximized_to_edges_for(app_id)
                 .unwrap_or(false);
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
+            let open_focused = niri.window_rules.focused_for(app_id);
             let floating =
                 niri.window_rules.floating_for(app_id).unwrap_or(false) && !maximized_to_edges;
             let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
@@ -125,21 +127,23 @@ impl Desktop {
             let column_display = niri.window_rules.column_display_for(app_id);
             if floating {
                 workspaces
-                    .open_floating_window_with_dimensions(
+                    .open_floating_window_with_dimensions_and_focus(
                         workspace,
                         window as u32,
                         column_width,
                         window_height,
+                        open_focused != Some(false),
                     )
                     .unwrap_or_else(|_| crate::fatal("niri floating seed capacity mismatch"));
             } else {
                 workspaces
-                    .open_window_with_properties(
+                    .open_window_with_properties_and_focus(
                         workspace,
                         window as u32,
                         column_width,
                         window_height,
                         column_display,
+                        open_focused != Some(false),
                     )
                     .unwrap_or_else(|_| crate::fatal("niri layout seed capacity mismatch"));
                 if column_display == Some(ColumnDisplay::Tabbed) {
@@ -201,10 +205,36 @@ impl Desktop {
                     rect.height
                 ));
             }
+            match open_focused {
+                Some(true) => {
+                    opening_focus = Some((workspace, window, app_id));
+                }
+                Some(false) => serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=open-focused value=false applied=true workspace={} activated=false source=config",
+                    app_id,
+                    workspace + 1
+                )),
+                None => {}
+            }
         }
-        workspaces
-            .focus_window(0)
-            .unwrap_or_else(|_| crate::fatal("niri layout terminal seed is missing"));
+        if let Some((workspace, window, app_id)) = opening_focus {
+            workspaces
+                .focus_workspace(workspace)
+                .unwrap_or_else(|_| crate::fatal("niri opening workspace focus failed"));
+            workspaces
+                .focus_window(window as u32)
+                .unwrap_or_else(|_| crate::fatal("niri opening window focus failed"));
+            serialln(format_args!(
+                "SLOPOS-NIRI: window rule app_id={} property=open-focused value=true applied=true workspace={} focused={} activated=true source=config",
+                app_id,
+                workspace + 1,
+                window
+            ));
+        } else {
+            workspaces
+                .focus_window(0)
+                .unwrap_or_else(|_| crate::fatal("niri layout terminal seed is missing"));
+        }
         let mut wallpaper = WallpaperDaemon::new(
             "SLOPOS-1",
             u16::try_from(width).unwrap_or(u16::MAX),
@@ -727,6 +757,7 @@ impl Desktop {
             layout,
         )
         .unwrap_or_else(|_| crate::fatal("published niri workspace capacity mismatch"));
+        let mut opening_focus = None;
         for window in 0..WINDOW_COUNT {
             if !self.windows[window].open {
                 continue;
@@ -742,6 +773,7 @@ impl Desktop {
                 .maximized_to_edges_for(app_id)
                 .unwrap_or(false);
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
+            let open_focused = niri.window_rules.focused_for(app_id);
             let floating = niri
                 .window_rules
                 .floating_for(app_id)
@@ -753,21 +785,23 @@ impl Desktop {
             let column_display = niri.window_rules.column_display_for(app_id);
             if floating {
                 workspaces
-                    .open_floating_window_with_dimensions(
+                    .open_floating_window_with_dimensions_and_focus(
                         workspace,
                         window as u32,
                         column_width,
                         window_height,
+                        open_focused != Some(false),
                     )
                     .unwrap_or_else(|_| crate::fatal("published niri floating seed failed"));
             } else {
                 workspaces
-                    .open_window_with_properties(
+                    .open_window_with_properties_and_focus(
                         workspace,
                         window as u32,
                         column_width,
                         window_height,
                         column_display,
+                        open_focused != Some(false),
                     )
                     .unwrap_or_else(|_| crate::fatal("published niri layout seed failed"));
                 if column_display == Some(ColumnDisplay::Tabbed) {
@@ -835,16 +869,45 @@ impl Desktop {
                     rect.height
                 ));
             }
+            match open_focused {
+                Some(true) => {
+                    opening_focus = Some((workspace, window, app_id));
+                }
+                Some(false) => serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=open-focused value=false applied=true workspace={} activated=false source=config",
+                    app_id,
+                    workspace + 1
+                )),
+                None => {}
+            }
         }
-        workspaces
-            .focus_workspace(old_workspace.min(workspace_count - 1))
-            .unwrap_or_else(|_| crate::fatal("published niri active workspace failed"));
-        if let Some(window) = preferred_window
-            && workspaces.tile_rect(window).is_ok()
-        {
+        if let Some(window) = preferred_window {
+            workspaces.focus_window_without_workspace_switch(window);
+        }
+        if let Some((workspace, window, app_id)) = opening_focus {
             workspaces
-                .focus_window(window)
-                .unwrap_or_else(|_| crate::fatal("published niri focus restore failed"));
+                .focus_workspace(workspace)
+                .unwrap_or_else(|_| crate::fatal("published niri opening workspace focus failed"));
+            workspaces
+                .focus_window(window as u32)
+                .unwrap_or_else(|_| crate::fatal("published niri opening window focus failed"));
+            serialln(format_args!(
+                "SLOPOS-NIRI: window rule app_id={} property=open-focused value=true applied=true workspace={} focused={} activated=true source=config",
+                app_id,
+                workspace + 1,
+                window
+            ));
+        } else {
+            workspaces
+                .focus_workspace(old_workspace.min(workspace_count - 1))
+                .unwrap_or_else(|_| crate::fatal("published niri active workspace failed"));
+            if let Some(window) = preferred_window
+                && workspaces.tile_rect(window).is_ok()
+            {
+                workspaces
+                    .focus_window(window)
+                    .unwrap_or_else(|_| crate::fatal("published niri focus restore failed"));
+            }
         }
 
         self.workspaces = workspaces;

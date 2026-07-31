@@ -84,6 +84,7 @@ window-rule {
     open-maximized false
     open-maximized-to-edges false
     open-fullscreen false
+    open-focused false
     default-column-width { proportion 0.5; }
     default-window-height { proportion 1.0; }
     default-column-display "normal"

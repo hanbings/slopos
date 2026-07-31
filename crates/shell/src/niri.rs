@@ -228,6 +228,7 @@ pub struct NiriWindowRule<'a> {
     pub open_maximized: Option<bool>,
     pub open_maximized_to_edges: Option<bool>,
     pub open_fullscreen: Option<bool>,
+    pub open_focused: Option<bool>,
     pub default_column_width: Option<ColumnWidth>,
     pub default_window_height: Option<ColumnWidth>,
     pub default_column_display: Option<ColumnDisplay>,
@@ -313,6 +314,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         fullscreen
+    }
+
+    pub fn focused_for(self, app_id: &str) -> Option<bool> {
+        let mut focused = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.open_focused {
+                    focused = Some(value);
+                }
+            }
+        }
+        focused
     }
 
     pub fn column_width_for(self, app_id: &str) -> Option<ColumnWidth> {
@@ -548,6 +561,7 @@ impl<'a> ShellConfigParser<'a> {
             open_maximized: None,
             open_maximized_to_edges: None,
             open_fullscreen: None,
+            open_focused: None,
             default_column_width: None,
             default_window_height: None,
             default_column_display: None,
@@ -607,6 +621,14 @@ impl<'a> ShellConfigParser<'a> {
                 }
                 KdlToken::Word("open-fullscreen") => {
                     rule.open_fullscreen = Some(match self.next() {
+                        KdlToken::Word("true") => true,
+                        KdlToken::Word("false") => false,
+                        _ => return Err(NiriConfigError::InvalidWindowRule),
+                    });
+                    self.finish_node()?;
+                }
+                KdlToken::Word("open-focused") => {
+                    rule.open_focused = Some(match self.next() {
                         KdlToken::Word("true") => true,
                         KdlToken::Word("false") => false,
                         _ => return Err(NiriConfigError::InvalidWindowRule),
@@ -1534,12 +1556,32 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         height: Option<ColumnWidth>,
         display: Option<ColumnDisplay>,
     ) -> Result<(), WorkspaceError> {
+        self.open_window_with_properties_and_focus(workspace, window, width, height, display, true)
+    }
+
+    pub fn open_window_with_properties_and_focus(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
+        display: Option<ColumnDisplay>,
+        focus: bool,
+    ) -> Result<(), WorkspaceError> {
+        let previous = self.focused_window_in_workspace(workspace)?;
         self.layouts
             .get_mut(workspace)
             .filter(|_| workspace < self.count)
             .ok_or(WorkspaceError::InvalidWorkspace)?
             .open_window_with_properties(window, width, height, display)
-            .map_err(WorkspaceError::Layout)
+            .map_err(WorkspaceError::Layout)?;
+        if focus {
+            self.focus_window_in_workspace(workspace, window)
+        } else if let Some(previous) = previous {
+            self.focus_window_in_workspace(workspace, previous)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn set_window_maximized(
@@ -1585,30 +1627,89 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         width: Option<ColumnWidth>,
         height: Option<ColumnWidth>,
     ) -> Result<(), WorkspaceError> {
+        self.open_floating_window_with_dimensions_and_focus(workspace, window, width, height, true)
+    }
+
+    pub fn open_floating_window_with_dimensions_and_focus(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
+        focus: bool,
+    ) -> Result<(), WorkspaceError> {
+        let previous = self.focused_window_in_workspace(workspace)?;
         self.floating
             .get_mut(workspace)
             .filter(|_| workspace < self.count)
             .ok_or(WorkspaceError::InvalidWorkspace)?
             .add_with_dimensions(window, None, width, height)
-            .map_err(WorkspaceError::Layout)
+            .map_err(WorkspaceError::Layout)?;
+        if focus {
+            self.focus_window_in_workspace(workspace, window)
+        } else if let Some(previous) = previous {
+            self.focus_window_in_workspace(workspace, previous)
+        } else {
+            self.floating_active[workspace] = true;
+            Ok(())
+        }
     }
 
     pub fn focus_window(&mut self, window: u32) -> Result<(), WorkspaceError> {
-        if self.fullscreen[self.active].is_some_and(|fullscreen| fullscreen != window) {
+        self.focus_window_in_workspace(self.active, window)
+    }
+
+    pub fn focus_window_without_workspace_switch(&mut self, window: u32) -> bool {
+        let Some(workspace) = (0..self.count).find(|workspace| {
+            self.floating[*workspace].contains(window)
+                || self.layouts[*workspace].tile_rect(window).is_ok()
+        }) else {
+            return false;
+        };
+        self.focus_window_in_workspace(workspace, window).is_ok()
+    }
+
+    fn focus_window_in_workspace(
+        &mut self,
+        workspace: usize,
+        window: u32,
+    ) -> Result<(), WorkspaceError> {
+        if workspace >= self.count {
+            return Err(WorkspaceError::InvalidWorkspace);
+        }
+        if self.fullscreen[workspace].is_some_and(|fullscreen| fullscreen != window) {
             return Err(WorkspaceError::Layout(LayoutError::UnknownWindow));
         }
-        if self.floating[self.active].contains(window) {
-            self.floating[self.active]
+        if self.floating[workspace].contains(window) {
+            self.floating[workspace]
                 .focus(window)
                 .map_err(WorkspaceError::Layout)?;
-            self.floating_active[self.active] = true;
+            self.floating_active[workspace] = true;
             return Ok(());
         }
-        self.layouts[self.active]
+        self.layouts[workspace]
             .focus_window(window)
             .map_err(WorkspaceError::Layout)?;
-        self.floating_active[self.active] = false;
+        self.floating_active[workspace] = false;
         Ok(())
+    }
+
+    fn focused_window_in_workspace(&self, workspace: usize) -> Result<Option<u32>, WorkspaceError> {
+        if workspace >= self.count {
+            return Err(WorkspaceError::InvalidWorkspace);
+        }
+        if let Some(fullscreen) = self.fullscreen[workspace] {
+            return Ok(Some(fullscreen));
+        }
+        Ok(if self.floating_active[workspace] {
+            self.floating[workspace]
+                .focused_window()
+                .or_else(|| self.layouts[workspace].focused_window())
+        } else {
+            self.layouts[workspace]
+                .focused_window()
+                .or_else(|| self.floating[workspace].focused_window())
+        })
     }
 
     pub fn close_window(&mut self, window: u32) -> Result<(), WorkspaceError> {
@@ -2460,6 +2561,7 @@ mod tests {
                 open-maximized true
                 open-maximized-to-edges true
                 open-fullscreen true
+                open-focused true
                 default-column-width { fixed 600; }
                 default-window-height { fixed 400; }
                 default-column-display "normal"
@@ -2471,6 +2573,7 @@ mod tests {
                 open-maximized true
                 open-maximized-to-edges true
                 open-fullscreen true
+                open-focused true
                 default-column-width { proportion 0.333; }
                 default-window-height { proportion 0.333; }
                 default-column-display "normal"
@@ -2482,6 +2585,7 @@ mod tests {
                 open-maximized false
                 open-maximized-to-edges false
                 open-fullscreen false
+                open-focused false
                 default-column-width { proportion 0.667; }
                 default-window-height { proportion 0.5; }
                 default-column-display "tabbed"
@@ -2947,6 +3051,14 @@ mod tests {
             config.window_rules.fullscreen_for("slopos-config"),
             Some(false)
         );
+        assert_eq!(
+            config.window_rules.focused_for("slopos-terminal"),
+            Some(true)
+        );
+        assert_eq!(
+            config.window_rules.focused_for("slopos-config"),
+            Some(false)
+        );
     }
 
     #[test]
@@ -2977,6 +3089,10 @@ mod tests {
         );
         assert_eq!(
             parse_niri_shell_config("window-rule { open-fullscreen maybe; }"),
+            Err(NiriConfigError::InvalidWindowRule)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { open-focused maybe; }"),
             Err(NiriConfigError::InvalidWindowRule)
         );
         for input in [
@@ -3121,6 +3237,52 @@ mod tests {
         floating_only.open_floating_window(0, 9).unwrap();
         assert!(floating_only.focused_window_is_floating());
         assert_eq!(floating_only.focused_window(), Some(9));
+    }
+
+    #[test]
+    fn preserves_or_replaces_focus_when_opening_windows() {
+        let mut workspaces =
+            WorkspaceSet::<3, 6, 6>::new(2, 2, 1000, 700, 40, LayoutConfig::default()).unwrap();
+        workspaces.open_window(0, 1).unwrap();
+        workspaces
+            .open_window_with_properties_and_focus(0, 2, None, None, None, false)
+            .unwrap();
+        assert_eq!(workspaces.focused_window(), Some(1));
+        assert!(!workspaces.focused_window_is_floating());
+
+        workspaces
+            .open_floating_window_with_dimensions_and_focus(0, 3, None, None, false)
+            .unwrap();
+        assert_eq!(workspaces.focused_window(), Some(1));
+        assert!(!workspaces.focused_window_is_floating());
+        workspaces
+            .open_floating_window_with_dimensions_and_focus(0, 4, None, None, true)
+            .unwrap();
+        assert_eq!(workspaces.focused_window(), Some(4));
+        assert!(workspaces.focused_window_is_floating());
+
+        workspaces
+            .open_window_with_properties_and_focus(0, 5, None, None, None, false)
+            .unwrap();
+        assert_eq!(workspaces.focused_window(), Some(4));
+        assert!(workspaces.focused_window_is_floating());
+        workspaces
+            .open_window_with_properties_and_focus(0, 6, None, None, None, true)
+            .unwrap();
+        assert_eq!(workspaces.focused_window(), Some(6));
+        assert!(!workspaces.focused_window_is_floating());
+
+        workspaces
+            .open_window_with_properties_and_focus(1, 7, None, None, None, true)
+            .unwrap();
+        assert_eq!(workspaces.active(), 0);
+        assert_eq!(workspaces.focused_window(), Some(6));
+        assert!(workspaces.focus_window_without_workspace_switch(7));
+        assert_eq!(workspaces.active(), 0);
+        assert_eq!(workspaces.focused_window(), Some(6));
+        assert!(!workspaces.focus_window_without_workspace_switch(99));
+        assert!(workspaces.focus_workspace(1).unwrap());
+        assert_eq!(workspaces.focused_window(), Some(7));
     }
 
     #[test]
