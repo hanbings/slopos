@@ -64,8 +64,8 @@ struct PngMetadata {
 #[derive(Clone, Copy)]
 enum Transparency {
     None,
-    Gray(u8),
-    Rgb(u8, u8, u8),
+    Gray(u16),
+    Rgb(u16, u16, u16),
 }
 
 pub fn decode_png_rgb(input: &mut [u8], output: &mut [u8]) -> Result<DecodedPng, PngError> {
@@ -196,17 +196,23 @@ fn validate_png(input: &[u8]) -> Result<PngMetadata, PngError> {
                 }
                 transparency = match color_type {
                     0 if chunk.data.len() == 2
-                        && chunk.data[0] == 0
-                        && u16::from(chunk.data[1]) < 1u16 << bit_depth =>
+                        && u32::from(u16::from_be_bytes([chunk.data[0], chunk.data[1]]))
+                            < 1u32 << bit_depth =>
                     {
-                        Transparency::Gray(chunk.data[1])
+                        Transparency::Gray(u16::from_be_bytes([chunk.data[0], chunk.data[1]]))
                     }
-                    2 if chunk.data.len() == 6
-                        && chunk.data[0] == 0
-                        && chunk.data[2] == 0
-                        && chunk.data[4] == 0 =>
-                    {
-                        Transparency::Rgb(chunk.data[1], chunk.data[3], chunk.data[5])
+                    2 if chunk.data.len() == 6 => {
+                        let red = u16::from_be_bytes([chunk.data[0], chunk.data[1]]);
+                        let green = u16::from_be_bytes([chunk.data[2], chunk.data[3]]);
+                        let blue = u16::from_be_bytes([chunk.data[4], chunk.data[5]]);
+                        let limit = 1u32 << bit_depth;
+                        if [red, green, blue]
+                            .iter()
+                            .any(|sample| u32::from(*sample) >= limit)
+                        {
+                            return Err(PngError::UnsupportedColor);
+                        }
+                        Transparency::Rgb(red, green, blue)
                     }
                     3 if saw_palette
                         && !chunk.data.is_empty()
@@ -316,11 +322,11 @@ fn parse_header(data: &[u8]) -> Result<(usize, usize, u8, u8, usize), PngError> 
         return Err(PngError::InvalidHeader);
     }
     let channels = match (data[9], data[8]) {
-        (0, 1 | 2 | 4 | 8) => 1,
-        (2, 8) => 3,
+        (0, 1 | 2 | 4 | 8 | 16) => 1,
+        (2, 8 | 16) => 3,
         (3, 1 | 2 | 4 | 8) => 1,
-        (4, 8) => 2,
-        (6, 8) => 4,
+        (4, 8 | 16) => 2,
+        (6, 8 | 16) => 4,
         _ => return Err(PngError::UnsupportedColor),
     };
     if data[10] != 0 || data[11] != 0 {
@@ -825,7 +831,7 @@ fn compact_rgb(bytes: &mut [u8], metadata: &PngMetadata) -> Result<(), PngError>
                 let source = bytes[source_start + bit / 8];
                 let shift = 8 - bit_depth - bit % 8;
                 let sample = source >> shift & mask;
-                let value = if matches!(metadata.transparency, Transparency::Gray(key) if sample == key)
+                let value = if matches!(metadata.transparency, Transparency::Gray(key) if u16::from(sample) == key)
                 {
                     0
                 } else {
@@ -840,6 +846,10 @@ fn compact_rgb(bytes: &mut [u8], metadata: &PngMetadata) -> Result<(), PngError>
         return Ok(());
     }
 
+    if metadata.bit_depth == 16 {
+        return compact_rgb16(bytes, metadata);
+    }
+
     let channels = metadata.channels;
     let source_stride = width * channels + 1;
     if matches!(metadata.color_type, 0 | 4) {
@@ -851,7 +861,8 @@ fn compact_rgb(bytes: &mut [u8], metadata: &PngMetadata) -> Result<(), PngError>
                 let gray = bytes[source];
                 let value = if metadata.color_type == 4 {
                     alpha_blend_black(gray, bytes[source + 1])
-                } else if matches!(metadata.transparency, Transparency::Gray(key) if gray == key) {
+                } else if matches!(metadata.transparency, Transparency::Gray(key) if u16::from(gray) == key)
+                {
                     0
                 } else {
                     gray
@@ -874,7 +885,9 @@ fn compact_rgb(bytes: &mut [u8], metadata: &PngMetadata) -> Result<(), PngError>
                     let color = (bytes[source], bytes[source + 1], bytes[source + 2]);
                     if matches!(
                         metadata.transparency,
-                        Transparency::Rgb(red, green, blue) if color == (red, green, blue)
+                        Transparency::Rgb(red, green, blue)
+                            if (u16::from(color.0), u16::from(color.1), u16::from(color.2))
+                                == (red, green, blue)
                     ) {
                         (0, 0, 0)
                     } else {
@@ -898,6 +911,96 @@ fn compact_rgb(bytes: &mut [u8], metadata: &PngMetadata) -> Result<(), PngError>
         }
     }
     Ok(())
+}
+
+fn compact_rgb16(bytes: &mut [u8], metadata: &PngMetadata) -> Result<(), PngError> {
+    let width = metadata.width;
+    let height = metadata.height;
+    let source_pixel_bytes = metadata.channels * 2;
+    let source_stride = width * source_pixel_bytes + 1;
+    if metadata.color_type == 0 {
+        for row in (0..height).rev() {
+            let source_start = row * source_stride + 1;
+            for pixel in (0..width).rev() {
+                let source = source_start + pixel * source_pixel_bytes;
+                let sample = read_u16_sample(bytes, source);
+                let value = if matches!(metadata.transparency, Transparency::Gray(key) if sample == key)
+                {
+                    0
+                } else {
+                    scale_u16_sample(sample)
+                };
+                let destination = (row * width + pixel) * 3;
+                bytes[destination] = value;
+                bytes[destination + 1] = value;
+                bytes[destination + 2] = value;
+            }
+        }
+        return Ok(());
+    }
+
+    let mut destination = 0usize;
+    for row in 0..height {
+        let source_start = row * source_stride + 1;
+        for pixel in 0..width {
+            let source = source_start + pixel * source_pixel_bytes;
+            let (red, green, blue) = match metadata.color_type {
+                2 => {
+                    let color = (
+                        read_u16_sample(bytes, source),
+                        read_u16_sample(bytes, source + 2),
+                        read_u16_sample(bytes, source + 4),
+                    );
+                    if matches!(
+                        metadata.transparency,
+                        Transparency::Rgb(red, green, blue) if color == (red, green, blue)
+                    ) {
+                        (0, 0, 0)
+                    } else {
+                        (
+                            scale_u16_sample(color.0),
+                            scale_u16_sample(color.1),
+                            scale_u16_sample(color.2),
+                        )
+                    }
+                }
+                4 => {
+                    let gray = scale_u16_sample(read_u16_sample(bytes, source));
+                    let alpha = scale_u16_sample(read_u16_sample(bytes, source + 2));
+                    let value = alpha_blend_black(gray, alpha);
+                    (value, value, value)
+                }
+                6 => {
+                    let alpha = scale_u16_sample(read_u16_sample(bytes, source + 6));
+                    (
+                        alpha_blend_black(scale_u16_sample(read_u16_sample(bytes, source)), alpha),
+                        alpha_blend_black(
+                            scale_u16_sample(read_u16_sample(bytes, source + 2)),
+                            alpha,
+                        ),
+                        alpha_blend_black(
+                            scale_u16_sample(read_u16_sample(bytes, source + 4)),
+                            alpha,
+                        ),
+                    )
+                }
+                _ => unreachable!(),
+            };
+            bytes[destination] = red;
+            bytes[destination + 1] = green;
+            bytes[destination + 2] = blue;
+            destination += 3;
+        }
+    }
+    Ok(())
+}
+
+fn read_u16_sample(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_be_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+fn scale_u16_sample(sample: u16) -> u8 {
+    ((u32::from(sample) * 255 + u32::from(u16::MAX) / 2) / u32::from(u16::MAX)) as u8
 }
 
 fn alpha_blend_black(value: u8, alpha: u8) -> u8 {
@@ -929,6 +1032,10 @@ mod tests {
     const GRAY2_TRANSPARENT_PNG: [u8; 85] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x05\x00\x00\x00\x02\x02\x00\x00\x00\x00\xff\xb1\x51\x20\x00\x00\x00\x02tRNS\x00\x02\x98\x9d\xac\x14\x00\x00\x00\x0eIDAT\x78\xda\x63\x90\x76\x60\xba\xd1\x00\x00\x03\xc3\x01\xb6\x14\x89\x83\xb4\x00\x00\x00\x00IEND\xae\x42\x60\x82";
     const GRAY4_TRANSPARENT_PNG: [u8; 87] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x05\x00\x00\x00\x02\x04\x00\x00\x00\x00\x70\xf1\xa4\x80\x00\x00\x00\x02tRNS\x00\x05\x06\xf9\x39\xb7\x00\x00\x00\x10IDAT\x78\xda\x63\x60\x5d\x2f\xc0\xf2\x55\x60\x3d\x00\x08\x53\x02\x7d\x11\x4d\xa8\x78\x00\x00\x00\x00IEND\xae\x42\x60\x82";
     const GRAY2_INVALID_TRANSPARENCY_PNG: [u8; 81] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x02\x00\x00\x00\x00\x70\xce\x83\xf4\x00\x00\x00\x02tRNS\x00\x04\x71\xfe\x09\x21\x00\x00\x00\x0aIDAT\x78\xda\x63\x60\x00\x00\x00\x02\x00\x01\xe5\x27\xde\xfc\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const GRAY16_TRANSPARENT_PNG: [u8; 93] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x03\x00\x00\x00\x02\x10\x00\x00\x00\x00\xe8\x8f\xe5\x85\x00\x00\x00\x02tRNS\x80\x00\x4d\x10\x55\x73\x00\x00\x00\x16IDAT\x78\xda\x63\x60\x60\x68\x60\xf8\xff\x9f\x41\xc8\xa4\x81\x61\xf5\x59\x00\x1c\x10\x04\xbd\xb8\x11\x32\x2b\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const RGB16_TRANSPARENT_PNG: [u8; 106] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x02\x10\x02\x00\x00\x00\xad\x44\x46\x30\x00\x00\x00\x06tRNS\x10\x00\x20\x00\x30\x00\x12\x04\x9c\xc7\x00\x00\x00\x1fIDAT\x78\xda\x63\x10\x60\x50\x60\x30\x60\xf8\xff\xbf\x81\x01\x08\x84\x4c\xc2\x2a\x66\xed\x61\x60\x04\xf2\x19\x00\x4f\x71\x07\x48\x8d\xc0\x36\x63\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const GRAY_ALPHA16_PNG: [u8; 80] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x02\x10\x04\x00\x00\x00\x88\x2f\x19\xec\x00\x00\x00\x17IDAT\x78\xda\x63\xf8\xff\xbf\x81\xa1\x81\xe1\xff\x7f\x06\x07\x20\x04\x52\x0c\x00\x4e\x55\x07\x7b\x42\x5e\x0b\x60\x00\x00\x00\x00IEND\xae\x42\x60\x82";
+    const RGBA16_PNG: [u8; 87] = *b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x02\x10\x06\x00\x00\x00\x22\x26\xd1\x67\x00\x00\x00\x1eIDAT\x78\xda\x63\xf8\xff\x9f\x01\x08\x1a\xc0\xf8\x3f\x10\x30\x38\x00\x19\x07\x80\xe4\x7f\x30\x60\x60\x00\x00\xde\xf2\x0e\xb5\x36\xd1\x93\xb8\x00\x00\x00\x00IEND\xae\x42\x60\x82";
 
     #[test]
     fn inflates_stored_fixed_and_dynamic_blocks() {
@@ -1043,6 +1150,34 @@ mod tests {
                 assert_eq!(rgb, [gray, gray, gray]);
             }
         }
+
+        let mut gray16_png = GRAY16_TRANSPARENT_PNG;
+        let decoded = decode_png_rgb(&mut gray16_png, &mut output).unwrap();
+        assert_eq!(
+            &output[..decoded.rgb_length()],
+            b"\x00\x00\x00\x00\x00\x00\xff\xff\xff\x12\x12\x12\x00\x00\x00\xab\xab\xab"
+        );
+
+        let mut rgb16_png = RGB16_TRANSPARENT_PNG;
+        let decoded = decode_png_rgb(&mut rgb16_png, &mut output).unwrap();
+        assert_eq!(
+            &output[..decoded.rgb_length()],
+            b"\x00\x00\x00\xff\x80\x00\x12\x56\x9a\x00\x01\xfe"
+        );
+
+        let mut gray_alpha16_png = GRAY_ALPHA16_PNG;
+        let decoded = decode_png_rgb(&mut gray_alpha16_png, &mut output).unwrap();
+        assert_eq!(
+            &output[..decoded.rgb_length()],
+            b"\x80\x80\x80\x80\x80\x80\x10\x10\x10\x00\x00\x00"
+        );
+
+        let mut rgba16_png = RGBA16_PNG;
+        let decoded = decode_png_rgb(&mut rgba16_png, &mut output).unwrap();
+        assert_eq!(
+            &output[..decoded.rgb_length()],
+            b"\x80\x00\x00\x00\x80\xff\x10\x20\x30\x00\x00\x00"
+        );
     }
 
     #[test]
