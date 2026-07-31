@@ -119,6 +119,7 @@ impl Desktop {
                 .unwrap_or(false);
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let open_focused = niri.window_rules.focused_for(app_id);
+            let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating =
                 niri.window_rules.floating_for(app_id).unwrap_or(false) && !maximized_to_edges;
             let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
@@ -127,14 +128,32 @@ impl Desktop {
             let column_display = niri.window_rules.column_display_for(app_id);
             if floating {
                 workspaces
-                    .open_floating_window_with_dimensions_and_focus(
+                    .open_floating_window_with_properties(
                         workspace,
                         window as u32,
                         column_width,
                         window_height,
+                        floating_position,
                         open_focused != Some(false),
                     )
                     .unwrap_or_else(|_| crate::fatal("niri floating seed capacity mismatch"));
+                if let Some(position) = floating_position {
+                    let rect = workspaces
+                        .window_rect_in_workspace(workspace, window as u32)
+                        .unwrap_or_else(|_| crate::fatal("niri floating position geometry failed"));
+                    serialln(format_args!(
+                        "SLOPOS-NIRI: window rule app_id={} property=default-floating-position x={} y={} relative-to={} applied=true workspace={} window_x={} window_y={} width={} height={} source=config",
+                        app_id,
+                        position.x,
+                        position.y,
+                        position.relative_to.name(),
+                        workspace + 1,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height
+                    ));
+                }
             } else {
                 workspaces
                     .open_window_with_properties_and_focus(
@@ -774,6 +793,7 @@ impl Desktop {
                 .unwrap_or(false);
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let open_focused = niri.window_rules.focused_for(app_id);
+            let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating = niri
                 .window_rules
                 .floating_for(app_id)
@@ -785,14 +805,34 @@ impl Desktop {
             let column_display = niri.window_rules.column_display_for(app_id);
             if floating {
                 workspaces
-                    .open_floating_window_with_dimensions_and_focus(
+                    .open_floating_window_with_properties(
                         workspace,
                         window as u32,
                         column_width,
                         window_height,
+                        floating_position,
                         open_focused != Some(false),
                     )
                     .unwrap_or_else(|_| crate::fatal("published niri floating seed failed"));
+                if let Some(position) = floating_position {
+                    let rect = workspaces
+                        .window_rect_in_workspace(workspace, window as u32)
+                        .unwrap_or_else(|_| {
+                            crate::fatal("published niri floating position geometry failed")
+                        });
+                    serialln(format_args!(
+                        "SLOPOS-NIRI: window rule app_id={} property=default-floating-position x={} y={} relative-to={} applied=true workspace={} window_x={} window_y={} width={} height={} source=config",
+                        app_id,
+                        position.x,
+                        position.y,
+                        position.relative_to.name(),
+                        workspace + 1,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height
+                    ));
+                }
             } else {
                 workspaces
                     .open_window_with_properties_and_focus(
@@ -1818,16 +1858,25 @@ impl Desktop {
     }
 
     fn execute_niri_action(&mut self, action: NiriAction<'static>) {
-        let rule_column_display = self
+        let focused_window = self
             .workspaces
             .focused_window()
             .and_then(|window| usize::try_from(window).ok())
-            .filter(|window| *window < WINDOW_COUNT)
-            .and_then(|window| {
-                self.niri
-                    .window_rules
-                    .column_display_for(app_id(window_kind(window)))
-            });
+            .filter(|window| *window < WINDOW_COUNT);
+        let rule_column_display = focused_window.and_then(|window| {
+            self.niri
+                .window_rules
+                .column_display_for(app_id(window_kind(window)))
+        });
+        let rule_floating_position = focused_window.and_then(|window| {
+            self.niri
+                .window_rules
+                .floating_position_for(app_id(window_kind(window)))
+        });
+        let floating_position_was_remembered = focused_window.is_some_and(|window| {
+            self.workspaces
+                .floating_position_is_remembered(window as u32)
+        });
         let blocked_by_fullscreen = self.workspaces.fullscreen_window().is_some()
             && !matches!(
                 action,
@@ -1939,13 +1988,16 @@ impl Desktop {
                 }
                 NiriAction::ToggleWindowFloating => self
                     .workspaces
-                    .toggle_focused_window_floating_with_display(rule_column_display),
+                    .toggle_focused_window_floating_with_properties(
+                        rule_column_display,
+                        rule_floating_position,
+                    ),
                 NiriAction::SwitchFocusBetweenFloatingAndTiling => {
                     self.workspaces.switch_focus_between_floating_and_tiling()
                 }
-                NiriAction::MoveWindowToFloating => {
-                    self.workspaces.move_focused_window_to_floating()
-                }
+                NiriAction::MoveWindowToFloating => self
+                    .workspaces
+                    .move_focused_window_to_floating_with_position(rule_floating_position),
                 NiriAction::MoveWindowToTiling => self
                     .workspaces
                     .move_focused_window_to_tiling_with_display(rule_column_display),
@@ -2306,6 +2358,30 @@ impl Desktop {
                 window.y,
                 window.width,
                 window.height
+            ));
+        }
+        if changed
+            && matches!(
+                action,
+                NiriAction::ToggleWindowFloating | NiriAction::MoveWindowToFloating
+            )
+            && self.workspaces.focused_window_is_floating()
+            && let Some(position) = rule_floating_position
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-NIRI: window rule app_id={} property=default-floating-position x={} y={} relative-to={} applied={} remembered={} window_x={} window_y={} width={} height={} transition={} source=config",
+                app_id(window.kind),
+                position.x,
+                position.y,
+                position.relative_to.name(),
+                !floating_position_was_remembered,
+                floating_position_was_remembered,
+                window.x,
+                window.y,
+                window.width,
+                window.height,
+                action_name(action)
             ));
         }
         if changed

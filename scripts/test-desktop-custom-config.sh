@@ -12,6 +12,8 @@ qemu_log="${repo_dir}/evidence/custom-config-qemu.log"
 workspace_screenshot="${repo_dir}/evidence/custom-config-workspace-click.ppm"
 edge_screenshot="${repo_dir}/evidence/custom-config-edge-maximized.ppm"
 column_width_screenshot="${repo_dir}/evidence/custom-config-default-column-width.ppm"
+floating_position_screenshot="${repo_dir}/evidence/custom-config-floating-position.ppm"
+floating_remembered_screenshot="${repo_dir}/evidence/custom-config-floating-remembered.ppm"
 action_screenshot="${repo_dir}/evidence/custom-config-on-click.ppm"
 format_restored_screenshot="${repo_dir}/evidence/custom-config-format-restored.ppm"
 right_action_screenshot="${repo_dir}/evidence/custom-config-on-click-right.ppm"
@@ -125,6 +127,18 @@ set +e
     echo "screendump ${column_width_screenshot}"
     echo "sendkey meta_l-f 50"
     sleep 1
+    echo "sendkey meta_l-alt-v 50"
+    sleep 1
+    echo "screendump ${floating_position_screenshot}"
+    echo "sendkey meta_l-ctrl-j 50"
+    sleep 1
+    echo "sendkey meta_l-ctrl-v 50"
+    sleep 1
+    echo "sendkey meta_l-alt-v 50"
+    sleep 1
+    echo "screendump ${floating_remembered_screenshot}"
+    echo "sendkey meta_l-ctrl-v 50"
+    sleep 1
     echo "mouse_move -24 0"
     echo "mouse_button 1"
     echo "mouse_button 0"
@@ -169,7 +183,7 @@ set +e
     sleep 1
     echo "screendump ${format_restored_screenshot}"
     echo "quit"
-} | timeout 28s qemu-system-x86_64 \
+} | timeout 40s qemu-system-x86_64 \
     -machine q35,accel=tcg \
     -cpu qemu64 \
     -m 256M \
@@ -256,6 +270,12 @@ grep -Fq \
     "SLOPOS-DESKTOP: window resized kind=CONFIG width=656 layout=scrolling" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=default-floating-position x=24 y=24 relative-to=bottom-right applied=true remembered=false window_x=8 window_y=404 width=992 height=340 transition=move-window-to-floating source=config" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=default-floating-position x=24 y=24 relative-to=bottom-right applied=false remembered=true window_x=8 window_y=428 width=992 height=340 transition=move-window-to-floating source=config" \
+    "${serial_log}"
+grep -Fq \
     "SLOPOS-NIRI: binding action=maximize-window-to-edges changed=true workspace=2 name=config focused=2" \
     "${serial_log}"
 grep -Fq \
@@ -306,6 +326,8 @@ grep -Fq "SLOPOS-TERMINAL: command=SWWW QUERY" "${serial_log}"
 test -s "${workspace_screenshot}"
 test -s "${edge_screenshot}"
 test -s "${column_width_screenshot}"
+test -s "${floating_position_screenshot}"
+test -s "${floating_remembered_screenshot}"
 test -s "${action_screenshot}"
 test -s "${format_restored_screenshot}"
 test -s "${right_action_screenshot}"
@@ -319,6 +341,10 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/custom-config-edge-maximized.png"
     pnmtopng "${column_width_screenshot}" \
         >"${repo_dir}/evidence/custom-config-default-column-width.png"
+    pnmtopng "${floating_position_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-floating-position.png"
+    pnmtopng "${floating_remembered_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-floating-remembered.png"
     pnmtopng "${action_screenshot}" \
         >"${repo_dir}/evidence/custom-config-on-click.png"
     pnmtopng "${format_restored_screenshot}" \

@@ -221,6 +221,40 @@ impl<'a> NamedWorkspaceList<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FloatingPositionRelativeTo {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl FloatingPositionRelativeTo {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::TopLeft => "top-left",
+            Self::TopRight => "top-right",
+            Self::BottomLeft => "bottom-left",
+            Self::BottomRight => "bottom-right",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FloatingPosition {
+    pub x: i32,
+    pub y: i32,
+    pub relative_to: FloatingPositionRelativeTo,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NiriWindowRule<'a> {
     pub app_id: Option<&'a str>,
     pub open_on_workspace: Option<&'a str>,
@@ -229,6 +263,7 @@ pub struct NiriWindowRule<'a> {
     pub open_maximized_to_edges: Option<bool>,
     pub open_fullscreen: Option<bool>,
     pub open_focused: Option<bool>,
+    pub default_floating_position: Option<FloatingPosition>,
     pub default_column_width: Option<ColumnWidth>,
     pub default_window_height: Option<ColumnWidth>,
     pub default_column_display: Option<ColumnDisplay>,
@@ -326,6 +361,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         focused
+    }
+
+    pub fn floating_position_for(self, app_id: &str) -> Option<FloatingPosition> {
+        let mut position = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.default_floating_position {
+                    position = Some(value);
+                }
+            }
+        }
+        position
     }
 
     pub fn column_width_for(self, app_id: &str) -> Option<ColumnWidth> {
@@ -562,6 +609,7 @@ impl<'a> ShellConfigParser<'a> {
             open_maximized_to_edges: None,
             open_fullscreen: None,
             open_focused: None,
+            default_floating_position: None,
             default_column_width: None,
             default_window_height: None,
             default_column_display: None,
@@ -635,6 +683,9 @@ impl<'a> ShellConfigParser<'a> {
                     });
                     self.finish_node()?;
                 }
+                KdlToken::Word("default-floating-position") => {
+                    rule.default_floating_position = Some(self.parse_floating_position()?);
+                }
                 KdlToken::Word("default-column-width") => {
                     rule.default_column_width = Some(self.parse_rule_size()?);
                 }
@@ -656,6 +707,72 @@ impl<'a> ShellConfigParser<'a> {
                 KdlToken::RightBrace => return Ok(rule),
                 KdlToken::End => return Err(NiriConfigError::UnexpectedEnd),
                 KdlToken::EndNode => {}
+            }
+        }
+    }
+
+    fn parse_floating_position(&mut self) -> Result<FloatingPosition, NiriConfigError> {
+        let mut x = None;
+        let mut y = None;
+        let mut relative_to = FloatingPositionRelativeTo::TopLeft;
+        let mut relative_to_seen = false;
+        loop {
+            match self.next() {
+                KdlToken::Word("x") if x.is_none() => {
+                    if self.next() != KdlToken::Equal {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    }
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    x = Some(parse_floating_coordinate(value)?);
+                }
+                KdlToken::Word("y") if y.is_none() => {
+                    if self.next() != KdlToken::Equal {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    }
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    y = Some(parse_floating_coordinate(value)?);
+                }
+                KdlToken::Word("relative-to") if !relative_to_seen => {
+                    if self.next() != KdlToken::Equal {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    }
+                    let KdlToken::String(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    relative_to = match value {
+                        "top-left" => FloatingPositionRelativeTo::TopLeft,
+                        "top-right" => FloatingPositionRelativeTo::TopRight,
+                        "bottom-left" => FloatingPositionRelativeTo::BottomLeft,
+                        "bottom-right" => FloatingPositionRelativeTo::BottomRight,
+                        "top" => FloatingPositionRelativeTo::Top,
+                        "bottom" => FloatingPositionRelativeTo::Bottom,
+                        "left" => FloatingPositionRelativeTo::Left,
+                        "right" => FloatingPositionRelativeTo::Right,
+                        _ => return Err(NiriConfigError::InvalidWindowRule),
+                    };
+                    relative_to_seen = true;
+                }
+                KdlToken::EndNode => {
+                    return Ok(FloatingPosition {
+                        x: x.ok_or(NiriConfigError::InvalidWindowRule)?,
+                        y: y.ok_or(NiriConfigError::InvalidWindowRule)?,
+                        relative_to,
+                    });
+                }
+                KdlToken::RightBrace => {
+                    self.push(KdlToken::RightBrace);
+                    return Ok(FloatingPosition {
+                        x: x.ok_or(NiriConfigError::InvalidWindowRule)?,
+                        y: y.ok_or(NiriConfigError::InvalidWindowRule)?,
+                        relative_to,
+                    });
+                }
+                KdlToken::End => return Err(NiriConfigError::UnexpectedEnd),
+                _ => return Err(NiriConfigError::InvalidWindowRule),
             }
         }
     }
@@ -966,6 +1083,27 @@ fn parse_decimal_u16(value: &str) -> Result<u16, NiriConfigError> {
     Ok(parsed)
 }
 
+fn parse_floating_coordinate(value: &str) -> Result<i32, NiriConfigError> {
+    let (negative, magnitude) = if let Some(value) = value.strip_prefix('-') {
+        (true, value)
+    } else if let Some(value) = value.strip_prefix('+') {
+        (false, value)
+    } else {
+        (false, value)
+    };
+    if magnitude.is_empty() {
+        return Err(NiriConfigError::InvalidWindowRule);
+    }
+    let thousandths = super::parse_decimal_thousandths(magnitude)
+        .map_err(|_| NiriConfigError::InvalidWindowRule)?;
+    if thousandths > 65_535_000 {
+        return Err(NiriConfigError::InvalidWindowRule);
+    }
+    let coordinate = i32::try_from((thousandths + 500) / 1000)
+        .map_err(|_| NiriConfigError::InvalidWindowRule)?;
+    Ok(if negative { -coordinate } else { coordinate })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KdlToken<'a> {
     Word(&'a str),
@@ -1143,16 +1281,13 @@ impl<const WINDOWS: usize> FloatingLayout<WINDOWS> {
         (index < self.count).then_some(self.entries[index].window)
     }
 
-    fn add(&mut self, window: u32, source: Option<Rect>) -> Result<(), LayoutError> {
-        self.add_with_dimensions(window, source, None, None)
-    }
-
-    fn add_with_dimensions(
+    fn add_with_dimensions_and_position(
         &mut self,
         window: u32,
         source: Option<Rect>,
         width: Option<ColumnWidth>,
         height: Option<ColumnWidth>,
+        position: Option<FloatingPosition>,
     ) -> Result<(), LayoutError> {
         if self.contains(window) {
             return Err(LayoutError::DuplicateWindow);
@@ -1160,9 +1295,12 @@ impl<const WINDOWS: usize> FloatingLayout<WINDOWS> {
         if self.count == WINDOWS {
             return Err(LayoutError::WindowCapacity);
         }
-        let rect = source
+        let mut rect = source
             .map(|rect| self.rect_near_tiled(rect))
             .unwrap_or_else(|| self.default_rect_with_dimensions(width, height));
+        if let Some(position) = position {
+            rect = self.rect_at_default_position(rect, position);
+        }
         self.entries[self.count] = FloatingEntry {
             window,
             rect,
@@ -1379,6 +1517,45 @@ impl<const WINDOWS: usize> FloatingLayout<WINDOWS> {
         }
     }
 
+    fn rect_at_default_position(&self, mut rect: Rect, position: FloatingPosition) -> Rect {
+        let working_width = i32::from(self.output_width);
+        let working_height = i32::from(self.output_height.saturating_sub(self.reserved_top));
+        let width = i32::from(rect.width);
+        let height = i32::from(rect.height);
+        rect.x = position.x;
+        rect.y = i32::from(self.reserved_top) + position.y;
+        if matches!(
+            position.relative_to,
+            FloatingPositionRelativeTo::TopRight
+                | FloatingPositionRelativeTo::BottomRight
+                | FloatingPositionRelativeTo::Right
+        ) {
+            rect.x = working_width - width - position.x;
+        }
+        if matches!(
+            position.relative_to,
+            FloatingPositionRelativeTo::BottomLeft
+                | FloatingPositionRelativeTo::BottomRight
+                | FloatingPositionRelativeTo::Bottom
+        ) {
+            rect.y = i32::from(self.reserved_top) + working_height - height - position.y;
+        }
+        if matches!(
+            position.relative_to,
+            FloatingPositionRelativeTo::Top | FloatingPositionRelativeTo::Bottom
+        ) {
+            rect.x += working_width / 2 - width / 2;
+        }
+        if matches!(
+            position.relative_to,
+            FloatingPositionRelativeTo::Left | FloatingPositionRelativeTo::Right
+        ) {
+            rect.y += working_height / 2 - height / 2;
+        }
+        self.clamp_rect_position(&mut rect);
+        rect
+    }
+
     fn rect_near_tiled(&self, source: Rect) -> Rect {
         let working_height = self.output_height.saturating_sub(self.reserved_top);
         let preferred_height =
@@ -1441,6 +1618,7 @@ pub struct WorkspaceSet<const WORKSPACES: usize, const COLUMNS: usize, const WIN
     floating_active: [bool; WORKSPACES],
     fullscreen: [Option<u32>; WORKSPACES],
     identities: [Option<u8>; WORKSPACES],
+    remembered_floating: [Option<FloatingEntry>; WINDOWS],
     count: usize,
     active: usize,
     previous: usize,
@@ -1478,6 +1656,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             floating_active: [false; WORKSPACES],
             fullscreen: [None; WORKSPACES],
             identities,
+            remembered_floating: [None; WINDOWS],
             count,
             active: 0,
             previous: 0,
@@ -1638,12 +1817,24 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         height: Option<ColumnWidth>,
         focus: bool,
     ) -> Result<(), WorkspaceError> {
+        self.open_floating_window_with_properties(workspace, window, width, height, None, focus)
+    }
+
+    pub fn open_floating_window_with_properties(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
+        position: Option<FloatingPosition>,
+        focus: bool,
+    ) -> Result<(), WorkspaceError> {
         let previous = self.focused_window_in_workspace(workspace)?;
         self.floating
             .get_mut(workspace)
             .filter(|_| workspace < self.count)
             .ok_or(WorkspaceError::InvalidWorkspace)?
-            .add_with_dimensions(window, None, width, height)
+            .add_with_dimensions_and_position(window, None, width, height, position)
             .map_err(WorkspaceError::Layout)?;
         if focus {
             self.focus_window_in_workspace(workspace, window)
@@ -1667,6 +1858,43 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             return false;
         };
         self.focus_window_in_workspace(workspace, window).is_ok()
+    }
+
+    pub fn floating_position_is_remembered(&self, window: u32) -> bool {
+        self.remembered_floating_position(window).is_some()
+    }
+
+    fn remembered_floating_position(&self, window: u32) -> Option<FloatingEntry> {
+        self.remembered_floating
+            .iter()
+            .flatten()
+            .find(|entry| entry.window == window)
+            .copied()
+    }
+
+    fn remember_floating_position(&mut self, entry: FloatingEntry) {
+        let index = self
+            .remembered_floating
+            .iter()
+            .position(|slot| slot.is_some_and(|current| current.window == entry.window))
+            .or_else(|| {
+                self.remembered_floating
+                    .iter()
+                    .position(|slot| slot.is_none())
+            });
+        if let Some(index) = index {
+            self.remembered_floating[index] = Some(entry);
+        }
+    }
+
+    fn forget_floating_position(&mut self, window: u32) {
+        if let Some(slot) = self
+            .remembered_floating
+            .iter_mut()
+            .find(|slot| slot.is_some_and(|entry| entry.window == window))
+        {
+            *slot = None;
+        }
     }
 
     fn focus_window_in_workspace(
@@ -1723,11 +1951,14 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             if self.floating[self.active].is_empty() {
                 self.floating_active[self.active] = false;
             }
+            self.forget_floating_position(window);
             return Ok(());
         }
         self.layouts[self.active]
             .close_window(window)
-            .map_err(WorkspaceError::Layout)
+            .map_err(WorkspaceError::Layout)?;
+        self.forget_floating_position(window);
+        Ok(())
     }
 
     pub fn tile_rect(&self, window: u32) -> Result<Rect, WorkspaceError> {
@@ -2008,14 +2239,29 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         &mut self,
         display: Option<ColumnDisplay>,
     ) -> bool {
+        self.toggle_focused_window_floating_with_properties(display, None)
+    }
+
+    pub fn toggle_focused_window_floating_with_properties(
+        &mut self,
+        display: Option<ColumnDisplay>,
+        position: Option<FloatingPosition>,
+    ) -> bool {
         if self.focused_window_is_floating() {
             self.move_focused_window_to_tiling_with_display(display)
         } else {
-            self.move_focused_window_to_floating()
+            self.move_focused_window_to_floating_with_position(position)
         }
     }
 
     pub fn move_focused_window_to_floating(&mut self) -> bool {
+        self.move_focused_window_to_floating_with_position(None)
+    }
+
+    pub fn move_focused_window_to_floating_with_position(
+        &mut self,
+        position: Option<FloatingPosition>,
+    ) -> bool {
         if self.focused_window_is_floating() {
             return false;
         }
@@ -2028,12 +2274,25 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         if self.layouts[self.active].close_window(window).is_err() {
             return false;
         }
-        if self.floating[self.active].add(window, Some(rect)).is_err() {
+        let remembered = self.remembered_floating_position(window);
+        let added = if let Some(entry) = remembered {
+            self.floating[self.active].add_entry(entry)
+        } else {
+            self.floating[self.active].add_with_dimensions_and_position(
+                window,
+                Some(rect),
+                None,
+                None,
+                position,
+            )
+        };
+        if added.is_err() {
             self.layouts[self.active]
                 .open_window(window)
                 .expect("detached tiled window has capacity to roll back");
             return false;
         }
+        self.forget_floating_position(window);
         self.floating_active[self.active] = true;
         true
     }
@@ -2064,6 +2323,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
                 .expect("removed floating window has capacity to roll back");
             return false;
         }
+        self.remember_floating_position(entry);
         self.floating_active[self.active] = false;
         true
     }
@@ -2562,6 +2822,7 @@ mod tests {
                 open-maximized-to-edges true
                 open-fullscreen true
                 open-focused true
+                default-floating-position x=10 y=20
                 default-column-width { fixed 600; }
                 default-window-height { fixed 400; }
                 default-column-display "normal"
@@ -2574,6 +2835,7 @@ mod tests {
                 open-maximized-to-edges true
                 open-fullscreen true
                 open-focused true
+                default-floating-position x=-10.4 y=200 relative-to="bottom-left"
                 default-column-width { proportion 0.333; }
                 default-window-height { proportion 0.333; }
                 default-column-display "normal"
@@ -2586,6 +2848,7 @@ mod tests {
                 open-maximized-to-edges false
                 open-fullscreen false
                 open-focused false
+                default-floating-position x=32.6 y=48.4 relative-to="bottom-right"
                 default-column-width { proportion 0.667; }
                 default-window-height { proportion 0.5; }
                 default-column-display "tabbed"
@@ -3059,6 +3322,22 @@ mod tests {
             config.window_rules.focused_for("slopos-config"),
             Some(false)
         );
+        assert_eq!(
+            config.window_rules.floating_position_for("slopos-terminal"),
+            Some(FloatingPosition {
+                x: 10,
+                y: 20,
+                relative_to: FloatingPositionRelativeTo::TopLeft,
+            })
+        );
+        assert_eq!(
+            config.window_rules.floating_position_for("slopos-config"),
+            Some(FloatingPosition {
+                x: 33,
+                y: 48,
+                relative_to: FloatingPositionRelativeTo::BottomRight,
+            })
+        );
     }
 
     #[test]
@@ -3098,6 +3377,14 @@ mod tests {
         for input in [
             r#"window-rule { default-column-display "stacked"; }"#,
             "window-rule { default-column-display tabbed; }",
+            "window-rule { default-floating-position x=1; }",
+            "window-rule { default-floating-position y=1; }",
+            "window-rule { default-floating-position x=1 x=2 y=3; }",
+            "window-rule { default-floating-position x=1 y=2 relative-to=top; }",
+            r#"window-rule { default-floating-position x=1 y=2 relative-to="center"; }"#,
+            "window-rule { default-floating-position x=65536 y=0; }",
+            "window-rule { default-floating-position x=65535.1 y=0; }",
+            "window-rule { default-floating-position x=1.2345 y=0; }",
         ] {
             assert_eq!(
                 parse_niri_shell_config(input),
@@ -3283,6 +3570,74 @@ mod tests {
         assert!(!workspaces.focus_window_without_workspace_switch(99));
         assert!(workspaces.focus_workspace(1).unwrap());
         assert_eq!(workspaces.focused_window(), Some(7));
+    }
+
+    #[test]
+    fn anchors_and_remembers_default_floating_positions() {
+        let cases = [
+            (FloatingPositionRelativeTo::TopLeft, 10, 60),
+            (FloatingPositionRelativeTo::TopRight, 790, 60),
+            (FloatingPositionRelativeTo::BottomLeft, 10, 560),
+            (FloatingPositionRelativeTo::BottomRight, 790, 560),
+            (FloatingPositionRelativeTo::Top, 410, 60),
+            (FloatingPositionRelativeTo::Bottom, 410, 560),
+            (FloatingPositionRelativeTo::Left, 10, 330),
+            (FloatingPositionRelativeTo::Right, 790, 330),
+        ];
+        for (relative_to, expected_x, expected_y) in cases {
+            let mut workspaces =
+                WorkspaceSet::<1, 1, 1>::new(1, 1, 1000, 700, 40, LayoutConfig::default()).unwrap();
+            workspaces
+                .open_floating_window_with_properties(
+                    0,
+                    1,
+                    Some(ColumnWidth::Fixed(200)),
+                    Some(ColumnWidth::Fixed(120)),
+                    Some(FloatingPosition {
+                        x: 10,
+                        y: 20,
+                        relative_to,
+                    }),
+                    true,
+                )
+                .unwrap();
+            assert_eq!(
+                workspaces.tile_rect(1).unwrap(),
+                Rect {
+                    x: expected_x,
+                    y: expected_y,
+                    width: 200,
+                    height: 120,
+                }
+            );
+        }
+
+        let mut workspaces =
+            WorkspaceSet::<1, 2, 2>::new(1, 1, 1000, 700, 40, LayoutConfig::default()).unwrap();
+        workspaces.open_window(0, 7).unwrap();
+        let position = FloatingPosition {
+            x: 30,
+            y: 20,
+            relative_to: FloatingPositionRelativeTo::BottomRight,
+        };
+        assert!(workspaces.move_focused_window_to_floating_with_position(Some(position)));
+        let initial = workspaces.tile_rect(7).unwrap();
+        assert_eq!(initial.x, 1000 - i32::from(initial.width) - 30);
+        assert_eq!(initial.y, 700 - i32::from(initial.height) - 20);
+        assert!(workspaces.move_focused_floating(0, 50));
+        let moved = workspaces.tile_rect(7).unwrap();
+        assert_ne!(moved.y, initial.y);
+        assert!(workspaces.move_focused_window_to_tiling());
+        assert!(workspaces.floating_position_is_remembered(7));
+        assert!(
+            workspaces.move_focused_window_to_floating_with_position(Some(FloatingPosition {
+                x: 0,
+                y: 0,
+                relative_to: FloatingPositionRelativeTo::TopLeft,
+            }))
+        );
+        assert_eq!(workspaces.tile_rect(7).unwrap(), moved);
+        assert!(!workspaces.floating_position_is_remembered(7));
     }
 
     #[test]

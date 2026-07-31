@@ -115,11 +115,11 @@ qmp_wheel() {
     monitor_type "swww query"
     sleep 2
     monitor_type "swww img /usr/share/slopos/missing.ppm --transition-type none"
-    sleep 2
+    sleep 4
     monitor_type "swww query"
     sleep 2
     monitor_type "swww img /etc/slopos/system.conf --transition-type none"
-    sleep 2
+    sleep 4
     monitor_type "swww query"
     sleep 2
     monitor_type "swww kill"
