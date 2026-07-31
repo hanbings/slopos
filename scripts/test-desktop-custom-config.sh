@@ -10,6 +10,7 @@ serial_log="${repo_dir}/evidence/custom-config-serial.log"
 debug_log="${repo_dir}/evidence/custom-config-uefi-debugcon.log"
 qemu_log="${repo_dir}/evidence/custom-config-qemu.log"
 workspace_screenshot="${repo_dir}/evidence/custom-config-workspace-click.ppm"
+edge_screenshot="${repo_dir}/evidence/custom-config-edge-maximized.ppm"
 column_width_screenshot="${repo_dir}/evidence/custom-config-default-column-width.ppm"
 action_screenshot="${repo_dir}/evidence/custom-config-on-click.ppm"
 format_restored_screenshot="${repo_dir}/evidence/custom-config-format-restored.ppm"
@@ -66,6 +67,7 @@ sed \
     -e '1i// user overrides' \
     -e 's/open-maximized false/open-maximized true/' \
     -e 's/open-maximized-to-edges false/open-maximized-to-edges true/' \
+    -e 's/open-fullscreen false/open-fullscreen true/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 1\.0/proportion 0.5/' \
     -e '/match app-id="slopos-config"/,/^}/ s/default-column-display "normal"/default-column-display "tabbed"/' \
@@ -112,6 +114,9 @@ set +e
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${workspace_screenshot}"
+    echo "sendkey meta_l-shift-f 50"
+    sleep 1
+    echo "screendump ${edge_screenshot}"
     echo "sendkey meta_l-m 50"
     sleep 1
     echo "sendkey meta_l-f 50"
@@ -226,6 +231,9 @@ grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized-to-edges value=true applied=true workspace=2 x=0 y=40 width=1024 height=728 mode=maximized-to-edges source=config" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=open-fullscreen value=true applied=true workspace=2 x=0 y=0 width=1024 height=768 mode=fullscreen source=config" \
+    "${serial_log}"
+grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=default-column-display value=tabbed applied=true workspace=2 source=config" \
     "${serial_log}"
 grep -Fq \
@@ -236,6 +244,12 @@ grep -Fq \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-DESKTOP: window edge maximize toggled kind=CONFIG x=16 y=56 width=992 height=340 layout=scrolling" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=CONFIG restore_layer=tiling x=0 y=40 width=1024 height=728 bar=visible layout=niri" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=2 name=config focused=2" \
     "${serial_log}"
 if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=maximize-column changed=true workspace=2 name=config focused=2" "${serial_log}")" -ne 2 ]]; then
     echo "custom niri default-column-width did not survive one maximize restore cycle" >&2
@@ -274,6 +288,7 @@ grep -Fq "SLOPOS-TERMINAL: command=ABOUT" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=HELP" "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=SWWW QUERY" "${serial_log}"
 test -s "${workspace_screenshot}"
+test -s "${edge_screenshot}"
 test -s "${column_width_screenshot}"
 test -s "${action_screenshot}"
 test -s "${format_restored_screenshot}"
@@ -284,6 +299,8 @@ test -s "${scroll_down_screenshot}"
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${workspace_screenshot}" \
         >"${repo_dir}/evidence/custom-config-workspace-click.png"
+    pnmtopng "${edge_screenshot}" \
+        >"${repo_dir}/evidence/custom-config-edge-maximized.png"
     pnmtopng "${column_width_screenshot}" \
         >"${repo_dir}/evidence/custom-config-default-column-width.png"
     pnmtopng "${action_screenshot}" \

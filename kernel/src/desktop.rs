@@ -116,6 +116,7 @@ impl Desktop {
                 .window_rules
                 .maximized_to_edges_for(app_id)
                 .unwrap_or(false);
+            let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let floating =
                 niri.window_rules.floating_for(app_id).unwrap_or(false) && !maximized_to_edges;
             let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
@@ -182,6 +183,23 @@ impl Desktop {
                         rect.height
                     ));
                 }
+            }
+            if fullscreen {
+                workspaces
+                    .set_window_fullscreen(workspace, window as u32, true)
+                    .unwrap_or_else(|_| crate::fatal("niri fullscreen seed failed"));
+                let rect = workspaces
+                    .window_rect_in_workspace(workspace, window as u32)
+                    .unwrap_or_else(|_| crate::fatal("niri fullscreen geometry failed"));
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=open-fullscreen value=true applied=true workspace={} x={} y={} width={} height={} mode=fullscreen source=config",
+                    app_id,
+                    workspace + 1,
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height
+                ));
             }
         }
         workspaces
@@ -723,6 +741,7 @@ impl Desktop {
                 .window_rules
                 .maximized_to_edges_for(app_id)
                 .unwrap_or(false);
+            let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let floating = niri
                 .window_rules
                 .floating_for(app_id)
@@ -798,6 +817,23 @@ impl Desktop {
                         rect.height
                     ));
                 }
+            }
+            if fullscreen {
+                workspaces
+                    .set_window_fullscreen(workspace, window as u32, true)
+                    .unwrap_or_else(|_| crate::fatal("published niri fullscreen seed failed"));
+                let rect = workspaces
+                    .window_rect_in_workspace(workspace, window as u32)
+                    .unwrap_or_else(|_| crate::fatal("published niri fullscreen geometry failed"));
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=open-fullscreen value=true applied=true workspace={} x={} y={} width={} height={} mode=fullscreen source=config",
+                    app_id,
+                    workspace + 1,
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height
+                ));
             }
         }
         workspaces

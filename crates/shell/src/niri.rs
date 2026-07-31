@@ -227,6 +227,7 @@ pub struct NiriWindowRule<'a> {
     pub open_floating: Option<bool>,
     pub open_maximized: Option<bool>,
     pub open_maximized_to_edges: Option<bool>,
+    pub open_fullscreen: Option<bool>,
     pub default_column_width: Option<ColumnWidth>,
     pub default_window_height: Option<ColumnWidth>,
     pub default_column_display: Option<ColumnDisplay>,
@@ -300,6 +301,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         maximized
+    }
+
+    pub fn fullscreen_for(self, app_id: &str) -> Option<bool> {
+        let mut fullscreen = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.open_fullscreen {
+                    fullscreen = Some(value);
+                }
+            }
+        }
+        fullscreen
     }
 
     pub fn column_width_for(self, app_id: &str) -> Option<ColumnWidth> {
@@ -534,6 +547,7 @@ impl<'a> ShellConfigParser<'a> {
             open_floating: None,
             open_maximized: None,
             open_maximized_to_edges: None,
+            open_fullscreen: None,
             default_column_width: None,
             default_window_height: None,
             default_column_display: None,
@@ -585,6 +599,14 @@ impl<'a> ShellConfigParser<'a> {
                 }
                 KdlToken::Word("open-maximized-to-edges") => {
                     rule.open_maximized_to_edges = Some(match self.next() {
+                        KdlToken::Word("true") => true,
+                        KdlToken::Word("false") => false,
+                        _ => return Err(NiriConfigError::InvalidWindowRule),
+                    });
+                    self.finish_node()?;
+                }
+                KdlToken::Word("open-fullscreen") => {
+                    rule.open_fullscreen = Some(match self.next() {
                         KdlToken::Word("true") => true,
                         KdlToken::Word("false") => false,
                         _ => return Err(NiriConfigError::InvalidWindowRule),
@@ -1684,6 +1706,32 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.fullscreen[self.active] == Some(window)
     }
 
+    pub fn set_window_fullscreen(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        fullscreen: bool,
+    ) -> Result<bool, WorkspaceError> {
+        if workspace >= self.count {
+            return Err(WorkspaceError::InvalidWorkspace);
+        }
+        if !self.floating[workspace].contains(window)
+            && self.layouts[workspace].tile_rect(window).is_err()
+        {
+            return Err(WorkspaceError::Layout(LayoutError::UnknownWindow));
+        }
+        let current = self.fullscreen[workspace];
+        let next = if fullscreen {
+            Some(window)
+        } else if current == Some(window) {
+            None
+        } else {
+            current
+        };
+        self.fullscreen[workspace] = next;
+        Ok(current != next)
+    }
+
     pub fn toggle_focused_window_fullscreen(&mut self) -> bool {
         if self.fullscreen[self.active].is_some() {
             self.fullscreen[self.active] = None;
@@ -2411,6 +2459,7 @@ mod tests {
             window-rule {
                 open-maximized true
                 open-maximized-to-edges true
+                open-fullscreen true
                 default-column-width { fixed 600; }
                 default-window-height { fixed 400; }
                 default-column-display "normal"
@@ -2421,6 +2470,7 @@ mod tests {
                 open-floating true
                 open-maximized true
                 open-maximized-to-edges true
+                open-fullscreen true
                 default-column-width { proportion 0.333; }
                 default-window-height { proportion 0.333; }
                 default-column-display "normal"
@@ -2431,6 +2481,7 @@ mod tests {
                 open-floating false
                 open-maximized false
                 open-maximized-to-edges false
+                open-fullscreen false
                 default-column-width { proportion 0.667; }
                 default-window-height { proportion 0.5; }
                 default-column-display "tabbed"
@@ -2888,6 +2939,14 @@ mod tests {
             config.window_rules.maximized_to_edges_for("slopos-config"),
             Some(false)
         );
+        assert_eq!(
+            config.window_rules.fullscreen_for("slopos-terminal"),
+            Some(true)
+        );
+        assert_eq!(
+            config.window_rules.fullscreen_for("slopos-config"),
+            Some(false)
+        );
     }
 
     #[test]
@@ -2914,6 +2973,10 @@ mod tests {
         );
         assert_eq!(
             parse_niri_shell_config("window-rule { open-maximized-to-edges maybe; }"),
+            Err(NiriConfigError::InvalidWindowRule)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { open-fullscreen maybe; }"),
             Err(NiriConfigError::InvalidWindowRule)
         );
         for input in [
@@ -3265,7 +3328,8 @@ mod tests {
         workspaces.focus_window(10).unwrap();
         let tiled = workspaces.tile_rect(10).unwrap();
 
-        assert!(workspaces.toggle_focused_window_fullscreen());
+        assert!(workspaces.set_window_fullscreen(0, 10, true).unwrap());
+        assert!(!workspaces.set_window_fullscreen(0, 10, true).unwrap());
         assert_eq!(workspaces.fullscreen_window(), Some(10));
         assert_eq!(
             workspaces.tile_rect(10).unwrap(),
@@ -3282,7 +3346,8 @@ mod tests {
         assert_eq!(workspaces.fullscreen_window(), None);
         assert!(workspaces.focus_workspace_previous());
         assert_eq!(workspaces.fullscreen_window(), Some(10));
-        assert!(workspaces.toggle_focused_window_fullscreen());
+        assert!(workspaces.set_window_fullscreen(0, 10, false).unwrap());
+        assert!(!workspaces.set_window_fullscreen(0, 10, false).unwrap());
         assert_eq!(workspaces.fullscreen_window(), None);
         assert_eq!(workspaces.tile_rect(10).unwrap(), tiled);
         assert!(workspaces.window_is_visible(20));
@@ -3290,11 +3355,19 @@ mod tests {
         assert!(workspaces.move_focused_window_to_floating());
         let floating = workspaces.tile_rect(10).unwrap();
         assert!(workspaces.window_is_floating(10));
-        assert!(workspaces.toggle_focused_window_fullscreen());
+        assert!(workspaces.set_window_fullscreen(0, 10, true).unwrap());
         assert_eq!(workspaces.tile_rect(10).unwrap().x, 0);
         assert_eq!(workspaces.tile_rect(10).unwrap().height, 700);
-        assert!(workspaces.toggle_focused_window_fullscreen());
+        assert!(workspaces.set_window_fullscreen(0, 10, false).unwrap());
         assert!(workspaces.window_is_floating(10));
         assert_eq!(workspaces.tile_rect(10).unwrap(), floating);
+        assert_eq!(
+            workspaces.set_window_fullscreen(0, 99, true),
+            Err(WorkspaceError::Layout(LayoutError::UnknownWindow))
+        );
+        assert_eq!(
+            workspaces.set_window_fullscreen(2, 10, true),
+            Err(WorkspaceError::InvalidWorkspace)
+        );
     }
 }
