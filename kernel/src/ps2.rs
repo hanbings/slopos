@@ -44,12 +44,27 @@ pub enum Key {
     Escape,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KeyModifiers {
     pub shift: bool,
     pub control: bool,
     pub alt: bool,
     pub logo: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModifierKey {
+    Shift,
+    Control,
+    Alt,
+    Logo,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ModifierEvent {
+    pub key: ModifierKey,
+    pub pressed: bool,
+    pub modifiers: KeyModifiers,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -69,6 +84,7 @@ pub struct MouseEvent {
 
 #[derive(Clone, Copy, Debug)]
 pub enum InputEvent {
+    Modifier(ModifierEvent),
     Key(KeyEvent),
     Mouse(MouseEvent),
 }
@@ -197,19 +213,35 @@ impl Controller {
         let code = byte & 0x7f;
         if !extended && (code == 0x2a || code == 0x36) {
             self.shift = !released;
-            return None;
+            return Some(InputEvent::Modifier(ModifierEvent {
+                key: ModifierKey::Shift,
+                pressed: self.shift,
+                modifiers: self.modifiers(),
+            }));
         }
         if code == 0x1d {
             self.control = !released;
-            return None;
+            return Some(InputEvent::Modifier(ModifierEvent {
+                key: ModifierKey::Control,
+                pressed: self.control,
+                modifiers: self.modifiers(),
+            }));
         }
         if code == 0x38 {
             self.alt = !released;
-            return None;
+            return Some(InputEvent::Modifier(ModifierEvent {
+                key: ModifierKey::Alt,
+                pressed: self.alt,
+                modifiers: self.modifiers(),
+            }));
         }
         if extended && matches!(code, 0x5b | 0x5c) {
             self.logo = !released;
-            return None;
+            return Some(InputEvent::Modifier(ModifierEvent {
+                key: ModifierKey::Logo,
+                pressed: self.logo,
+                modifiers: self.modifiers(),
+            }));
         }
         if released {
             return None;
@@ -233,13 +265,17 @@ impl Controller {
         };
         Some(InputEvent::Key(KeyEvent {
             key,
-            modifiers: KeyModifiers {
-                shift: self.shift,
-                control: self.control,
-                alt: self.alt,
-                logo: self.logo,
-            },
+            modifiers: self.modifiers(),
         }))
+    }
+
+    const fn modifiers(&self) -> KeyModifiers {
+        KeyModifiers {
+            shift: self.shift,
+            control: self.control,
+            alt: self.alt,
+            logo: self.logo,
+        }
     }
 }
 

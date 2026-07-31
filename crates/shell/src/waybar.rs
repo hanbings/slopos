@@ -59,6 +59,21 @@ impl BarMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarModifierReset {
+    Press,
+    Release,
+}
+
+impl BarModifierReset {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Press => "press",
+            Self::Release => "release",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BarSignal {
     User1,
     User2,
@@ -660,6 +675,7 @@ pub struct WaybarConfig<'a> {
     pub layer: BarLayer,
     pub mode: BarMode,
     pub mode_name: &'a str,
+    pub modifier_reset: BarModifierReset,
     pub exclusive: bool,
     pub passthrough: bool,
     pub visible: bool,
@@ -672,6 +688,8 @@ pub struct WaybarConfig<'a> {
     shown_mode: BarModeState<'a>,
     hidden_mode: BarModeState<'a>,
     visibility_state: bool,
+    modifier_visible: bool,
+    modifier_no_action: bool,
     output_selected: bool,
 }
 
@@ -699,6 +717,7 @@ impl Default for WaybarConfig<'_> {
             layer: BarLayer::Bottom,
             mode: BarMode::Default,
             mode_name: "default",
+            modifier_reset: BarModifierReset::Press,
             exclusive: true,
             passthrough: false,
             visible: true,
@@ -711,6 +730,8 @@ impl Default for WaybarConfig<'_> {
             shown_mode,
             hidden_mode,
             visibility_state: true,
+            modifier_visible: false,
+            modifier_no_action: false,
             output_selected: true,
         }
     }
@@ -743,11 +764,7 @@ impl<'a> WaybarConfig<'a> {
         } else {
             self.output_dimensions.matches(width, height)
         };
-        self.apply_mode_state(if self.visibility_state {
-            self.shown_mode
-        } else {
-            self.hidden_mode
-        });
+        self.apply_visibility_state();
         self.output_selected
     }
 
@@ -807,6 +824,18 @@ impl<'a> WaybarConfig<'a> {
         self.visibility_state
     }
 
+    pub const fn modifier_visible(self) -> bool {
+        self.modifier_visible
+    }
+
+    pub const fn modifier_no_action(self) -> bool {
+        self.modifier_no_action
+    }
+
+    pub const fn modifier_reset_active(self) -> bool {
+        matches!(self.shown_mode.mode, BarMode::Hide)
+    }
+
     pub const fn signal_action(self, signal: BarSignal) -> BarSignalAction {
         match signal {
             BarSignal::User1 => self.on_sigusr1,
@@ -819,16 +848,47 @@ impl<'a> WaybarConfig<'a> {
             return false;
         }
         self.visibility_state = visible;
-        self.apply_mode_state(if visible {
-            self.shown_mode
-        } else {
-            self.hidden_mode
-        });
+        self.apply_visibility_state();
         true
     }
 
     pub fn toggle_visibility(&mut self) {
         self.set_visibility(!self.visibility_state);
+    }
+
+    pub fn set_modifier_visibility(&mut self, visible: bool) -> bool {
+        if !self.modifier_reset_active() {
+            return false;
+        }
+        self.modifier_visible = visible;
+        if visible {
+            self.modifier_no_action = true;
+        }
+        let reset = match self.modifier_reset {
+            BarModifierReset::Press => visible,
+            BarModifierReset::Release => !visible && self.modifier_no_action,
+        };
+        if reset {
+            self.visibility_state = false;
+        }
+        self.apply_visibility_state();
+        reset
+    }
+
+    pub fn note_modifier_action(&mut self) -> bool {
+        if !self.modifier_reset_active() || !self.modifier_visible || !self.modifier_no_action {
+            return false;
+        }
+        self.modifier_no_action = false;
+        true
+    }
+
+    fn apply_visibility_state(&mut self) {
+        self.apply_mode_state(if self.visibility_state || self.modifier_visible {
+            self.shown_mode
+        } else {
+            self.hidden_mode
+        });
     }
 
     fn apply_mode_state(&mut self, state: BarModeState<'a>) {
@@ -857,6 +917,7 @@ pub enum BarConfigError {
     TooManyOutputs,
     TooManyOutputDimensions,
     InvalidMode,
+    InvalidModifierReset,
     TooManyModes,
 }
 
@@ -1155,6 +1216,7 @@ impl<'a> JsonParser<'a> {
     const NAME: u32 = 1 << 26;
     const OUTPUT: u32 = 1 << 27;
     const OUTPUT_DIMENSIONS: u32 = 1 << 28;
+    const MODIFIER_RESET: u32 = 1 << 29;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -1295,6 +1357,14 @@ impl<'a> JsonParser<'a> {
                             mark_once(&mut fields, Self::MODE)?;
                             selected_mode = self.mode_name_value()?;
                         }
+                        "modifier-reset" => {
+                            mark_once(&mut fields, Self::MODIFIER_RESET)?;
+                            config.modifier_reset = match self.string_value()? {
+                                "press" => BarModifierReset::Press,
+                                "release" => BarModifierReset::Release,
+                                _ => return Err(BarConfigError::InvalidModifierReset),
+                            };
+                        }
                         "modes" => {
                             mark_once(&mut fields, Self::MODES)?;
                             modes = self.mode_definitions()?;
@@ -1426,11 +1496,7 @@ impl<'a> JsonParser<'a> {
         config.shown_mode = resolve_mode(selected_mode);
         config.hidden_mode = resolve_mode("invisible");
         config.visibility_state = !start_hidden;
-        config.apply_mode_state(if start_hidden {
-            config.hidden_mode
-        } else {
-            config.shown_mode
-        });
+        config.apply_visibility_state();
         Ok(config)
     }
 
@@ -2338,6 +2404,97 @@ mod tests {
                 }"#,
             ),
             Err(BarConfigError::TooManyOutputDimensions)
+        );
+    }
+
+    #[test]
+    fn applies_waybar_modifier_reset_press_and_release_semantics() {
+        let default = parse_waybar_config("{}").unwrap();
+        assert_eq!(default.modifier_reset, BarModifierReset::Press);
+        assert_eq!(default.modifier_reset.name(), "press");
+        assert!(!default.modifier_reset_active());
+
+        let mut release = parse_waybar_config(
+            r#"{
+                "mode": "hide",
+                "modifier-reset": "release"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(release.modifier_reset, BarModifierReset::Release);
+        assert_eq!(release.modifier_reset.name(), "release");
+        assert!(release.modifier_reset_active());
+        assert!(release.visibility_state());
+        assert!(release.visible);
+
+        assert!(!release.set_modifier_visibility(true));
+        assert!(release.modifier_visible());
+        assert!(release.modifier_no_action());
+        assert!(release.note_modifier_action());
+        assert!(!release.modifier_no_action());
+        assert!(!release.set_modifier_visibility(false));
+        assert!(!release.modifier_visible());
+        assert!(release.visibility_state());
+        assert_eq!(release.mode, BarMode::Hide);
+        assert!(release.visible);
+
+        assert!(!release.set_modifier_visibility(true));
+        assert!(release.set_modifier_visibility(false));
+        assert!(!release.visibility_state());
+        assert_eq!(release.mode, BarMode::Invisible);
+        assert!(!release.visible);
+
+        let mut press = parse_waybar_config(
+            r#"{
+                "mode": "hide",
+                "modifier-reset": "press"
+            }"#,
+        )
+        .unwrap();
+        assert!(press.set_modifier_visibility(true));
+        assert!(!press.visibility_state());
+        assert!(press.modifier_visible());
+        assert_eq!(press.mode, BarMode::Hide);
+        assert!(press.visible);
+        assert!(press.note_modifier_action());
+        assert!(!press.set_modifier_visibility(false));
+        assert_eq!(press.mode, BarMode::Invisible);
+        assert!(!press.visible);
+
+        let mut filtered = parse_waybar_config(
+            r#"{
+                "mode": "hide",
+                "modifier-reset": "release",
+                "output": "!SLOPOS-1"
+            }"#,
+        )
+        .unwrap();
+        assert!(!filtered.select_output("SLOPOS-1", "Virtual Display", 1024, 768));
+        assert!(!filtered.set_modifier_visibility(true));
+        assert!(!filtered.visible);
+
+        let mut dock = parse_waybar_config(r#"{ "mode": "dock" }"#).unwrap();
+        assert!(!dock.set_modifier_visibility(true));
+        assert!(!dock.modifier_visible());
+        assert!(!dock.note_modifier_action());
+        assert!(dock.visible);
+
+        assert_eq!(
+            parse_waybar_config(r#"{ "modifier-reset": "keyup" }"#),
+            Err(BarConfigError::InvalidModifierReset)
+        );
+        assert_eq!(
+            parse_waybar_config(r#"{ "modifier-reset": false }"#),
+            Err(BarConfigError::UnexpectedToken)
+        );
+        assert_eq!(
+            parse_waybar_config(
+                r#"{
+                    "modifier-reset": "press",
+                    "modifier-reset": "release"
+                }"#,
+            ),
+            Err(BarConfigError::DuplicateField)
         );
     }
 

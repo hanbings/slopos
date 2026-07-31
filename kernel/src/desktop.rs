@@ -3,7 +3,10 @@
 use crate::framebuffer::{
     BLACK, CYAN, Framebuffer, GREEN, INDIGO, MUTED, PANEL, RED, WHITE, WINDOW, WINDOW_ALT,
 };
-use crate::ps2::{Controller, DesktopEvent, InputEvent, Key, KeyEvent, KeyModifiers, MouseEvent};
+use crate::ps2::{
+    Controller, DesktopEvent, InputEvent, Key, KeyEvent, KeyModifiers, ModifierEvent, ModifierKey,
+    MouseEvent,
+};
 use crate::serial::serialln;
 use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
@@ -466,14 +469,26 @@ impl Desktop {
                 }
                 DesktopEvent::Input(byte) => {
                     if let Some(event) = input.consume(byte) {
-                        let animate = match event {
-                            InputEvent::Key(key) => self.keyboard(key),
-                            InputEvent::Mouse(mouse) => self.mouse(mouse),
-                        };
-                        if animate {
-                            self.animate_wallpaper(framebuffer);
-                        } else {
-                            self.render(framebuffer);
+                        match event {
+                            InputEvent::Modifier(modifier) => {
+                                if self.modifier(modifier) {
+                                    self.render(framebuffer);
+                                }
+                            }
+                            InputEvent::Key(key) => {
+                                if self.keyboard(key) {
+                                    self.animate_wallpaper(framebuffer);
+                                } else {
+                                    self.render(framebuffer);
+                                }
+                            }
+                            InputEvent::Mouse(mouse) => {
+                                if self.mouse(mouse) {
+                                    self.animate_wallpaper(framebuffer);
+                                } else {
+                                    self.render(framebuffer);
+                                }
+                            }
                         }
                     }
                 }
@@ -1402,6 +1417,11 @@ impl Desktop {
             self.bar.output_dimensions.len(),
             self.bar.output_selected()
         ));
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: modifier-reset strategy={} active={} source={source}",
+            self.bar.modifier_reset.name(),
+            self.bar.modifier_reset_active()
+        ));
     }
 
     fn request_invalid_config_reload(&self) {
@@ -1833,6 +1853,42 @@ impl Desktop {
         false
     }
 
+    fn modifier(&mut self, event: ModifierEvent) -> bool {
+        if event.key != ModifierKey::Logo {
+            return false;
+        }
+        let previous_effective_visible = self.bar.visible;
+        let previous_mode = self.bar.mode;
+        let previous_reserved_top = self.bar.reserved_top();
+        let reset_applied = self.bar.set_modifier_visibility(event.pressed);
+        let reserved_top_changed = if previous_reserved_top != self.bar.reserved_top() {
+            self.workspaces.set_reserved_top(self.bar.reserved_top())
+        } else {
+            false
+        };
+        if previous_effective_visible != self.bar.visible
+            || previous_reserved_top != self.bar.reserved_top()
+        {
+            self.log_bar_geometry("modifier");
+        }
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: modifier key=logo pressed={} modifiers={:#x} strategy={} active={} action_free={} reset_applied={} state_visible={} effective_visible={} mode={} reserved_top={}->{} layout_updated={}",
+            event.pressed,
+            binding_modifiers(event.modifiers).bits(),
+            self.bar.modifier_reset.name(),
+            self.bar.modifier_reset_active(),
+            self.bar.modifier_no_action(),
+            reset_applied,
+            self.bar.visibility_state(),
+            self.bar.visible,
+            self.bar.mode_name,
+            previous_reserved_top,
+            self.bar.reserved_top(),
+            reserved_top_changed
+        ));
+        previous_effective_visible != self.bar.visible || previous_mode != self.bar.mode
+    }
+
     fn mouse(&mut self, event: MouseEvent) -> bool {
         self.pointer_x = (self.pointer_x + event.dx as i32).clamp(0, self.screen_width - 1);
         self.pointer_y = (self.pointer_y + event.dy as i32).clamp(0, self.screen_height - 1);
@@ -2118,6 +2174,13 @@ impl Desktop {
                 action_name(binding.action),
                 source,
                 cooldown_ms
+            ));
+        }
+        if self.bar.note_modifier_action() {
+            serialln(format_args!(
+                "SLOPOS-WAYBAR: modifier action=binding niri_action={} source={} action_free=false",
+                action_name(binding.action),
+                source
             ));
         }
         self.execute_niri_action(binding.action);

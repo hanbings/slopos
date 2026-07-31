@@ -33,6 +33,11 @@ dimensions_serial_log="${repo_dir}/evidence/waybar-dimensions-rejected-serial.lo
 dimensions_debug_log="${repo_dir}/evidence/waybar-dimensions-rejected-uefi-debugcon.log"
 dimensions_qemu_log="${repo_dir}/evidence/waybar-dimensions-rejected-qemu.log"
 dimensions_screenshot="${repo_dir}/evidence/waybar-dimensions-rejected.ppm"
+modifier_serial_log="${repo_dir}/evidence/waybar-modifier-reset-serial.log"
+modifier_debug_log="${repo_dir}/evidence/waybar-modifier-reset-uefi-debugcon.log"
+modifier_qemu_log="${repo_dir}/evidence/waybar-modifier-reset-qemu.log"
+modifier_action_screenshot="${repo_dir}/evidence/waybar-modifier-action.ppm"
+modifier_reset_screenshot="${repo_dir}/evidence/waybar-modifier-reset.ppm"
 runtime_dir="$(mktemp -d /tmp/slopos-custom-config.XXXXXX)"
 runtime_esp="${runtime_dir}/slopos-esp.img"
 runtime_root="${runtime_dir}/slopos-root.ext4"
@@ -43,6 +48,7 @@ custom_waybar_style="${runtime_dir}/waybar.css"
 overlay_waybar="${runtime_dir}/waybar-overlay.jsonc"
 excluded_waybar="${runtime_dir}/waybar-output-excluded.jsonc"
 dimensions_waybar="${runtime_dir}/waybar-dimensions-rejected.jsonc"
+modifier_waybar="${runtime_dir}/waybar-modifier-reset.jsonc"
 fsck_log="${runtime_dir}/fsck.log"
 debugfs=/usr/sbin/debugfs
 e2fsck=/usr/sbin/e2fsck
@@ -58,6 +64,7 @@ cleanup() {
         "${overlay_waybar}" \
         "${excluded_waybar}" \
         "${dimensions_waybar}" \
+        "${modifier_waybar}" \
         "${fsck_log}"
     do
         unlink "${temporary_file}" 2>/dev/null || true
@@ -161,6 +168,15 @@ sed \
 dimensions_bytes="$(wc -c <"${dimensions_waybar}")"
 if (( dimensions_bytes <= 904 || dimensions_bytes > 4096 )); then
     echo "output-dimensions Waybar fixture has unexpected size: ${dimensions_bytes}" >&2
+    exit 1
+fi
+sed \
+    -e '1i// Waybar hide mode modifier reset integration fixture' \
+    -e '/"spacing": 10,/a\    "mode": "hide",\n    "modifier-reset": "release",' \
+    "${repo_dir}/assets/waybar-config.jsonc" >"${modifier_waybar}"
+modifier_bytes="$(wc -c <"${modifier_waybar}")"
+if (( modifier_bytes <= 904 || modifier_bytes > 4096 )); then
+    echo "modifier-reset Waybar fixture has unexpected size: ${modifier_bytes}" >&2
     exit 1
 fi
 
@@ -718,6 +734,85 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/waybar-dimensions-rejected.png"
 fi
 
+cp --reflink=auto --sparse=always "${root_image}" "${runtime_root}"
+cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
+"${debugfs}" -w -R "rm /etc/slopos/waybar.jsonc" "${runtime_root}" >/dev/null 2>&1
+"${debugfs}" \
+    -w \
+    -R "write ${modifier_waybar} /etc/slopos/waybar.jsonc" \
+    "${runtime_root}" >/dev/null 2>&1
+
+set +e
+{
+    sleep 7
+    echo "sendkey meta_l-2 50"
+    sleep 1
+    echo "screendump ${modifier_action_screenshot}"
+    echo "sendkey meta_l 50"
+    sleep 1
+    echo "screendump ${modifier_reset_screenshot}"
+    echo "quit"
+} | timeout 14s qemu-system-x86_64 \
+    -machine q35,accel=tcg \
+    -cpu qemu64 \
+    -m 256M \
+    -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd" \
+    -drive "if=pflash,format=raw,file=${runtime_vars}" \
+    -drive "if=virtio,format=raw,file=${runtime_esp}" \
+    -drive "if=virtio,format=raw,file=${runtime_root}" \
+    -serial "file:${modifier_serial_log}" \
+    -debugcon "file:${modifier_debug_log}" \
+    -global isa-debugcon.iobase=0x402 \
+    -display none \
+    -monitor stdio \
+    -no-reboot >"${modifier_qemu_log}" 2>&1
+modifier_qemu_status=$?
+set -e
+
+if [[ ${modifier_qemu_status} -ne 0 && ${modifier_qemu_status} -ne 124 ]]; then
+    echo "Waybar modifier-reset QEMU failed with status ${modifier_qemu_status}" >&2
+    exit "${modifier_qemu_status}"
+fi
+sed -i 's/\r$//' "${modifier_serial_log}" "${modifier_debug_log}" "${modifier_qemu_log}"
+grep -Fq \
+    "bytes=${modifier_bytes} access=readonly async=true path=/etc/slopos/waybar.jsonc" \
+    "${modifier_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=overlay mode=hide exclusive=false passthrough=false visible=true reserved_top=0 source=config" \
+    "${modifier_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: modifier-reset strategy=release active=true source=config" \
+    "${modifier_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: modifier action=binding niri_action=focus-workspace source=keyboard action_free=false" \
+    "${modifier_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=release active=true action_free=false reset_applied=false state_visible=true effective_visible=true mode=hide reserved_top=0->0 layout_updated=false" \
+    "${modifier_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=release active=true action_free=true reset_applied=true state_visible=false effective_visible=false mode=invisible reserved_top=0->0 layout_updated=false" \
+    "${modifier_serial_log}"
+if grep -Fq "FATAL" "${modifier_serial_log}" || grep -Fq "state=exited" "${modifier_serial_log}"; then
+    echo "Waybar modifier-reset integration reached an unexpected exit or fatal path" >&2
+    exit 1
+fi
+test -s "${modifier_action_screenshot}"
+test -s "${modifier_reset_screenshot}"
+if [[ "$(ppm_pixel_hex "${modifier_action_screenshot}" 100 10)" != "161a2a" ]]; then
+    echo "Waybar release reset hid the bar even though the modifier triggered a binding" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${modifier_reset_screenshot}" 100 10)" != "111144" ]]; then
+    echo "Waybar release reset did not hide the bar after a modifier-only chord" >&2
+    exit 1
+fi
+if command -v pnmtopng >/dev/null 2>&1; then
+    pnmtopng "${modifier_action_screenshot}" \
+        >"${repo_dir}/evidence/waybar-modifier-action.png"
+    pnmtopng "${modifier_reset_screenshot}" \
+        >"${repo_dir}/evidence/waybar-modifier-reset.png"
+fi
+
 set +e
 "${e2fsck}" -fn "${runtime_root}" >"${fsck_log}" 2>&1
 fsck_status=$?
@@ -727,4 +822,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded niri/Waybar override, output environment expansion, output-dimensions selection, geometry, expand/fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"
+echo "SlopOS bounded niri/Waybar override, output environment expansion, output-dimensions selection, modifier reset, geometry, expand/fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"

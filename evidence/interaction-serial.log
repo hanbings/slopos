@@ -4,8 +4,8 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=716072
-SLOPOS-UEFI: kernel mapped 0x4000000..0x4096000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=729512
+SLOPOS-UEFI: kernel mapped 0x4000000..0x4099000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: user ELF loaded bytes=26344 base=0xdf47000
 SLOPOS-UEFI: Boot Services exited descriptors=118
@@ -17,7 +17,7 @@ SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
 SLOPOS-KERNEL: user ELF available base=0xdf47000 bytes=26344
 SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
 SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
-SLOPOS-MM: frame allocator initialized regions=8 free_frames=52876 probe=0x100000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=52873 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
@@ -28,6 +28,10 @@ SLOPOS-NIRI: window rule app_id=slopos-config property=open-focused value=false 
 SLOPOS-SHELL: config loaded niri_workspaces=3 named=2 binds=71 rules=1 active_columns=2 gaps=16 default_width=50% center=never waybar_position=top height=40 spacing=10 modules=1/1/4 module_configs=6 css_rules=12
 SLOPOS-WAYBAR: formats active workspace={value} window={title} cpu="CPU {usage}%" memory="MEM {percentage}%" intervals=5/10/30/60 css=foreground/background/padding/margin/border-bottom
 SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=default exclusive=true passthrough=false visible=true reserved_top=40 source=embedded
+SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=false/false/false name=- namespace=waybar source=embedded
+SLOPOS-WAYBAR: output name=SLOPOS-1 identifier="SlopOS Virtual Display 0x00000001" selector=any entries=0 selected=true source=embedded
+SLOPOS-WAYBAR: output-dimensions width=1024 height=768 selector=any entries=0 selected=true source=embedded
+SLOPOS-WAYBAR: modifier-reset strategy=press active=false source=embedded
 SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry=1024x768 image=awaiting-user-policy transition=simple step=2 fps=30 policy_owner=user-service
 SLOPOS-DESKTOP: interactive compositor loop entered windows=3
 SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
@@ -38,13 +42,13 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26344 blocks=7 matches_boot=true
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-VFS: executable loaded path=/sbin/slop-shell inode=24 bytes=26560 blocks=7 matches_boot=not-required role=desktop-service
+SLOPOS-VFS: executable loaded path=/sbin/slop-shell inode=24 bytes=26592 blocks=7 matches_boot=not-required role=desktop-service
 SLOPOS-PROCESS: pid=1 parent=0 source=vfs path=/sbin/slop-init argv1=--system format=elf64 entry=0x40000000 segments=1 file_bytes=26344 load_bytes=2608 memory_bytes=2608 address_space=0x21b000 user_code=0x40000000 user_stack=0x40003000 code_frame=0x21f000 stack_frames=0x220000/0x221000 code=user-readonly stack=user-writable kernel=supervisor
 SLOPOS-PROCESS: pid=1 initial_stack abi=linux-x86_64 rsp=0x40002ec0 aligned=16 stack_pages=2 argc=2 argv0=/sbin/slop-init argv1=--system envc=3 auxv_pairs=9 bytes=320
-SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-shell argv1=--session format=elf64 entry=0x40000000 segments=1 file_bytes=26560 load_bytes=2528 memory_bytes=2528 address_space=0x222000 user_code=0x40000000 user_stack=0x40003000 code_frame=0x226000 stack_frames=0x227000/0x228000 code=user-readonly stack=user-writable kernel=supervisor
-SLOPOS-PROCESS: pid=2 initial_stack abi=linux-x86_64 rsp=0x40002ec0 aligned=16 stack_pages=2 argc=2 argv0=/sbin/slop-shell argv1=--session envc=3 auxv_pairs=9 bytes=320
+SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-shell argv1=--session format=elf64 entry=0x40000000 segments=1 file_bytes=26592 load_bytes=2560 memory_bytes=2560 address_space=0x222000 user_code=0x40000000 user_stack=0x40003000 code_frame=0x226000 stack_frames=0x227000/0x228000 code=user-readonly stack=user-writable kernel=supervisor
+SLOPOS-PROCESS: pid=2 initial_stack abi=linux-x86_64 rsp=0x40002ea0 aligned=16 stack_pages=2 argc=2 argv0=/sbin/slop-shell argv1=--session envc=4 auxv_pairs=9 bytes=352
 SLOPOS-PROCESS: table initialized capacity=4 processes=2 pids=1/2 roles=init/desktop-service states=ready/ready fd_capacity=8 per_process_fds=true
-SLOPOS-SYSCALL: fast path ready instruction=syscall return=sysretq star=0x10000800000000 lstar=0x40013e7 fmask=0x47700 efer_sce=true
+SLOPOS-SYSCALL: fast path ready instruction=syscall return=sysretq star=0x10000800000000 lstar=0x40013d7 fmask=0x47700 efer_sce=true
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
 SLOPOS-SCHED: cooperative switch from=1 to=2 next_state=Ready independent_cr3=true
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
@@ -107,8 +111,13 @@ SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd=3 origin=cpl3
 SLOPOS-VFS: process close complete pid=2 fd=3 inode=17 async=false
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=1 protocol=1 capabilities=waybar-provider/swww-policy cpu=0 memory=36 wallpaper=aurora config_hashes=0xd34d4a92c88d065b/0xb6ea39f5fd14c33a
+SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=sysretq nr=1397489665 commit_bytes=40 generation=1 origin=cpl3 result=0
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=64 user_pages=2 origin=cpl3
+SLOPOS-SWWW: policy applied owner_pid=2 image=/usr/share/backgrounds/slopos-aurora.ppm output=SLOPOS-1 transition=simple step=32 fps=30
+SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2 capabilities=waybar-provider/swww-policy cpu=0 memory=36 wallpaper=/usr/share/backgrounds/slopos-aurora.ppm renderer=kernel-mechanism
+SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=1 owner_pid=2 event=policy-applied wake=block-task
 SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true flushed=true
 SLOPOS-SCHED: pid=1 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
@@ -129,12 +138,7 @@ SLOPOS-SCHED: pid=1 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=18 origin=cpl3 result=18
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=61 wait4 child=any state=blocked origin=cpl3
 SLOPOS-SCHED: cooperative switch from=1 to=2 next_state=Runnable independent_cr3=true
-SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=1 protocol=1 capabilities=waybar-provider/swww-policy cpu=0 memory=36 wallpaper=aurora config_hashes=0xd34d4a92c88d065b/0xb6ea39f5fd14c33a
-SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=sysretq nr=1397489665 commit_bytes=40 generation=1 origin=cpl3 result=0
 SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=policy-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3
-SLOPOS-SWWW: policy applied owner_pid=2 image=/usr/share/backgrounds/slopos-aurora.ppm output=SLOPOS-1 transition=simple step=32 fps=30
-SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2 capabilities=waybar-provider/swww-policy cpu=0 memory=36 wallpaper=/usr/share/backgrounds/slopos-aurora.ppm renderer=kernel-mechanism
-SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=1 owner_pid=2 event=policy-applied wake=block-task
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=28 origin=cpl3 result=28
 SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=config-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3
@@ -147,6 +151,10 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-CONFIG: VFS load published initial=true generation=1 atomic=true paths=/etc/slopos/niri.kdl,/etc/slopos/waybar.jsonc,/etc/slopos/waybar.css,/etc/slopos/swww.env
 SLOPOS-NIRI: window rule app_id=slopos-config property=open-focused value=false applied=true workspace=2 activated=false source=config
 SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=default exclusive=true passthrough=false visible=true reserved_top=40 source=config
+SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=false/false/false name=- namespace=waybar source=config
+SLOPOS-WAYBAR: output name=SLOPOS-1 identifier="SlopOS Virtual Display 0x00000001" selector=any entries=0 selected=true source=config
+SLOPOS-WAYBAR: output-dimensions width=1024 height=768 selector=any entries=0 selected=true source=config
+SLOPOS-WAYBAR: modifier-reset strategy=press active=false source=config
 SLOPOS-DESKTOP-SERVICE: config acknowledged generation=1 event=config-applied wake=block-task
 SLOPOS-CONFIG: reload applied generation=1 atomic=true niri=/etc/slopos/niri.kdl waybar=/etc/slopos/waybar.jsonc style=/etc/slopos/waybar.css swww=/etc/slopos/swww.env workspaces=3 module_configs=6 css_rules=12
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -249,10 +257,18 @@ SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=
 SLOPOS-TERMINAL: command=STATUS
 SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=513/513
 SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=invisible exclusive=false passthrough=true visible=false reserved_top=0 source=signal
+SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=false/false/false name=- namespace=waybar source=signal
+SLOPOS-WAYBAR: output name=SLOPOS-1 identifier="SlopOS Virtual Display 0x00000001" selector=any entries=0 selected=true source=signal
+SLOPOS-WAYBAR: output-dimensions width=1024 height=768 selector=any entries=0 selected=true source=signal
+SLOPOS-WAYBAR: modifier-reset strategy=press active=false source=signal
 SLOPOS-WAYBAR: signal=SIGUSR1 action=toggle state_visible=false effective_visible=false mode=default->invisible reserved_top=40->0 layout_updated=true
 SLOPOS-TERMINAL: command=WAYBAR SIGUSR1
 SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=513/513
 SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=default exclusive=true passthrough=false visible=true reserved_top=40 source=signal
+SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=false/false/false name=- namespace=waybar source=signal
+SLOPOS-WAYBAR: output name=SLOPOS-1 identifier="SlopOS Virtual Display 0x00000001" selector=any entries=0 selected=true source=signal
+SLOPOS-WAYBAR: output-dimensions width=1024 height=768 selector=any entries=0 selected=true source=signal
+SLOPOS-WAYBAR: modifier-reset strategy=press active=false source=signal
 SLOPOS-WAYBAR: signal=SIGUSR1 action=toggle state_visible=true effective_visible=true mode=invisible->default reserved_top=0->40 layout_updated=true
 SLOPOS-TERMINAL: command=WAYBAR SIGUSR1
 SLOPOS-ASYNC: timer future completed tick=2101 input_dropped=0 virtio_interrupts=513/513
@@ -264,6 +280,10 @@ SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-CONFIG: VFS load published initial=false generation=2 atomic=true paths=/etc/slopos/niri.kdl,/etc/slopos/waybar.jsonc,/etc/slopos/waybar.css,/etc/slopos/swww.env
 SLOPOS-NIRI: window rule app_id=slopos-config property=open-focused value=false applied=true workspace=2 activated=false source=config
 SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=default exclusive=true passthrough=false visible=true reserved_top=40 source=config
+SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=false/false/false name=- namespace=waybar source=config
+SLOPOS-WAYBAR: output name=SLOPOS-1 identifier="SlopOS Virtual Display 0x00000001" selector=any entries=0 selected=true source=config
+SLOPOS-WAYBAR: output-dimensions width=1024 height=768 selector=any entries=0 selected=true source=config
+SLOPOS-WAYBAR: modifier-reset strategy=press active=false source=config
 SLOPOS-DESKTOP-SERVICE: config acknowledged generation=2 event=config-applied wake=block-task
 SLOPOS-CONFIG: reload applied generation=2 atomic=true niri=/etc/slopos/niri.kdl waybar=/etc/slopos/waybar.jsonc style=/etc/slopos/waybar.css swww=/etc/slopos/swww.env workspaces=3 module_configs=6 css_rules=12
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=config-applied generation=2
@@ -322,7 +342,7 @@ SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=30 source=e
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE CENTER --TRANSITION-STEP 64
 SLOPOS-SWWW: transition complete type=center step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=200000,200000
-SLOPOS-ASYNC: timer future completed tick=4037 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-ASYNC: timer future completed tick=4025 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-ASYNC: timer future completed tick=4101 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-ASYNC: timer future completed tick=4601 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM
@@ -330,8 +350,8 @@ SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-ASYNC: timer future completed tick=5101 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-SWWW-VFS: load requested generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PNG output=* transition=center step=64 fps=30 async=true
 SLOPOS-TERMINAL: command=SWWW IMG /USR/SHARE/SLOPOS/VFS-WALLPAPER.PNG --TRANSITION-TYPE CENTER --TRANSITION-STEP 64
-SLOPOS-ASYNC: timer future completed tick=6107 input_dropped=0 virtio_interrupts=532/532
-SLOPOS-ASYNC: timer future completed tick=6107 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-ASYNC: timer future completed tick=6106 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-ASYNC: timer future completed tick=6106 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -347,7 +367,7 @@ SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-ASYNC: timer future completed tick=7101 input_dropped=0 virtio_interrupts=539/539
 SLOPOS-SWWW-VFS: load requested generation=2 request=/USR/SHARE/SLOPOS/MISSING.PPM output=* transition=none step=255 fps=30 async=true
 SLOPOS-TERMINAL: command=SWWW IMG /USR/SHARE/SLOPOS/MISSING.PPM --TRANSITION-TYPE NONE
-SLOPOS-ASYNC: timer future completed tick=7868 input_dropped=0 virtio_interrupts=539/539
+SLOPOS-ASYNC: timer future completed tick=7857 input_dropped=0 virtio_interrupts=539/539
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -359,7 +379,7 @@ SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS
 SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-SWWW-VFS: load requested generation=3 request=/ETC/SLOPOS/SYSTEM.CONF output=* transition=none step=255 fps=30 async=true
 SLOPOS-TERMINAL: command=SWWW IMG /ETC/SLOPOS/SYSTEM.CONF --TRANSITION-TYPE NONE
-SLOPOS-ASYNC: timer future completed tick=9016 input_dropped=0 virtio_interrupts=546/546
+SLOPOS-ASYNC: timer future completed tick=9005 input_dropped=0 virtio_interrupts=546/546
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-SWWW-VFS: load rejected generation=3 request=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf error=invalid-ppm retained=previous
 SLOPOS-SWWW: image=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf source=vfs applied=false error=invalid-ppm
@@ -376,7 +396,7 @@ SLOPOS-TERMINAL: command=SWWW-DAEMON
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE NONE
-SLOPOS-ASYNC: timer future completed tick=10805 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=10796 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=11101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: clear color=1A2B3C output=*
 SLOPOS-TERMINAL: command=SWWW CLEAR 1A2B3C
@@ -391,50 +411,50 @@ SLOPOS-SWWW: image=AURORA.PPM output=* transition=grow step=64 fps=30 source=emb
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=SWWW IMG AURORA.PPM --TRANSITION-TYPE GROW --TRANSITION-POS TOP-LEFT --TRANSITION-STEP 64
 SLOPOS-SWWW: transition complete type=grow step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=0,0 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=200000,200000
-SLOPOS-ASYNC: timer future completed tick=13458 input_dropped=0 virtio_interrupts=549/549
-SLOPOS-ASYNC: timer future completed tick=13458 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=13445 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=13445 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=13601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=14101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=wipe step=64 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE WIPE --TRANSITION-ANGLE 30 --TRANSITION-STEP 64
 SLOPOS-SWWW: transition complete type=wipe step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=30 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=200000,200000
-SLOPOS-ASYNC: timer future completed tick=15009 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=14989 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=15101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=15601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=wipe step=90 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=IMG AURORA.PPM -T WIPE --TRANSITION-DURATION .1
 SLOPOS-SWWW: transition complete type=wipe step=90 fps=30 duration_ms=100 sampled_step=85 frames=4 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=200000,200000
-SLOPOS-ASYNC: timer future completed tick=16173 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=16168 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=fade step=2 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=IMG SUNSET.PPM -T FADE --TRANSITION-BEZIER 0,0,1,0
 SLOPOS-SWWW: transition complete type=fade step=2 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=0,0,10000,0 midpoint=32 wave=200000,200000
-SLOPOS-ASYNC: timer future completed tick=17107 input_dropped=0 virtio_interrupts=549/549
-SLOPOS-ASYNC: timer future completed tick=17107 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=17120 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=17120 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=17601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=18101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=wave step=90 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=IMG AURORA.PPM -T WAVE --TRANSITION-WAVE 40,24
 SLOPOS-SWWW: transition complete type=wave step=90 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=5400,0,3400,9900 midpoint=155 wave=400000,240000
-SLOPOS-ASYNC: timer future completed tick=18677 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=18663 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=19101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=19601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=fit x=0 y=43 width=1024 height=682 crop_gravity=center fill=123456 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=IMG AURORA.PPM -T NONE --RESIZE FIT --FILL-COLOR 123456
-SLOPOS-ASYNC: timer future completed tick=20220 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=20206 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-128 y=0 width=1152 height=768 crop_gravity=right fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=IMG AURORA.PPM -T NONE --RESIZE CROP --CROP-GRAVITY RIGHT
-SLOPOS-ASYNC: timer future completed tick=21020 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=21005 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=21101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=IMG SUNSET.PPM -T NONE --RESIZE STRETCH
-SLOPOS-ASYNC: timer future completed tick=21693 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=21674 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=22101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=Bilinear
@@ -454,13 +474,13 @@ SLOPOS-ASYNC: timer future completed tick=27601 input_dropped=0 virtio_interrupt
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=CatmullRom
 SLOPOS-TERMINAL: command=IMG AURORA.PPM -T NONE --RESIZE STRETCH -F CATMULLROM
-SLOPOS-ASYNC: timer future completed tick=28505 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=28550 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=28601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=29101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=29601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=30101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-TERMINAL: command=CLEAR
-SLOPOS-ASYNC: timer future completed tick=30699 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=30709 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=31101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=31601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=32101 input_dropped=0 virtio_interrupts=549/549
@@ -471,9 +491,9 @@ SLOPOS-ASYNC: timer future completed tick=34101 input_dropped=0 virtio_interrupt
 SLOPOS-SWWW: image=AURORA.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=Lanczos3
 SLOPOS-TERMINAL: command=IMG AURORA.PPM -T NONE --RESIZE STRETCH -F LANCZOS3
-SLOPOS-ASYNC: timer future completed tick=35876 input_dropped=0 virtio_interrupts=549/549
-SLOPOS-ASYNC: timer future completed tick=35876 input_dropped=0 virtio_interrupts=549/549
-SLOPOS-ASYNC: timer future completed tick=35876 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=36003 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=36003 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=36003 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=36101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=36601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=37101 input_dropped=0 virtio_interrupts=549/549
@@ -496,8 +516,8 @@ SLOPOS-ASYNC: timer future completed tick=44601 input_dropped=0 virtio_interrupt
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-SWWW: geometry resize=crop x=-64 y=0 width=1152 height=768 crop_gravity=center fill=000000 source=embedded filter=Nearest
 SLOPOS-TERMINAL: command=IMG SUNSET.PPM -T NONE
-SLOPOS-ASYNC: timer future completed tick=45730 input_dropped=0 virtio_interrupts=549/549
-SLOPOS-ASYNC: timer future completed tick=45730 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=45741 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=45741 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=46101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=46601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=47101 input_dropped=0 virtio_interrupts=549/549
@@ -514,289 +534,517 @@ SLOPOS-ASYNC: timer future completed tick=52101 input_dropped=0 virtio_interrupt
 SLOPOS-ASYNC: timer future completed tick=52601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=53101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=53601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-workspace changed=true workspace=2 name=config focused=1
 SLOPOS-NIRI: workspace target action=move-window-to-workspace kind=index value=2
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=54101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-workspace changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: workspace target action=move-window-to-workspace kind=name value=main
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=2 name=config x=520 y=56 width=488 height=340 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=2 name=config x=520 y=412 width=488 height=340 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=2 name=config focused=1
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=index value=2
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=54601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=1 name=main x=268 y=56 width=488 height=340 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=1 name=main x=268 y=412 width=488 height=340 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=main
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=55101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-workspace changed=true workspace=2 name=config focused=1
 SLOPOS-NIRI: workspace target action=move-window-to-workspace kind=index value=2
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-workspace changed=true workspace=1 name=main focused=1
 SLOPOS-NIRI: workspace target action=move-window-to-workspace kind=name value=main
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=55601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-last changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: column reordered kind=SYSTEM x=16 direction=move-column-to-first layout=scrolling
 SLOPOS-NIRI: binding action=move-column-to-first changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=56101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: column reordered kind=SYSTEM x=520 direction=move-column-to-last layout=scrolling
 SLOPOS-NIRI: binding action=move-column-to-last changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-first changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace reordered action=move-workspace-down workspace=2 name=main previous=1 focused=0 layout=niri
 SLOPOS-NIRI: binding action=move-workspace-down changed=true workspace=2 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=56601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=1 name=config focused=2
 SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=config
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 name=main focused=0
 SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=57101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace reordered action=move-workspace-up workspace=1 name=main previous=2 focused=0 layout=niri
 SLOPOS-NIRI: binding action=move-workspace-up changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2
-SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=false cooldown_ms=150 remaining_ms=30
+SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=false cooldown_ms=150 remaining_ms=70
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=57601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x1 action=focus-workspace-up source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-NIRI: binding action=focus-workspace-up changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=58101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x1 action=focus-workspace-up source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-NIRI: binding action=focus-workspace-up changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x5 action=focus-column-right source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
 SLOPOS-ASYNC: timer future completed tick=58601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x5 action=focus-column-left source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=59101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x5 action=focus-column-right source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x3 action=move-column-to-workspace-down source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-down member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-down member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace-down changed=true workspace=2 name=config focused=1
 SLOPOS-ASYNC: timer future completed tick=59601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x3 action=move-column-to-workspace-up source=ps2-intellimouse accepted=true cooldown_ms=150
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-up member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-up member=SYSTEM workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace-up changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=60101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x5 action=focus-column-left source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=down modifiers=0x7 action=move-column-right source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=520 direction=move-column-right layout=scrolling
 SLOPOS-NIRI: binding action=move-column-right changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=60601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: wheel binding direction=up modifiers=0x7 action=move-column-left source=ps2-intellimouse accepted=true cooldown_ms=0
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling
 SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=61101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: fullscreen toggled state=active kind=TERMINAL restore_layer=tiling x=0 y=0 width=1024 height=768 bar=covered layout=niri
 SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=TERMINAL restore_layer=tiling x=16 y=56 width=488 height=696 bar=visible layout=niri
 SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=61601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window layer moved action=move-window-to-floating kind=TERMINAL layer=floating x=16 y=161 width=488 height=485 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-floating changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: fullscreen toggled state=active kind=TERMINAL restore_layer=floating x=0 y=0 width=1024 height=768 bar=covered layout=niri
 SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=62101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=TERMINAL restore_layer=floating x=16 y=161 width=488 height=485 bar=visible layout=niri
 SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: layer focus switched layer=tiling kind=SYSTEM layout=niri action=focus-tiling
 SLOPOS-NIRI: binding action=focus-tiling changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: layer focus switched layer=floating kind=TERMINAL layout=niri action=focus-floating
 SLOPOS-NIRI: binding action=focus-floating changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=62601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window layer moved action=move-window-to-tiling kind=TERMINAL layer=tiling x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-window-to-tiling changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling
 SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=63101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window layer toggled kind=TERMINAL layer=floating x=16 y=161 width=488 height=485 layout=niri
 SLOPOS-NIRI: binding action=toggle-window-floating changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: layer focus switched layer=tiling kind=SYSTEM layout=niri action=switch-focus-between-floating-and-tiling
 SLOPOS-NIRI: binding action=switch-focus-between-floating-and-tiling changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: layer focus switched layer=floating kind=TERMINAL layout=niri action=switch-focus-between-floating-and-tiling
 SLOPOS-NIRI: binding action=switch-focus-between-floating-and-tiling changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=63601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: floating window moved kind=TERMINAL x=16 y=211 direction=move-window-down layout=floating
 SLOPOS-NIRI: binding action=move-window-down changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window layer toggled kind=TERMINAL layer=tiling x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=toggle-window-floating changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=64101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling
 SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: column display toggled mode=tabbed kind=SYSTEM tab=2/2 x=268 y=56 width=488 height=696 layout=scrolling
 SLOPOS-NIRI: binding action=toggle-column-tabbed-display changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=64601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: tab focused kind=TERMINAL tab=1/2 direction=focus-window-up layout=scrolling
 SLOPOS-NIRI: binding action=focus-window-up changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: tab focused kind=SYSTEM tab=2/2 direction=focus-window-down layout=scrolling
 SLOPOS-NIRI: binding action=focus-window-down changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=65101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: column display toggled mode=normal kind=SYSTEM x=268 y=412 width=488 height=340 layout=scrolling
 SLOPOS-NIRI: binding action=toggle-column-tabbed-display changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=411 layout=scrolling
 SLOPOS-NIRI: binding action=set-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=340 layout=scrolling
 SLOPOS-NIRI: binding action=reset-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=65601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=458 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=221 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=66101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=340 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=269 layout=scrolling
 SLOPOS-NIRI: binding action=set-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window height changed kind=SYSTEM height=340 layout=scrolling
 SLOPOS-NIRI: binding action=set-window-height changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=66601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=move-window-up changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=move-window-down changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=67101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-window-up changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-window-down changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=expel-window-from-column changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=67601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=left x=268 y=412 width=488 height=340 layout=scrolling
 SLOPOS-NIRI: binding action=consume-or-expel-window-left changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=68101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=left x=268 y=56 width=488 height=696 layout=scrolling
 SLOPOS-NIRI: binding action=consume-or-expel-window-left changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=right x=268 y=412 width=488 height=340 layout=scrolling
 SLOPOS-NIRI: binding action=consume-or-expel-window-right changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window consume-or-expel kind=SYSTEM direction=right x=520 y=56 width=488 height=696 layout=scrolling
 SLOPOS-NIRI: binding action=consume-or-expel-window-right changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=68601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: column centered kind=TERMINAL x=268 offset=-252 layout=scrolling
 SLOPOS-NIRI: binding action=center-column changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=69101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=992 layout=scrolling
 SLOPOS-NIRI: binding action=maximize-column changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=69601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=maximize-column changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=656 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=70101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=SYSTEM width=319 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=70601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=657 layout=scrolling
 SLOPOS-NIRI: binding action=expand-column-to-available-width changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=71101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=656 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=71601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=SYSTEM width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=72101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=319 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=SYSTEM width=319 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width-back changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=72601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: visible columns centered kind=TERMINAL x=185 offset=-169 layout=scrolling
 SLOPOS-NIRI: binding action=center-visible-columns changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=73101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-right changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=SYSTEM width=488 layout=scrolling
 SLOPOS-NIRI: binding action=switch-preset-column-width changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=73601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window edge maximize toggled kind=TERMINAL x=0 y=40 width=1024 height=728 layout=scrolling
 SLOPOS-NIRI: binding action=maximize-window-to-edges changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=74101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window edge maximize toggled kind=TERMINAL x=16 y=56 width=488 height=696 layout=scrolling
 SLOPOS-NIRI: binding action=maximize-window-to-edges changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-SHELL: view scrolled workspace=1 offset=0 gesture=titlebar-drag
 SLOPOS-DESKTOP: window moved kind=TERMINAL x=16 y=56 layout=scrolling
 SLOPOS-ASYNC: timer future completed tick=74601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=588 layout=scrolling
 SLOPOS-NIRI: binding action=set-column-width changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=75101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window resized kind=TERMINAL width=488 layout=scrolling
 SLOPOS-NIRI: binding action=set-column-width changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=520 direction=move-column-right layout=scrolling
 SLOPOS-NIRI: binding action=move-column-right changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling
 SLOPOS-NIRI: binding action=move-column-left changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=75601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=584 delta=96 gesture=mod-right-drag
 SLOPOS-DESKTOP: pointer resized kind=TERMINAL width=488 delta=-96 gesture=mod-right-drag
 SLOPOS-ASYNC: timer future completed tick=76101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 name=config focused=2
 SLOPOS-NIRI: workspace target action=focus-workspace kind=index value=2
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=76601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: workspace target action=focus-workspace kind=index value=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: dynamic workspaces reason=move-column count=3->4 named=2 active=3 trailing_empty=true
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=3 name=<empty> x=268 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=3 name=<empty> focused=0
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=index value=3
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=77101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: dynamic workspaces reason=move-column count=4->3 named=2 active=1 trailing_empty=true
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=index value=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 name=config focused=2
 SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=config
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=77601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=2 name=config focused=0
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=config
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri
 SLOPOS-NIRI: binding action=move-column-to-workspace changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: workspace target action=move-column-to-workspace kind=name value=main
-SLOPOS-ASYNC: timer future completed tick=78101 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-workspace-previous changed=true workspace=2 name=config focused=2
+SLOPOS-ASYNC: timer future completed tick=78107 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-workspace-previous changed=true workspace=1 name=main focused=0
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=78601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=true module=niri/workspaces
 SLOPOS-WAYBAR: workspace clicked index=1 name=main changed=true module=niri/workspaces
-SLOPOS-ASYNC: timer future completed tick=79110 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=79108 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window closed kind=TERMINAL workspace=1
 SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main focused=1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window closed kind=SYSTEM workspace=1
 SLOPOS-NIRI: binding action=close-window changed=true workspace=1 name=main focused=-1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-ASYNC: timer future completed tick=79601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
+SLOPOS-WAYBAR: modifier key=logo pressed=true modifiers=0x1 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
 SLOPOS-DESKTOP: window closed kind=CONFIG workspace=2
 SLOPOS-NIRI: binding action=close-window changed=true workspace=2 name=config focused=-1
+SLOPOS-WAYBAR: modifier key=logo pressed=false modifiers=0x0 strategy=press active=false action_free=false reset_applied=false state_visible=true effective_visible=true mode=default reserved_top=40->40 layout_updated=false
