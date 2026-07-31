@@ -316,7 +316,7 @@ required_markers=(
     "SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2"
     "SLOPOS-DESKTOP-SERVICE: config acknowledged generation=1 event=config-applied wake=block-task"
     "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=config-applied generation=1"
-    "SLOPOS-VFS: process event stream open complete pid=2 fd=4 object=desktop-events cursor_generation=1"
+    "SLOPOS-VFS: process event stream open complete pid=2 fd=6 object=desktop-events cursor_generation=1"
     "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1"
     "SLOPOS-PROCESS: userspace runtime parked reason=desktop-event init=wait4 desktop=poll pid=2 resources=retained"
 )

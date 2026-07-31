@@ -289,6 +289,30 @@ impl<const SOCKETS: usize, const BACKLOG: usize, const BYTES: usize>
         self.slots[server_index].handle(server_index)
     }
 
+    /// Returns the number of connections waiting in a listening socket's FIFO.
+    ///
+    /// The kernel uses this as the readiness source for a blocking Linux
+    /// `accept(2)` without consuming the pending endpoint in the probe path.
+    pub fn pending_connections(&self, listener: SocketHandle) -> Result<usize, SocketError> {
+        let index = self.index(listener)?;
+        let slot = &self.slots[index];
+        if slot.state != SocketState::Listening {
+            return Err(SocketError::InvalidState);
+        }
+        Ok(slot.pending_length)
+    }
+
+    /// Resolves the generation-checked peer of one connected endpoint.
+    pub fn peer(&self, socket: SocketHandle) -> Result<SocketHandle, SocketError> {
+        let index = self.index(socket)?;
+        let slot = &self.slots[index];
+        if slot.state != SocketState::Connected || slot.peer_closed {
+            return Err(SocketError::InvalidState);
+        }
+        let peer = slot.peer.ok_or(SocketError::BrokenPipe)?;
+        self.slots[peer].handle(peer)
+    }
+
     pub fn send(&mut self, socket: SocketHandle, input: &[u8]) -> Result<usize, SocketError> {
         let index = self.index(socket)?;
         if self.slots[index].state != SocketState::Connected {
@@ -489,7 +513,10 @@ mod tests {
     #[test]
     fn connects_accepts_and_transfers_duplex_stream_bytes() {
         let mut table = Sockets::new();
-        let (_, client, server) = connection(&mut table);
+        let (listener, client, server) = connection(&mut table);
+        assert_eq!(table.pending_connections(listener), Ok(0));
+        assert_eq!(table.peer(client), Ok(server));
+        assert_eq!(table.peer(server), Ok(client));
         assert_eq!(table.send(client, b"request").unwrap(), 7);
         assert!(table.readiness(server).unwrap().readable);
         let mut bytes = [0; 8];
@@ -617,5 +644,21 @@ mod tests {
             table.connect(second, b"/run/slopos/missing"),
             Err(SocketError::AddressNotFound)
         );
+    }
+
+    #[test]
+    fn reports_listener_readiness_without_consuming_the_fifo() {
+        let mut table = Sockets::new();
+        let listener = table.socket().unwrap();
+        table.bind(listener, b"/run/slopos/accept-ready").unwrap();
+        table.listen(listener).unwrap();
+        assert_eq!(table.pending_connections(listener), Ok(0));
+        let client = table.socket().unwrap();
+        table.connect(client, b"/run/slopos/accept-ready").unwrap();
+        assert_eq!(table.pending_connections(listener), Ok(1));
+        assert_eq!(table.pending_connections(listener), Ok(1));
+        let server = table.accept(listener).unwrap();
+        assert_eq!(table.pending_connections(listener), Ok(0));
+        assert_eq!(table.peer(server), Ok(client));
     }
 }

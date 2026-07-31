@@ -36,8 +36,11 @@ const LINUX_SYS_MMAP: u64 = 9;
 const LINUX_SYS_SCHED_YIELD: u64 = 24;
 const LINUX_SYS_SOCKET: u64 = 41;
 const LINUX_SYS_CONNECT: u64 = 42;
+const LINUX_SYS_ACCEPT: u64 = 43;
 const LINUX_SYS_SENDMSG: u64 = 46;
 const LINUX_SYS_RECVMSG: u64 = 47;
+const LINUX_SYS_BIND: u64 = 49;
+const LINUX_SYS_LISTEN: u64 = 50;
 const LINUX_SYS_EXIT: u64 = 60;
 const LINUX_SYS_WAIT4: u64 = 61;
 const LINUX_SYS_FTRUNCATE: u64 = 77;
@@ -66,6 +69,7 @@ const LINUX_EINVAL: i64 = -22;
 const LINUX_EMFILE: i64 = -24;
 const LINUX_ENAMETOOLONG: i64 = -36;
 const LINUX_EAFNOSUPPORT: i64 = -97;
+const LINUX_EADDRINUSE: i64 = -98;
 const LINUX_ECONNREFUSED: i64 = -111;
 const WAYLAND_MEMFD_NAME: &[u8] = b"slopos-wayland-shm\0";
 const INIT_MESSAGE: &[u8] = b"SLOPOS user write\n";
@@ -225,6 +229,22 @@ pub struct CloseRequest {
 }
 
 #[derive(Clone, Copy)]
+pub struct AcceptRequest {
+    pid: u32,
+    listener_fd: u32,
+}
+
+impl AcceptRequest {
+    pub const fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub const fn listener_fd(&self) -> u32 {
+        self.listener_fd
+    }
+}
+
+#[derive(Clone, Copy)]
 struct PollDescriptor {
     fd: u32,
     events: i16,
@@ -297,6 +317,7 @@ enum PendingSyscall {
     RecvMsg(RecvMsgRequest),
     Write(WriteRequest),
     Close(CloseRequest),
+    Accept(AcceptRequest),
     Yield,
     Wait(WaitRequest),
     DesktopWait(DesktopWaitRequest),
@@ -311,6 +332,7 @@ pub enum ProcessEvent {
     RecvMsg(RecvMsgRequest),
     Write(WriteRequest),
     Close(CloseRequest),
+    AcceptWaiting(AcceptRequest),
     Yielded { pid: u32 },
     Preempted { pid: u32, tick: u64, count: u64 },
     Waiting { pid: u32 },
@@ -882,6 +904,7 @@ pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> Proces
         | PendingSyscall::Wait(_)
         | PendingSyscall::DesktopWait(_)
         | PendingSyscall::WaylandWait(_)
+        | PendingSyscall::Accept(_)
         | PendingSyscall::Poll(_) => {
             crate::fatal("scheduler syscall was sent through I/O completion")
         }
@@ -1017,6 +1040,54 @@ fn poll_ready_count(request: PollRequest, write_results: bool) -> usize {
 
 pub fn poll_request_ready(request: PollRequest) -> bool {
     poll_ready_count(request, false) != 0
+}
+
+fn accept_listener_handle(request: AcceptRequest) -> Option<slopos_ipc::SocketHandle> {
+    let DescriptorObject::LocalSocket { index, generation } =
+        descriptor_object(request.pid, request.listener_fd).ok()?
+    else {
+        return None;
+    };
+    Some(slopos_ipc::SocketHandle::from_parts(index, generation))
+}
+
+pub fn accept_request_ready(request: AcceptRequest) -> bool {
+    let Some(listener) = accept_listener_handle(request) else {
+        return true;
+    };
+    crate::local_socket_service::accept_ready(request.pid, listener).unwrap_or(true)
+}
+
+pub fn resume_accept(request: AcceptRequest) -> ProcessEvent {
+    let pending = pending_syscall(request.pid)
+        .unwrap_or_else(|| crate::fatal("accept resume has no pending syscall"));
+    let PendingSyscall::Accept(pending_request) = pending else {
+        crate::fatal("accept resumed a different pending syscall");
+    };
+    if pending_request.pid != request.pid || pending_request.listener_fd != request.listener_fd {
+        crate::fatal("accept completion request changed while blocked");
+    }
+    let result = accept_listener_handle(request)
+        .ok_or(())
+        .and_then(|listener| {
+            crate::local_socket_service::accept(request.pid, listener).map_err(|_| ())
+        })
+        .and_then(|server| {
+            open_local_socket(request.pid, server).map_err(|_| {
+                let _ = crate::local_socket_service::close(request.pid, server);
+            })
+        });
+    let result = match result {
+        Ok(fd) => {
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={} abi=linux-x86_64 entry=resume return=runnable nr=43 accept listener_fd={} accepted_fd={fd} family=AF_UNIX wake=listener-readiness",
+                request.pid, request.listener_fd
+            ));
+            i64::from(fd)
+        }
+        Err(()) => LINUX_EBADF,
+    };
+    finish_io_resume(request.pid, result)
 }
 
 pub fn resume_poll(request: PollRequest) -> ProcessEvent {
@@ -1232,6 +1303,127 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=41 socket domain=AF_UNIX type=SOCK_STREAM protocol=0 fd={fd} origin=cpl3"
             ));
             0
+        }
+        LINUX_SYS_BIND => {
+            let Ok(fd) = u32::try_from(frame.rdi) else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let DescriptorObject::LocalSocket { index, generation } =
+                (match descriptor_object(pid, fd) {
+                    Ok(object) => object,
+                    Err(_) => {
+                        frame.rax = LINUX_EBADF as u64;
+                        return 0;
+                    }
+                })
+            else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let (path, path_length) = match copy_user_socket_path(pid, frame.rsi, frame.rdx) {
+                Ok(path) => path,
+                Err(errno) => {
+                    frame.rax = errno as u64;
+                    return 0;
+                }
+            };
+            let handle = slopos_ipc::SocketHandle::from_parts(index, generation);
+            if crate::local_socket_service::bind(pid, handle, &path[..path_length]).is_err() {
+                frame.rax = LINUX_EADDRINUSE as u64;
+                return 0;
+            }
+            frame.rax = 0;
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=49 bind fd={fd} family=AF_UNIX path=/run/slopos/wayland-0 owner=userspace origin=cpl3 result=0"
+            ));
+            0
+        }
+        LINUX_SYS_LISTEN => {
+            let Ok(fd) = u32::try_from(frame.rdi) else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let Ok(backlog) = usize::try_from(frame.rsi) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let DescriptorObject::LocalSocket { index, generation } =
+                (match descriptor_object(pid, fd) {
+                    Ok(object) => object,
+                    Err(_) => {
+                        frame.rax = LINUX_EBADF as u64;
+                        return 0;
+                    }
+                })
+            else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let handle = slopos_ipc::SocketHandle::from_parts(index, generation);
+            if crate::local_socket_service::listen(pid, handle, backlog).is_err() {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            frame.rax = 0;
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=50 listen fd={fd} backlog={backlog} family=AF_UNIX path=/run/slopos/wayland-0 owner=userspace origin=cpl3 result=0"
+            ));
+            0
+        }
+        LINUX_SYS_ACCEPT => {
+            let Ok(listener_fd) = u32::try_from(frame.rdi) else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            if frame.rsi != 0 || frame.rdx != 0 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let DescriptorObject::LocalSocket { index, generation } =
+                (match descriptor_object(pid, listener_fd) {
+                    Ok(object) => object,
+                    Err(_) => {
+                        frame.rax = LINUX_EBADF as u64;
+                        return 0;
+                    }
+                })
+            else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let listener = slopos_ipc::SocketHandle::from_parts(index, generation);
+            match crate::local_socket_service::accept(pid, listener) {
+                Ok(server) => {
+                    let fd = match open_local_socket(pid, server) {
+                        Ok(fd) => fd,
+                        Err(_) => {
+                            let _ = crate::local_socket_service::close(pid, server);
+                            frame.rax = LINUX_EMFILE as u64;
+                            return 0;
+                        }
+                    };
+                    frame.rax = u64::from(fd);
+                    crate::serial::serialln(format_args!(
+                        "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=43 accept listener_fd={listener_fd} accepted_fd={fd} family=AF_UNIX path=/run/slopos/wayland-0 origin=cpl3"
+                    ));
+                    0
+                }
+                Err(crate::local_socket_service::LocalSocketServiceError::Socket(
+                    slopos_ipc::SocketError::WouldBlock,
+                )) => {
+                    let request = AcceptRequest { pid, listener_fd };
+                    suspend_io_syscall(pid, frame, PendingSyscall::Accept(request));
+                    crate::serial::serialln(format_args!(
+                        "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=43 accept listener_fd={listener_fd} family=AF_UNIX state=blocked origin=cpl3"
+                    ));
+                    2
+                }
+                Err(_) => {
+                    frame.rax = LINUX_EBADF as u64;
+                    0
+                }
+            }
         }
         LINUX_SYS_CONNECT => {
             let Ok(fd) = u32::try_from(frame.rdi) else {
@@ -2122,6 +2314,9 @@ fn process_event_after_user(pid: u32) -> ProcessEvent {
         (ProcessState::Blocked, PendingSyscall::RecvMsg(request)) => ProcessEvent::RecvMsg(request),
         (ProcessState::Blocked, PendingSyscall::Write(request)) => ProcessEvent::Write(request),
         (ProcessState::Blocked, PendingSyscall::Close(request)) => ProcessEvent::Close(request),
+        (ProcessState::Blocked, PendingSyscall::Accept(request)) => {
+            ProcessEvent::AcceptWaiting(request)
+        }
         (ProcessState::Blocked, PendingSyscall::Wait(request)) => {
             ProcessEvent::Waiting { pid: request.pid }
         }

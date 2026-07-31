@@ -143,7 +143,10 @@ grep -Fq \
     "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=42 connect fd=3 family=AF_UNIX path=/run/slopos/wayland-0 origin=cpl3 result=0" \
+    "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=49 bind fd=3 family=AF_UNIX path=/run/slopos/wayland-0 owner=userspace origin=cpl3 result=0" \
+    "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=50 listen fd=3 backlog=2 family=AF_UNIX path=/run/slopos/wayland-0 owner=userspace origin=cpl3 result=0" \
+    "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=42 connect fd=4 family=AF_UNIX path=/run/slopos/wayland-0 origin=cpl3 result=0" \
+    "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=43 accept listener_fd=3 accepted_fd=5 family=AF_UNIX path=/run/slopos/wayland-0 origin=cpl3" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-WAYLAND-SERVER: registry advertised pid=2 sequence=1 registry=2 globals=wl_compositor/wl_shm/wl_seat/wl_output/xdg_wm_base wire_bytes=156" \
@@ -152,10 +155,10 @@ grep -Fq \
     "SLOPOS-WAYLAND-SERVER: configure emitted pid=2 sequence=2 serial=1 seat=12 capabilities=pointer/keyboard pointer=14 keyboard=15 keymap=xkb_v1 keymap_bytes=3307 repeat=25/600 output=13 output_name=SLOPOS-1 mode=1024x768@60000 scale=1 shm=4 formats=argb8888/xrgb8888 xdg_surface=9 toplevel=10 geometry=32x24 states=empty wire_bytes=288" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-IPC: process recvmsg complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=256 control=SCM_RIGHTS rights_fd=4 user_pages=1 async=true" \
+    "SLOPOS-IPC: process recvmsg complete pid=2 fd=4 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=256 control=SCM_RIGHTS rights_fd=6 user_pages=1 async=true" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-IPC: process read complete pid=2 fd=4 object=memfd shared=0:1 offset=3307 requested=1 bytes=0 object_bytes=3307 user_pages=1 async=false" \
+    "SLOPOS-IPC: process read complete pid=2 fd=6 object=memfd shared=0:1 offset=3307 requested=1 bytes=0 object_bytes=3307 user_pages=1 async=false" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-WAYLAND-SERVER: commit accepted pid=2 generation=1 transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle=registry/configure/ack-configure objects=registry/compositor/shm/seat/pointer/keyboard/output/xdg_toplevel surface=6 buffer=8 callback=11 seat=12 pointer=14 keyboard=15 output=13 geometry=32x24 stride=128 format=1 title=\"SlopOS Userspace\" app_id=slopos-system wire_bytes=148 pixel_bytes=3072" \

@@ -39,8 +39,11 @@ const SYS_MMAP: u64 = 9;
 const SYS_SCHED_YIELD: u64 = 24;
 const SYS_SOCKET: u64 = 41;
 const SYS_CONNECT: u64 = 42;
+const SYS_ACCEPT: u64 = 43;
 const SYS_SENDMSG: u64 = 46;
 const SYS_RECVMSG: u64 = 47;
+const SYS_BIND: u64 = 49;
+const SYS_LISTEN: u64 = 50;
 const SYS_EXIT: u64 = 60;
 const SYS_FTRUNCATE: u64 = 77;
 const SYS_OPENAT: u64 = 257;
@@ -50,6 +53,11 @@ const O_RDONLY: u64 = 0;
 const POLLIN: i16 = 0x0001;
 const STDOUT: u64 = 1;
 const FIRST_DYNAMIC_FD: i64 = 3;
+const WAYLAND_LISTENER_FD: i64 = FIRST_DYNAMIC_FD;
+const WAYLAND_CLIENT_FD: i64 = FIRST_DYNAMIC_FD + 1;
+const WAYLAND_SERVER_FD: i64 = FIRST_DYNAMIC_FD + 2;
+const WAYLAND_AUXILIARY_FD: i64 = FIRST_DYNAMIC_FD + 3;
+const CONFIG_RELOAD_FD: i64 = FIRST_DYNAMIC_FD + 4;
 const AF_UNIX: u64 = 1;
 const SOCK_STREAM: u64 = 1;
 const PROT_READ_WRITE: u64 = 3;
@@ -180,7 +188,7 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
     }
     let mut config_generation = wait_for_event(EVENT_CONFIG_APPLIED, 0).unwrap_or_else(|| exit(11));
     let desktop_events = open(DESKTOP_EVENTS_PATH);
-    if desktop_events != FIRST_DYNAMIC_FD + 1 {
+    if desktop_events != WAYLAND_AUXILIARY_FD {
         exit(30);
     }
     let mut input = LiveInputState::new();
@@ -209,7 +217,7 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
         if poll_fds[1].revents == POLLIN {
             config_generation =
                 read_config_event(desktop_events, config_generation).unwrap_or_else(|| exit(32));
-            let commit = load_policy(false, FIRST_DYNAMIC_FD + 2);
+            let commit = load_policy(false, CONFIG_RELOAD_FD);
             if syscall2(
                 DESKTOP_COMMIT_SYSCALL,
                 (&raw const commit) as u64,
@@ -256,23 +264,41 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
 }
 
 fn connect_wayland_socket() -> i64 {
-    let fd = syscall3(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0);
-    if fd != FIRST_DYNAMIC_FD {
+    let listener = syscall3(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0);
+    if listener != WAYLAND_LISTENER_FD {
         exit(13);
     }
     let mut address = [0u8; 2 + WAYLAND_SOCKET_PATH.len() + 1];
     address[..2].copy_from_slice(&(AF_UNIX as u16).to_ne_bytes());
     address[2..2 + WAYLAND_SOCKET_PATH.len()].copy_from_slice(WAYLAND_SOCKET_PATH);
     if syscall3(
+        SYS_BIND,
+        listener as u64,
+        address.as_ptr() as u64,
+        address.len() as u64,
+    ) != 0
+        || syscall2(SYS_LISTEN, listener as u64, 2) != 0
+    {
+        exit(14);
+    }
+    let client = syscall3(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0);
+    if client != WAYLAND_CLIENT_FD {
+        exit(14);
+    }
+    if syscall3(
         SYS_CONNECT,
-        fd as u64,
+        client as u64,
         address.as_ptr() as u64,
         address.len() as u64,
     ) != 0
     {
         exit(14);
     }
-    fd
+    let server = syscall3(SYS_ACCEPT, listener as u64, 0, 0);
+    if server != WAYLAND_SERVER_FD {
+        exit(14);
+    }
+    client
 }
 
 fn submit_wayland_surface(socket: i64) {
@@ -348,7 +374,7 @@ fn send_wayland_wire_with_fd(socket: i64, wire: &[u8], fd: i64) {
 
 fn create_wayland_backing() -> (i64, &'static mut [u8]) {
     let fd = syscall2(SYS_MEMFD_CREATE, WAYLAND_MEMFD_NAME.as_ptr() as u64, 0);
-    if fd != FIRST_DYNAMIC_FD + 1 {
+    if fd != WAYLAND_AUXILIARY_FD {
         exit(24);
     }
     if syscall2(SYS_FTRUNCATE, fd as u64, SURFACE_PIXEL_LENGTH as u64) != 0 {
@@ -667,7 +693,7 @@ fn wait_configure(socket: i64) -> Option<u32> {
     if serial == 0
         || arguments.finish().is_err()
         || !wire.is_empty()
-        || keymap_fd != FIRST_DYNAMIC_FD + 1
+        || keymap_fd != WAYLAND_AUXILIARY_FD
         || !validate_keymap_fd(keymap_fd)
         || syscall1(SYS_CLOSE, keymap_fd as u64) != 0
     {

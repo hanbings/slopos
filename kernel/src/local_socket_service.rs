@@ -18,6 +18,8 @@ struct Connection {
     pid: u32,
     client: SocketHandle,
     server: SocketHandle,
+    client_open: bool,
+    server_open: bool,
     event_sequence: u64,
     backing: Option<crate::shared_memory_service::SharedMemoryHandle>,
     keymap: Option<crate::shared_memory_service::SharedMemoryHandle>,
@@ -25,6 +27,7 @@ struct Connection {
 
 struct ServiceState {
     table: SocketTable,
+    initialized: bool,
     listener: Option<SocketHandle>,
     connections: [Option<Connection>; CONNECTION_CAPACITY],
 }
@@ -33,6 +36,7 @@ impl ServiceState {
     const fn new() -> Self {
         Self {
             table: SocketTable::new(),
+            initialized: false,
             listener: None,
             connections: [None; CONNECTION_CAPACITY],
         }
@@ -40,8 +44,19 @@ impl ServiceState {
 
     fn connection_index(&self, pid: u32, client: SocketHandle) -> Option<usize> {
         self.connections.iter().position(|connection| {
-            connection
-                .is_some_and(|connection| connection.pid == pid && connection.client == client)
+            connection.is_some_and(|connection| {
+                connection.pid == pid && connection.client_open && connection.client == client
+            })
+        })
+    }
+
+    fn connection_endpoint_index(&self, pid: u32, endpoint: SocketHandle) -> Option<usize> {
+        self.connections.iter().position(|connection| {
+            connection.is_some_and(|connection| {
+                connection.pid == pid
+                    && ((connection.client_open && connection.client == endpoint)
+                        || (connection.server_open && connection.server == endpoint))
+            })
         })
     }
 }
@@ -81,24 +96,12 @@ fn state_mut() -> &'static mut ServiceState {
 
 pub fn initialize() {
     let state = state_mut();
-    if state.listener.is_some() {
+    if state.initialized {
         return;
     }
-    let listener = state
-        .table
-        .socket()
-        .unwrap_or_else(|_| crate::fatal("Wayland local socket allocation failed"));
-    state
-        .table
-        .bind(listener, WAYLAND_SOCKET_PATH)
-        .unwrap_or_else(|_| crate::fatal("Wayland local socket bind failed"));
-    state
-        .table
-        .listen(listener)
-        .unwrap_or_else(|_| crate::fatal("Wayland local socket listen failed"));
-    state.listener = Some(listener);
+    state.initialized = true;
     crate::serial::serialln(format_args!(
-        "SLOPOS-IPC: AF_UNIX SOCK_STREAM listener bound path=/run/slopos/wayland-0 backlog={SOCKET_BACKLOG} bytes_per_direction={SOCKET_BYTES}"
+        "SLOPOS-IPC: AF_UNIX SOCK_STREAM namespace ready sockets={SOCKET_CAPACITY} backlog_capacity={SOCKET_BACKLOG} bytes_per_direction={SOCKET_BYTES} listener_owner=userspace"
     ));
 }
 
@@ -107,39 +110,104 @@ pub fn socket() -> Result<SocketHandle, LocalSocketServiceError> {
     Ok(state_mut().table.socket()?)
 }
 
+pub fn bind(pid: u32, socket: SocketHandle, path: &[u8]) -> Result<(), LocalSocketServiceError> {
+    if pid != 2 || path != WAYLAND_SOCKET_PATH {
+        return Err(LocalSocketServiceError::PermissionDenied);
+    }
+    initialize();
+    let state = state_mut();
+    if state.listener.is_some() {
+        return Err(SocketError::AddressInUse.into());
+    }
+    state.table.bind(socket, path)?;
+    state.listener = Some(socket);
+    crate::serial::serialln(format_args!(
+        "SLOPOS-IPC: AF_UNIX bind pid={pid} path=/run/slopos/wayland-0 listener={}:{} owner=userspace",
+        socket.index(),
+        socket.generation()
+    ));
+    Ok(())
+}
+
+pub fn listen(
+    pid: u32,
+    listener: SocketHandle,
+    backlog: usize,
+) -> Result<(), LocalSocketServiceError> {
+    let state = state_mut();
+    if pid != 2 || state.listener != Some(listener) || backlog == 0 || backlog > SOCKET_BACKLOG {
+        return Err(LocalSocketServiceError::PermissionDenied);
+    }
+    state.table.listen(listener)?;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-IPC: AF_UNIX listen pid={pid} path=/run/slopos/wayland-0 listener={}:{} backlog={backlog} owner=userspace",
+        listener.index(),
+        listener.generation()
+    ));
+    Ok(())
+}
+
 pub fn connect(pid: u32, client: SocketHandle, path: &[u8]) -> Result<(), LocalSocketServiceError> {
     if pid != 2 || path != WAYLAND_SOCKET_PATH {
         return Err(LocalSocketServiceError::PermissionDenied);
     }
     initialize();
     let state = state_mut();
-    if state.connection_index(pid, client).is_some() {
-        return Err(SocketError::InvalidState.into());
+    state.table.connect(client, path)?;
+    crate::serial::serialln(format_args!(
+        "SLOPOS-IPC: AF_UNIX connect queued pid={pid} path=/run/slopos/wayland-0 client={}:{} transport=bounded-stream",
+        client.index(),
+        client.generation()
+    ));
+    Ok(())
+}
+
+pub fn accept_ready(pid: u32, listener: SocketHandle) -> Result<bool, LocalSocketServiceError> {
+    let state = state_mut();
+    if pid != 2 || state.listener != Some(listener) {
+        return Err(LocalSocketServiceError::PermissionDenied);
+    }
+    Ok(state.table.pending_connections(listener)? != 0)
+}
+
+pub fn accept(pid: u32, listener: SocketHandle) -> Result<SocketHandle, LocalSocketServiceError> {
+    let state = state_mut();
+    if pid != 2 || state.listener != Some(listener) {
+        return Err(LocalSocketServiceError::PermissionDenied);
     }
     let slot = state
         .connections
         .iter()
         .position(Option::is_none)
         .ok_or(SocketError::TableFull)?;
-    state.table.connect(client, path)?;
-    let listener = state.listener.ok_or(SocketError::InvalidState)?;
     let server = state.table.accept(listener)?;
+    let client = match state.table.peer(server) {
+        Ok(client) => client,
+        Err(error) => {
+            let _ = state.table.close(server);
+            return Err(error.into());
+        }
+    };
     state.connections[slot] = Some(Connection {
         pid,
         client,
         server,
+        client_open: true,
+        server_open: true,
         event_sequence: 0,
         backing: None,
         keymap: None,
     });
     crate::serial::serialln(format_args!(
-        "SLOPOS-IPC: AF_UNIX connected pid={pid} path=/run/slopos/wayland-0 client={}:{} server={}:{} transport=bounded-stream",
+        "SLOPOS-IPC: AF_UNIX accepted pid={pid} path=/run/slopos/wayland-0 listener={}:{} client={}:{} server={}:{} ownership=userspace-listener/kernel-protocol",
+        listener.index(),
+        listener.generation(),
         client.index(),
         client.generation(),
         server.index(),
         server.generation()
     ));
-    Ok(())
+    Ok(server)
 }
 
 pub fn send(
@@ -195,7 +263,7 @@ pub fn send_server_event(input: &[u8]) -> Result<usize, LocalSocketServiceError>
         .connections
         .iter()
         .flatten()
-        .find(|connection| connection.pid == 2)
+        .find(|connection| connection.pid == 2 && connection.client_open && connection.server_open)
         .copied()
         .ok_or(LocalSocketServiceError::PermissionDenied)?;
     let sent = state.table.send_exact(connection.server, input)?;
@@ -383,30 +451,44 @@ fn pop_client(
 
 pub fn close(pid: u32, client: SocketHandle) -> Result<(), LocalSocketServiceError> {
     let state = state_mut();
-    if let Some(index) = state.connection_index(pid, client) {
+    if state.listener == Some(client) {
+        state.listener = None;
+        state.table.close(client)?;
+        return Ok(());
+    }
+    if let Some(index) = state.connection_endpoint_index(pid, client) {
+        if let Some(rights) = state.table.take_rights(client)? {
+            let handle = crate::shared_memory_service::SharedMemoryHandle::from_parts(
+                rights.object(),
+                rights.generation(),
+            );
+            crate::shared_memory_service::release(handle)
+                .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+        }
+        state.table.close(client)?;
         let connection = state.connections[index]
-            .take()
+            .as_mut()
             .ok_or(SocketError::InvalidState)?;
-        for endpoint in [connection.server, connection.client] {
-            if let Some(rights) = state.table.take_rights(endpoint)? {
-                let handle = crate::shared_memory_service::SharedMemoryHandle::from_parts(
-                    rights.object(),
-                    rights.generation(),
-                );
+        if connection.client == client {
+            connection.client_open = false;
+        } else if connection.server == client {
+            connection.server_open = false;
+        } else {
+            return Err(SocketError::InvalidState.into());
+        }
+        if !connection.client_open && !connection.server_open {
+            let connection = state.connections[index]
+                .take()
+                .ok_or(SocketError::InvalidState)?;
+            if let Some(handle) = connection.backing {
+                crate::shared_memory_service::release(handle)
+                    .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+            }
+            if let Some(handle) = connection.keymap {
                 crate::shared_memory_service::release(handle)
                     .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
             }
         }
-        if let Some(handle) = connection.backing {
-            crate::shared_memory_service::release(handle)
-                .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
-        }
-        if let Some(handle) = connection.keymap {
-            crate::shared_memory_service::release(handle)
-                .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
-        }
-        state.table.close(connection.client)?;
-        state.table.close(connection.server)?;
         return Ok(());
     }
     state.table.close(client)?;

@@ -97,11 +97,11 @@ fi
 sed -i 's/\r$//' "${serial_log}" "${debugcon_log}" "${qemu_log}"
 
 required_markers=(
-    "SLOPOS-VFS: process event stream open complete pid=2 fd=4 object=desktop-events cursor_generation=1"
+    "SLOPOS-VFS: process event stream open complete pid=2 fd=6 object=desktop-events cursor_generation=1"
     "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1"
     "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness"
-    "SLOPOS-VFS: process event stream read complete pid=2 fd=4 object=desktop-events after_generation=1 generation=2 bytes=32"
-    "SLOPOS-VFS: process open complete pid=2 fd=5 inode=20 bytes=904 access=readonly async=true path=/etc/slopos/waybar.jsonc"
+    "SLOPOS-VFS: process event stream read complete pid=2 fd=6 object=desktop-events after_generation=1 generation=2 bytes=32"
+    "SLOPOS-VFS: process open complete pid=2 fd=7 inode=20 bytes=904 access=readonly async=true path=/etc/slopos/waybar.jsonc"
     "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=2"
     "SLOPOS-WAYLAND-INPUT: keyboard focus=enter"
     "SLOPOS-WAYLAND-INPUT: key code=30 state=pressed"

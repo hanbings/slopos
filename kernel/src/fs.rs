@@ -79,11 +79,13 @@ struct UserProcessRuntime {
 #[derive(Clone, Copy)]
 enum ParkedUserProcess {
     Desktop(crate::process::DesktopWaitRequest),
+    Accept(crate::process::AcceptRequest),
     Poll(crate::process::PollRequest),
 }
 
 enum BlockRuntimeEvent {
     Desktop(slopos_desktop_protocol::DesktopServiceEvent),
+    Accept,
     Poll,
     Reload { inject_invalid: bool },
     Wallpaper,
@@ -108,6 +110,11 @@ impl Future for NextBlockRuntimeEvent {
             ParkedUserProcess::Poll(request) => {
                 if crate::process::poll_request_ready(request) {
                     return Poll::Ready(BlockRuntimeEvent::Poll);
+                }
+            }
+            ParkedUserProcess::Accept(request) => {
+                if crate::process::accept_request_ready(request) {
+                    return Poll::Ready(BlockRuntimeEvent::Accept);
                 }
             }
         }
@@ -746,6 +753,21 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
                 .await;
                 log_parked_process(user_processes.parked, "poll-ready");
             }
+            BlockRuntimeEvent::Accept => {
+                let ParkedUserProcess::Accept(request) = user_processes.parked else {
+                    device.fail("listener readiness woke a different userspace wait");
+                };
+                let process_event = crate::process::resume_accept(request);
+                user_processes.parked = drive_user_processes(
+                    &mut mount,
+                    &mut device,
+                    &user_processes.namespace,
+                    &mut user_processes.open_files,
+                    process_event,
+                )
+                .await;
+                log_parked_process(user_processes.parked, "accept-ready");
+            }
             BlockRuntimeEvent::Reload { inject_invalid } => {
                 load_and_publish_desktop_config(&mut mount, &mut device, false, inject_invalid)
                     .await;
@@ -860,6 +882,11 @@ fn log_parked_process(parked: ParkedUserProcess, reason: &str) {
             "SLOPOS-PROCESS: userspace runtime parked reason={reason} init=wait4 desktop=poll pid={} resources=retained",
             request.pid()
         )),
+        ParkedUserProcess::Accept(request) => crate::serial::serialln(format_args!(
+            "SLOPOS-PROCESS: userspace runtime parked reason={reason} init=wait4 desktop=accept pid={} listener_fd={} resources=retained",
+            request.pid(),
+            request.listener_fd()
+        )),
     }
 }
 
@@ -887,6 +914,14 @@ async fn drive_user_processes(
             }
             crate::process::ProcessEvent::Close(request) => {
                 complete_process_close(open_files, request)
+            }
+            crate::process::ProcessEvent::AcceptWaiting(request) => {
+                if let Some(next) = crate::process::schedule_next_if_any(request.pid()) {
+                    parked_desktop = Some(ParkedUserProcess::Accept(request));
+                    next
+                } else {
+                    return ParkedUserProcess::Accept(request);
+                }
             }
             crate::process::ProcessEvent::Yielded { pid } => crate::process::schedule_next(pid),
             crate::process::ProcessEvent::Preempted { pid, tick, count } => {
