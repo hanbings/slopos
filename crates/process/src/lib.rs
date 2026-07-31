@@ -261,6 +261,18 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
             .map_err(ProcessError::Vfs)
     }
 
+    pub fn open_shared_memory(
+        &mut self,
+        pid: ProcessId,
+        index: u16,
+        generation: u16,
+    ) -> Result<u32, ProcessError> {
+        self.live_slot_mut(pid)?
+            .descriptors
+            .open_shared_memory(index, generation)
+            .map_err(ProcessError::Vfs)
+    }
+
     pub fn descriptor_object(
         &self,
         pid: ProcessId,
@@ -809,6 +821,15 @@ mod tests {
         assert_eq!(
             table.descriptor_object(second, socket_fd),
             Ok(DescriptorObject::File(node))
+        );
+
+        let shared_fd = table.open_shared_memory(first, 6, 2).unwrap();
+        assert_eq!(
+            table.descriptor_object(first, shared_fd),
+            Ok(DescriptorObject::SharedMemory {
+                index: 6,
+                generation: 2,
+            })
         );
     }
 

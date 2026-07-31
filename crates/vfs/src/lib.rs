@@ -208,6 +208,7 @@ pub struct FileNode {
 pub enum DescriptorObject {
     File(FileNode),
     LocalSocket { index: u16, generation: u16 },
+    SharedMemory { index: u16, generation: u16 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -288,6 +289,13 @@ impl<const N: usize> FileDescriptorTable<N> {
     pub fn open_local_socket(&mut self, index: u16, generation: u16) -> Result<u32, VfsError> {
         self.open_object(
             DescriptorObject::LocalSocket { index, generation },
+            AccessMode::ReadWrite,
+        )
+    }
+
+    pub fn open_shared_memory(&mut self, index: u16, generation: u16) -> Result<u32, VfsError> {
+        self.open_object(
+            DescriptorObject::SharedMemory { index, generation },
             AccessMode::ReadWrite,
         )
     }
@@ -585,6 +593,24 @@ mod tests {
         );
         descriptors.close(fd).unwrap();
         assert_eq!(descriptors.object(fd), Err(VfsError::BadFileDescriptor));
+    }
+
+    #[test]
+    fn stores_shared_memory_without_exposing_file_windows() {
+        let mut descriptors = FileDescriptorTable::<2>::new();
+        let fd = descriptors.open_shared_memory(2, 7).unwrap();
+        assert_eq!(
+            descriptors.object(fd),
+            Ok(DescriptorObject::SharedMemory {
+                index: 2,
+                generation: 7,
+            })
+        );
+        assert_eq!(
+            descriptors.read_window(fd, 1),
+            Err(VfsError::BadFileDescriptor)
+        );
+        assert_eq!(descriptors.seek(fd, 0), Err(VfsError::BadFileDescriptor));
     }
 
     #[test]

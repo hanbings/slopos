@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: 0BSD
 
 use core::cell::UnsafeCell;
-use slopos_ipc::{LocalSocketTable, SocketError, SocketHandle};
+use slopos_ipc::{AncillaryRights, LocalSocketTable, SocketError, SocketHandle};
 
 const SOCKET_CAPACITY: usize = 8;
 const SOCKET_BACKLOG: usize = 2;
@@ -17,6 +17,7 @@ struct Connection {
     client: SocketHandle,
     server: SocketHandle,
     event_sequence: u64,
+    backing: Option<crate::shared_memory_service::SharedMemoryHandle>,
 }
 
 struct ServiceState {
@@ -119,6 +120,7 @@ pub fn connect(pid: u32, client: SocketHandle, path: &[u8]) -> Result<(), LocalS
         client,
         server,
         event_sequence: 0,
+        backing: None,
     });
     crate::serial::serialln(format_args!(
         "SLOPOS-IPC: AF_UNIX connected pid={pid} path=/run/slopos/wayland-0 client={}:{} server={}:{} transport=bounded-stream",
@@ -142,6 +144,28 @@ pub fn send(
     Ok(state.table.send(client, input)?)
 }
 
+pub fn send_with_rights(
+    pid: u32,
+    client: SocketHandle,
+    input: &[u8],
+    shared: crate::shared_memory_service::SharedMemoryHandle,
+) -> Result<usize, LocalSocketServiceError> {
+    let state = state_mut();
+    if state.connection_index(pid, client).is_none() {
+        return Err(LocalSocketServiceError::PermissionDenied);
+    }
+    crate::shared_memory_service::retain(shared)
+        .map_err(|_| LocalSocketServiceError::PermissionDenied)?;
+    let rights = AncillaryRights::new(shared.index(), shared.generation());
+    match state.table.send_with_rights(client, input, rights) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) => {
+            let _ = crate::shared_memory_service::release(shared);
+            Err(error.into())
+        }
+    }
+}
+
 pub async fn recv(
     pid: u32,
     client: SocketHandle,
@@ -159,16 +183,54 @@ pub async fn recv(
         }
 
         let mut request = [0u8; SOCKET_BYTES];
-        let request_length = match state.table.recv(connection.server, &mut request) {
-            Ok(length) => length,
-            Err(SocketError::WouldBlock) => 0,
+        let (request_length, rights) = match state
+            .table
+            .recv_with_rights(connection.server, &mut request)
+        {
+            Ok(received) => received,
+            Err(SocketError::WouldBlock) => (0, None),
             Err(error) => return Err(error.into()),
         };
         if request_length != 0 {
-            crate::wayland_service::submit_wire(pid, &request[..request_length])
-                .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+            let mut descriptor_received = false;
+            if let Some(rights) = rights {
+                if connection.backing.is_some() {
+                    let handle = crate::shared_memory_service::SharedMemoryHandle::from_parts(
+                        rights.object(),
+                        rights.generation(),
+                    );
+                    let _ = crate::shared_memory_service::release(handle);
+                    return Err(LocalSocketServiceError::WaylandProtocol);
+                }
+                let handle = crate::shared_memory_service::SharedMemoryHandle::from_parts(
+                    rights.object(),
+                    rights.generation(),
+                );
+                crate::shared_memory_service::frame_and_length(handle)
+                    .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+                state.connections[index]
+                    .as_mut()
+                    .ok_or(SocketError::InvalidState)?
+                    .backing = Some(handle);
+                descriptor_received = true;
+            }
+            let backing = state.connections[index]
+                .ok_or(SocketError::InvalidState)?
+                .backing;
+            let pixels = match backing {
+                Some(handle) => crate::shared_memory_service::bytes(handle)
+                    .map_err(|_| LocalSocketServiceError::WaylandProtocol)?,
+                None => &[],
+            };
+            crate::wayland_service::submit_wire(
+                pid,
+                &request[..request_length],
+                descriptor_received,
+                pixels,
+            )
+            .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
             crate::serial::serialln(format_args!(
-                "SLOPOS-WAYLAND-SERVER: request received pid={pid} transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes={request_length}"
+                "SLOPOS-WAYLAND-SERVER: request received pid={pid} transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes={request_length} scm_rights={descriptor_received}"
             ));
         }
         connection.event_sequence
@@ -207,6 +269,18 @@ pub fn close(pid: u32, client: SocketHandle) -> Result<(), LocalSocketServiceErr
         let connection = state.connections[index]
             .take()
             .ok_or(SocketError::InvalidState)?;
+        if let Some(rights) = state.table.take_rights(connection.server)? {
+            let handle = crate::shared_memory_service::SharedMemoryHandle::from_parts(
+                rights.object(),
+                rights.generation(),
+            );
+            crate::shared_memory_service::release(handle)
+                .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+        }
+        if let Some(handle) = connection.backing {
+            crate::shared_memory_service::release(handle)
+                .map_err(|_| LocalSocketServiceError::WaylandProtocol)?;
+        }
         state.table.close(connection.client)?;
         state.table.close(connection.server)?;
         return Ok(());

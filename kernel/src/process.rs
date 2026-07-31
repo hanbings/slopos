@@ -6,10 +6,9 @@ use core::cell::UnsafeCell;
 use core::ptr;
 use slopos_desktop_protocol::{
     COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit, DesktopServiceEvent,
-    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WAYLAND_BACKING_STAGE_SYSCALL,
-    WAYLAND_EVENT_MAX_SIZE, WAYLAND_EVENT_WAIT_SYSCALL, WAYLAND_SURFACE_HEADER_SIZE,
-    WAYLAND_SURFACE_MAX_PIXEL_SIZE, WAYLAND_SURFACE_MAX_SIZE, WAYLAND_SURFACE_SYSCALL,
-    WaylandServerEvent, WaylandSurfaceCommit, WaylandSurfaceHeader,
+    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WAYLAND_EVENT_MAX_SIZE,
+    WAYLAND_EVENT_WAIT_SYSCALL, WAYLAND_SURFACE_HEADER_SIZE, WAYLAND_SURFACE_MAX_SIZE,
+    WAYLAND_SURFACE_SYSCALL, WaylandServerEvent, WaylandSurfaceCommit, WaylandSurfaceHeader,
 };
 use slopos_process::{
     ProcessError, ProcessImage, ProcessState, ProcessTable, build_linux_initial_stack,
@@ -21,7 +20,7 @@ const DESKTOP_PID: u32 = 2;
 pub const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
 const INIT_EXPECTED_SYSCALLS: u64 = 18;
-const DESKTOP_EXPECTED_SYSCALLS: u64 = 28;
+const DESKTOP_EXPECTED_SYSCALLS: u64 = 30;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
 const LINUX_AT_FDCWD: u64 = (-100i64) as u64;
@@ -32,16 +31,28 @@ const USER_STDOUT: u64 = 1;
 const LINUX_SYS_WRITE: u64 = 1;
 const LINUX_SYS_CLOSE: u64 = 3;
 const LINUX_SYS_LSEEK: u64 = 8;
+const LINUX_SYS_MMAP: u64 = 9;
 const LINUX_SYS_SCHED_YIELD: u64 = 24;
 const LINUX_SYS_SOCKET: u64 = 41;
 const LINUX_SYS_CONNECT: u64 = 42;
+const LINUX_SYS_SENDMSG: u64 = 46;
 const LINUX_SYS_EXIT: u64 = 60;
 const LINUX_SYS_WAIT4: u64 = 61;
+const LINUX_SYS_FTRUNCATE: u64 = 77;
 const LINUX_SYS_OPENAT: u64 = 257;
+const LINUX_SYS_MEMFD_CREATE: u64 = 319;
 const LINUX_SEEK_SET: u64 = 0;
 const LINUX_AF_UNIX: u64 = 1;
 const LINUX_SOCK_STREAM: u64 = 1;
 const LINUX_SOCKADDR_UN_MAX: usize = 110;
+const LINUX_PROT_READ_WRITE: u64 = 3;
+const LINUX_MAP_SHARED: u64 = 1;
+const LINUX_SOL_SOCKET: i32 = 1;
+const LINUX_SCM_RIGHTS: i32 = 1;
+const LINUX_MSGHDR_SIZE: usize = 56;
+const LINUX_IOVEC_SIZE: usize = 16;
+const LINUX_CMSG_SPACE_ONE_FD: usize = 24;
+const LINUX_CMSG_LEN_ONE_FD: u64 = 20;
 const LINUX_EBADF: i64 = -9;
 const LINUX_ECHILD: i64 = -10;
 const LINUX_EFAULT: i64 = -14;
@@ -50,6 +61,7 @@ const LINUX_EMFILE: i64 = -24;
 const LINUX_ENAMETOOLONG: i64 = -36;
 const LINUX_EAFNOSUPPORT: i64 = -97;
 const LINUX_ECONNREFUSED: i64 = -111;
+const WAYLAND_MEMFD_NAME: &[u8] = b"slopos-wayland-shm\0";
 const INIT_MESSAGE: &[u8] = b"SLOPOS user write\n";
 const DESKTOP_MESSAGE: &[u8] = b"SLOPOS desktop policy ready\n";
 const INIT_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-init", b"--system"];
@@ -103,6 +115,8 @@ struct UserMapping {
     code_end: u64,
     stack_start: u64,
     stack_end: u64,
+    shared_handle: Option<crate::shared_memory_service::SharedMemoryHandle>,
+    shared_frame: u64,
 }
 
 struct UserMappingStorage(UnsafeCell<[Option<UserMapping>; PROCESS_CAPACITY]>);
@@ -158,6 +172,8 @@ pub struct WriteRequest {
     input: [u8; PROCESS_SYSCALL_IO_CAPACITY],
     input_length: usize,
     user_pages: u8,
+    shared_rights: Option<crate::shared_memory_service::SharedMemoryHandle>,
+    sendmsg: bool,
 }
 
 impl WriteRequest {
@@ -167,6 +183,14 @@ impl WriteRequest {
 
     pub const fn user_pages(&self) -> u8 {
         self.user_pages
+    }
+
+    pub const fn shared_rights(&self) -> Option<crate::shared_memory_service::SharedMemoryHandle> {
+        self.shared_rights
+    }
+
+    pub const fn is_sendmsg(&self) -> bool {
+        self.sendmsg
     }
 }
 
@@ -471,6 +495,8 @@ fn spawn_user_process(
             code_end: crate::paging::USER_CODE_BASE + segment.memory_size(),
             stack_start: crate::paging::USER_STACK_BASE,
             stack_end: crate::paging::USER_STACK_TOP,
+            shared_handle: None,
+            shared_frame: 0,
         },
     );
     let argv0 = core::str::from_utf8(arguments[0]).unwrap_or("<non-utf8>");
@@ -555,6 +581,13 @@ pub fn open_file(pid: u32, node: FileNode, access_mode: AccessMode) -> Result<u3
 
 pub fn open_local_socket(pid: u32, handle: slopos_ipc::SocketHandle) -> Result<u32, ProcessError> {
     process_table_mut().open_local_socket(pid, handle.index(), handle.generation())
+}
+
+pub fn open_shared_memory(
+    pid: u32,
+    handle: crate::shared_memory_service::SharedMemoryHandle,
+) -> Result<u32, ProcessError> {
+    process_table_mut().open_shared_memory(pid, handle.index(), handle.generation())
 }
 
 pub fn descriptor_object(pid: u32, fd: u32) -> Result<DescriptorObject, ProcessError> {
@@ -703,6 +736,10 @@ fn release_exited_process(pid: u32) -> i32 {
         .unwrap_or_else(|_| crate::fatal("process-table reap failed"));
     let mapping = take_user_mapping(pid)
         .unwrap_or_else(|| crate::fatal("reaped process has no user mapping"));
+    if let Some(handle) = mapping.shared_handle {
+        crate::shared_memory_service::release(handle)
+            .unwrap_or_else(|_| crate::fatal("reaped process shared mapping release failed"));
+    }
     let frames = crate::paging::release_user_address_space(crate::paging::UserAddressSpace {
         root: process.image.address_space_root,
         code_frames: mapping.code_frames,
@@ -1006,6 +1043,148 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             ));
             0
         }
+        LINUX_SYS_SENDMSG => {
+            let Ok(fd) = u32::try_from(frame.rdi) else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            if frame.rdx != 0 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            if !matches!(
+                descriptor_object(pid, fd),
+                Ok(DescriptorObject::LocalSocket { .. })
+            ) {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            }
+            let mut header = [0u8; LINUX_MSGHDR_SIZE];
+            if copy_from_user(pid, frame.rsi, &mut header).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let Some(name) = native_u64(&header, 0) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(name_length) = native_u32(&header, 8) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(iovec_address) = native_u64(&header, 16) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(iovec_count) = native_u64(&header, 24) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(control_address) = native_u64(&header, 32) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(control_length) = native_u64(&header, 40) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(message_flags) = native_u32(&header, 48) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            if name != 0
+                || name_length != 0
+                || iovec_count != 1
+                || iovec_address == 0
+                || control_address == 0
+                || control_length != LINUX_CMSG_SPACE_ONE_FD as u64
+                || message_flags != 0
+            {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let mut iovec = [0u8; LINUX_IOVEC_SIZE];
+            let mut control = [0u8; LINUX_CMSG_SPACE_ONE_FD];
+            if copy_from_user(pid, iovec_address, &mut iovec).is_none()
+                || copy_from_user(pid, control_address, &mut control).is_none()
+            {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let Some(input_address) = native_u64(&iovec, 0) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(input_length) = native_u64(&iovec, 8) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(cmsg_length) = native_u64(&control, 0) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(cmsg_level) = native_u32(&control, 8) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(cmsg_type) = native_u32(&control, 12) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Some(rights_fd) = native_u32(&control, 16) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Ok(requested) = usize::try_from(input_length) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            if requested == 0
+                || requested > PROCESS_SYSCALL_IO_CAPACITY
+                || cmsg_length != LINUX_CMSG_LEN_ONE_FD
+                || cmsg_level as i32 != LINUX_SOL_SOCKET
+                || cmsg_type as i32 != LINUX_SCM_RIGHTS
+            {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let DescriptorObject::SharedMemory { index, generation } =
+                (match descriptor_object(pid, rights_fd) {
+                    Ok(object) => object,
+                    Err(_) => {
+                        frame.rax = LINUX_EBADF as u64;
+                        return 0;
+                    }
+                })
+            else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let Some(user_pages) = user_page_count(input_address, requested) else {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            };
+            let mut request = WriteRequest {
+                pid,
+                fd,
+                input: [0; PROCESS_SYSCALL_IO_CAPACITY],
+                input_length: requested,
+                user_pages,
+                shared_rights: Some(
+                    crate::shared_memory_service::SharedMemoryHandle::from_parts(index, generation),
+                ),
+                sendmsg: true,
+            };
+            if copy_from_user(pid, input_address, &mut request.input[..requested]).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            suspend_io_syscall(pid, frame, PendingSyscall::Write(request));
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=46 sendmsg fd={fd} requested={requested} control=SCM_RIGHTS rights_fd={rights_fd} user_pages={user_pages} origin=cpl3"
+            ));
+            2
+        }
         LINUX_SYS_OPENAT => {
             if frame.rdi != LINUX_AT_FDCWD || frame.r10 != 0 {
                 frame.rax = LINUX_EINVAL as u64;
@@ -1116,6 +1295,8 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 input: [0; PROCESS_SYSCALL_IO_CAPACITY],
                 input_length: requested,
                 user_pages,
+                shared_rights: None,
+                sendmsg: false,
             };
             if copy_from_user(pid, frame.rsi, &mut request.input[..requested]).is_none() {
                 frame.rax = LINUX_EFAULT as u64;
@@ -1138,6 +1319,120 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd={fd} origin=cpl3"
             ));
             2
+        }
+        LINUX_SYS_MEMFD_CREATE => {
+            if frame.rsi != 0 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let mut name = [0u8; WAYLAND_MEMFD_NAME.len()];
+            if copy_from_user(pid, frame.rdi, &mut name).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            if name.as_slice() != WAYLAND_MEMFD_NAME {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let handle = match crate::shared_memory_service::create(pid) {
+                Ok(handle) => handle,
+                Err(_) => {
+                    frame.rax = LINUX_EMFILE as u64;
+                    return 0;
+                }
+            };
+            let fd = match open_shared_memory(pid, handle) {
+                Ok(fd) => fd,
+                Err(_) => {
+                    let _ = crate::shared_memory_service::release(handle);
+                    frame.rax = LINUX_EMFILE as u64;
+                    return 0;
+                }
+            };
+            frame.rax = u64::from(fd);
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=319 memfd_create name=slopos-wayland-shm flags=0 fd={fd} object={}:{} origin=cpl3",
+                handle.index(),
+                handle.generation()
+            ));
+            0
+        }
+        LINUX_SYS_FTRUNCATE => {
+            let Ok(fd) = u32::try_from(frame.rdi) else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let DescriptorObject::SharedMemory { index, generation } =
+                (match descriptor_object(pid, fd) {
+                    Ok(object) => object,
+                    Err(_) => {
+                        frame.rax = LINUX_EBADF as u64;
+                        return 0;
+                    }
+                })
+            else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let Ok(length) = usize::try_from(frame.rsi) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let handle =
+                crate::shared_memory_service::SharedMemoryHandle::from_parts(index, generation);
+            if crate::shared_memory_service::truncate(pid, handle, length).is_err() {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            frame.rax = 0;
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=77 ftruncate fd={fd} bytes={length} object={index}:{generation} origin=cpl3 result=0"
+            ));
+            0
+        }
+        LINUX_SYS_MMAP => {
+            let Ok(fd) = u32::try_from(frame.r8) else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            if frame.rdi != 0
+                || frame.rsi != PAGE_SIZE
+                || frame.rdx != LINUX_PROT_READ_WRITE
+                || frame.r10 != LINUX_MAP_SHARED
+                || frame.r9 != 0
+            {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let DescriptorObject::SharedMemory { index, generation } =
+                (match descriptor_object(pid, fd) {
+                    Ok(object) => object,
+                    Err(_) => {
+                        frame.rax = LINUX_EBADF as u64;
+                        return 0;
+                    }
+                })
+            else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let handle =
+                crate::shared_memory_service::SharedMemoryHandle::from_parts(index, generation);
+            let address = match map_shared_memory(pid, handle) {
+                Ok(address) => address,
+                Err(()) => {
+                    frame.rax = LINUX_EINVAL as u64;
+                    return 0;
+                }
+            };
+            let (physical, object_length) = crate::shared_memory_service::frame_and_length(handle)
+                .unwrap_or_else(|_| crate::fatal("mapped shared memory object disappeared"));
+            frame.rax = address;
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=9 mmap address={address:#x} bytes={} prot=read/write flags=MAP_SHARED fd={fd} offset=0 object={index}:{generation} object_bytes={object_length} physical={physical:#x} origin=cpl3",
+                frame.rsi
+            ));
+            0
         }
         LINUX_SYS_LSEEK => {
             let Ok(fd) = u32::try_from(frame.rdi) else {
@@ -1271,37 +1566,6 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 request.after_generation,
             ));
             2
-        }
-        WAYLAND_BACKING_STAGE_SYSCALL => {
-            let Ok(length) = usize::try_from(frame.rsi) else {
-                frame.rax = LINUX_EINVAL as u64;
-                return 0;
-            };
-            if pid != DESKTOP_PID
-                || length == 0
-                || length > WAYLAND_SURFACE_MAX_PIXEL_SIZE
-                || length % 4 != 0
-                || !validate_user_range(pid, frame.rdi, length, false)
-            {
-                frame.rax = LINUX_EINVAL as u64;
-                return 0;
-            }
-            // SAFETY: the IF-masked PID 2 syscall path exclusively owns this
-            // legacy-sized scratch area until stage_backing completes its copy.
-            let scratch = unsafe { crate::wayland_service::staging_buffer() };
-            if copy_from_user(pid, frame.rdi, &mut scratch[..length]).is_none() {
-                frame.rax = LINUX_EFAULT as u64;
-                return 0;
-            }
-            if crate::wayland_service::stage_backing(pid, &scratch[..length]).is_err() {
-                frame.rax = LINUX_EINVAL as u64;
-                return 0;
-            }
-            frame.rax = 0;
-            crate::serial::serialln(format_args!(
-                "SLOPOS-SYSCALL: pid={pid} abi=slopos-wayland-backing-bootstrap-v1 entry=syscall return=sysretq nr={WAYLAND_BACKING_STAGE_SYSCALL} pixel_bytes={length} future_transport=SCM_RIGHTS/mmap origin=cpl3 result=0"
-            ));
-            0
         }
         WAYLAND_SURFACE_SYSCALL => {
             if pid != DESKTOP_PID
@@ -1530,6 +1794,18 @@ fn copy_user_socket_path(
     Ok((path, path_length))
 }
 
+fn native_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    Some(u64::from_ne_bytes(
+        bytes.get(offset..offset.checked_add(8)?)?.try_into().ok()?,
+    ))
+}
+
+fn native_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_ne_bytes(
+        bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
 fn copy_from_user(pid: u32, address: u64, output: &mut [u8]) -> Option<()> {
     if !validate_user_range(pid, address, output.len(), false) {
         return None;
@@ -1625,6 +1901,15 @@ fn user_physical_chunk(
             maximum_length.min(segment_remaining).min(page_remaining),
         ));
     }
+    if (crate::paging::USER_SHARED_BASE..crate::paging::USER_SHARED_END).contains(&address) {
+        if mapping.shared_handle.is_none() || mapping.shared_frame == 0 {
+            return None;
+        }
+        let page_offset = address.checked_sub(crate::paging::USER_SHARED_BASE)?;
+        let physical = mapping.shared_frame.checked_add(page_offset)?;
+        let page_remaining = usize::try_from(PAGE_SIZE - page_offset).ok()?;
+        return Some((physical as *mut u8, maximum_length.min(page_remaining)));
+    }
     if address < mapping.stack_start || address >= mapping.stack_end {
         return None;
     }
@@ -1637,6 +1922,28 @@ fn user_physical_chunk(
         .checked_add(page_offset)?;
     let page_remaining = usize::try_from(PAGE_SIZE - page_offset).ok()?;
     Some((physical as *mut u8, maximum_length.min(page_remaining)))
+}
+
+fn map_shared_memory(
+    pid: u32,
+    handle: crate::shared_memory_service::SharedMemoryHandle,
+) -> Result<u64, ()> {
+    let (frame, _) = crate::shared_memory_service::frame_and_length(handle).map_err(|_| ())?;
+    let index = pid_index(pid);
+    // SAFETY: syscall entry is IF-masked and this process exclusively owns its
+    // mapping record while it is executing the mmap request.
+    let mapping = unsafe { (*USER_MAPPINGS.0.get())[index].as_mut().ok_or(())? };
+    if mapping.shared_handle.is_some() {
+        return Err(());
+    }
+    crate::shared_memory_service::retain(handle).map_err(|_| ())?;
+    if crate::paging::map_user_shared_page(mapping.table_frames[3], frame).is_err() {
+        let _ = crate::shared_memory_service::release(handle);
+        return Err(());
+    }
+    mapping.shared_handle = Some(handle);
+    mapping.shared_frame = frame;
+    Ok(crate::paging::USER_SHARED_BASE)
 }
 
 fn set_user_mapping(pid: u32, mapping: UserMapping) {

@@ -6,9 +6,6 @@ pub const DESKTOP_COMMIT_SYSCALL: u64 = 0x534c_0001;
 pub const DESKTOP_WAIT_SYSCALL: u64 = 0x534c_0002;
 pub const WAYLAND_SURFACE_SYSCALL: u64 = 0x534c_0003;
 pub const WAYLAND_EVENT_WAIT_SYSCALL: u64 = 0x534c_0004;
-/// Temporary inline backing-store staging until AF_UNIX `SCM_RIGHTS` and mmap
-/// can carry a real `wl_shm` file descriptor.
-pub const WAYLAND_BACKING_STAGE_SYSCALL: u64 = 0x534c_0005;
 pub const DESKTOP_PROTOCOL_MAGIC: u64 = 0x534c_4f50_4445_534b;
 pub const DESKTOP_PROTOCOL_VERSION: u16 = 1;
 pub const WAYLAND_SURFACE_MAGIC: u64 = 0x534c_4f50_574c_5355;

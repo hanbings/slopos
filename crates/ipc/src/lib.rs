@@ -24,6 +24,31 @@ impl SocketHandle {
     }
 }
 
+/// Opaque generation-checked object transferred beside stream bytes.
+///
+/// The transport deliberately does not interpret the object. The kernel VFS
+/// validates it as a shareable descriptor before enqueueing it, mirroring the
+/// separation between Unix `SCM_RIGHTS` and the file type being transferred.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AncillaryRights {
+    object: u16,
+    generation: u16,
+}
+
+impl AncillaryRights {
+    pub const fn new(object: u16, generation: u16) -> Self {
+        Self { object, generation }
+    }
+
+    pub const fn object(self) -> u16 {
+        self.object
+    }
+
+    pub const fn generation(self) -> u16 {
+        self.generation
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SocketError {
     TableFull,
@@ -104,6 +129,7 @@ struct SocketSlot<const BACKLOG: usize, const BYTES: usize> {
     peer: Option<usize>,
     peer_closed: bool,
     receive: ByteRing<BYTES>,
+    rights: Option<AncillaryRights>,
     pending: [Option<usize>; BACKLOG],
     pending_head: usize,
     pending_length: usize,
@@ -118,6 +144,7 @@ impl<const BACKLOG: usize, const BYTES: usize> SocketSlot<BACKLOG, BYTES> {
         peer: None,
         peer_closed: false,
         receive: ByteRing::EMPTY,
+        rights: None,
         pending: [None; BACKLOG],
         pending_head: 0,
         pending_length: 0,
@@ -278,7 +305,63 @@ impl<const SOCKETS: usize, const BACKLOG: usize, const BYTES: usize>
         Ok(count)
     }
 
+    /// Atomically enqueues one rights object with a complete byte batch.
+    ///
+    /// A single receive endpoint can hold one not-yet-delivered ancillary
+    /// object. Unlike ordinary stream writes, this operation never performs a
+    /// partial write because the rights object must remain attached to the
+    /// first byte of this batch.
+    pub fn send_with_rights(
+        &mut self,
+        socket: SocketHandle,
+        input: &[u8],
+        rights: AncillaryRights,
+    ) -> Result<usize, SocketError> {
+        let index = self.index(socket)?;
+        if self.slots[index].state != SocketState::Connected || input.is_empty() {
+            return Err(SocketError::InvalidState);
+        }
+        let peer = self.slots[index].peer.ok_or(SocketError::BrokenPipe)?;
+        if self.slots[index].peer_closed || self.slots[peer].state != SocketState::Connected {
+            return Err(SocketError::BrokenPipe);
+        }
+        if self.slots[peer].rights.is_some()
+            || self.slots[peer].receive.length != 0
+            || input.len() > self.slots[peer].receive.available()
+        {
+            return Err(SocketError::WouldBlock);
+        }
+        let count = self.slots[peer].receive.push(input);
+        if count != input.len() {
+            return Err(SocketError::WouldBlock);
+        }
+        self.slots[peer].rights = Some(rights);
+        Ok(count)
+    }
+
     pub fn recv(&mut self, socket: SocketHandle, output: &mut [u8]) -> Result<usize, SocketError> {
+        let slot = self.slot_mut(socket)?;
+        if slot.state != SocketState::Connected {
+            return Err(SocketError::InvalidState);
+        }
+        // The transport cannot silently discard an opaque object because its
+        // owner must release the corresponding reference. Require the caller
+        // to use recv_with_rights for the batch that carries it.
+        if slot.rights.is_some() {
+            return Err(SocketError::InvalidState);
+        }
+        let count = slot.receive.pop(output);
+        if count == 0 && !output.is_empty() && !slot.peer_closed {
+            return Err(SocketError::WouldBlock);
+        }
+        Ok(count)
+    }
+
+    pub fn recv_with_rights(
+        &mut self,
+        socket: SocketHandle,
+        output: &mut [u8],
+    ) -> Result<(usize, Option<AncillaryRights>), SocketError> {
         let slot = self.slot_mut(socket)?;
         if slot.state != SocketState::Connected {
             return Err(SocketError::InvalidState);
@@ -287,7 +370,15 @@ impl<const SOCKETS: usize, const BACKLOG: usize, const BYTES: usize>
         if count == 0 && !output.is_empty() && !slot.peer_closed {
             return Err(SocketError::WouldBlock);
         }
-        Ok(count)
+        let rights = (count != 0).then(|| slot.rights.take()).flatten();
+        Ok((count, rights))
+    }
+
+    pub fn take_rights(
+        &mut self,
+        socket: SocketHandle,
+    ) -> Result<Option<AncillaryRights>, SocketError> {
+        Ok(self.slot_mut(socket)?.rights.take())
     }
 
     pub fn readiness(&self, socket: SocketHandle) -> Result<Readiness, SocketError> {
@@ -379,7 +470,7 @@ mod tests {
         let mut table = Sockets::new();
         let (_, client, server) = connection(&mut table);
         assert_eq!(table.send(client, b"request").unwrap(), 7);
-        assert_eq!(table.readiness(server).unwrap().readable, true);
+        assert!(table.readiness(server).unwrap().readable);
         let mut bytes = [0; 8];
         assert_eq!(table.recv(server, &mut bytes[..3]).unwrap(), 3);
         assert_eq!(&bytes[..3], b"req");
@@ -388,6 +479,37 @@ mod tests {
         assert_eq!(table.send(server, b"event").unwrap(), 5);
         assert_eq!(table.recv(client, &mut bytes).unwrap(), 5);
         assert_eq!(&bytes[..5], b"event");
+    }
+
+    #[test]
+    fn transfers_one_generation_checked_rights_object_with_stream_bytes() {
+        let mut table = Sockets::new();
+        let (_, client, server) = connection(&mut table);
+        let rights = AncillaryRights::new(4, 9);
+        assert_eq!(table.send(client, b"prefix"), Ok(6));
+        assert_eq!(
+            table.send_with_rights(client, b"pool", rights),
+            Err(SocketError::WouldBlock)
+        );
+        let mut bytes = [0; 8];
+        assert_eq!(table.recv(server, &mut bytes), Ok(6));
+        assert_eq!(&bytes[..6], b"prefix");
+        assert_eq!(table.send_with_rights(client, b"pool", rights), Ok(4));
+        assert_eq!(
+            table.recv(server, &mut bytes),
+            Err(SocketError::InvalidState)
+        );
+        assert_eq!(
+            table.send_with_rights(client, b"next", rights),
+            Err(SocketError::WouldBlock)
+        );
+        assert_eq!(
+            table.recv_with_rights(server, &mut bytes),
+            Ok((4, Some(rights)))
+        );
+        assert_eq!(&bytes[..4], b"pool");
+        assert_eq!(table.take_rights(server), Ok(None));
+        assert_eq!(table.send_with_rights(client, b"next", rights), Ok(4));
     }
 
     #[test]
@@ -408,10 +530,10 @@ mod tests {
         let server = table.accept(listener).unwrap();
         assert_eq!(table.send(first, b"123456789").unwrap(), 8);
         assert_eq!(table.send(first, b"x"), Err(SocketError::WouldBlock));
-        assert_eq!(table.readiness(first).unwrap().writable, false);
+        assert!(!table.readiness(first).unwrap().writable);
         let mut byte = [0];
         table.recv(server, &mut byte).unwrap();
-        assert_eq!(table.readiness(first).unwrap().writable, true);
+        assert!(table.readiness(first).unwrap().writable);
     }
 
     #[test]

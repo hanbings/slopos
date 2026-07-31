@@ -9,8 +9,7 @@ use core::panic::PanicInfo;
 use slopos_desktop_protocol::{
     COMMIT_SIZE, CONFIG_HASH_OFFSET, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit,
     DesktopServiceEvent, EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WALLPAPER_AURORA,
-    WAYLAND_BACKING_STAGE_SYSCALL, WAYLAND_EVENT_MAX_WIRE_SIZE, WAYLAND_SURFACE_MAX_PIXEL_SIZE,
-    WAYLAND_SURFACE_MAX_WIRE_SIZE, config_hash_extend,
+    WAYLAND_EVENT_MAX_WIRE_SIZE, WAYLAND_SURFACE_MAX_WIRE_SIZE, config_hash_extend,
 };
 use slopos_wayland::{
     ArgumentReader, CORE_GLOBALS, DISPLAY_OBJECT_ID, Frame, MessageBuilder, WireError,
@@ -34,17 +33,27 @@ const LINUX_AT_EXECFN: u64 = 31;
 const SYS_READ: u64 = 0;
 const SYS_WRITE: u64 = 1;
 const SYS_CLOSE: u64 = 3;
+const SYS_MMAP: u64 = 9;
 const SYS_SCHED_YIELD: u64 = 24;
 const SYS_SOCKET: u64 = 41;
 const SYS_CONNECT: u64 = 42;
+const SYS_SENDMSG: u64 = 46;
 const SYS_EXIT: u64 = 60;
+const SYS_FTRUNCATE: u64 = 77;
 const SYS_OPENAT: u64 = 257;
+const SYS_MEMFD_CREATE: u64 = 319;
 const AT_FDCWD: i64 = -100;
 const O_RDONLY: u64 = 0;
 const STDOUT: u64 = 1;
 const FIRST_DYNAMIC_FD: i64 = 3;
 const AF_UNIX: u64 = 1;
 const SOCK_STREAM: u64 = 1;
+const PROT_READ_WRITE: u64 = 3;
+const MAP_SHARED: u64 = 1;
+const SOL_SOCKET: i32 = 1;
+const SCM_RIGHTS: i32 = 1;
+const SHARED_MAPPING_ADDRESS: u64 = USER_STACK_TOP;
+const SHARED_MAPPING_LENGTH: usize = 4096;
 const PREEMPTION_TSC_WINDOW: u64 = 100_000_000;
 const CONFIG_READ_CAPACITY: usize = 256;
 const WAYBAR_FILE_CAPACITY: usize = 4096;
@@ -66,6 +75,7 @@ static MESSAGE: &[u8; 28] = b"SLOPOS desktop policy ready\n";
 static WAYBAR_PATH: &[u8; 25] = b"/etc/slopos/waybar.jsonc\0";
 static SWWW_PATH: &[u8; 21] = b"/etc/slopos/swww.env\0";
 static WAYLAND_SOCKET_PATH: &[u8; 21] = b"/run/slopos/wayland-0";
+static WAYLAND_MEMFD_NAME: &[u8; 19] = b"slopos-wayland-shm\0";
 static EXPECTED_ARGV: [&[u8]; 2] = [b"/sbin/slop-shell", b"--session"];
 static EXPECTED_ENVIRONMENT: [&[u8]; INITIAL_ENVC] = [
     b"SLOPOS_ROLE=desktop-shell",
@@ -73,6 +83,38 @@ static EXPECTED_ENVIRONMENT: [&[u8]; INITIAL_ENVC] = [
     b"WAYLAND_DISPLAY=wayland-0",
     b"SLOPOS_WAYBAR_OUTPUT=SLOPOS-1",
 ];
+
+#[repr(C)]
+struct IoVec {
+    base: *const u8,
+    length: usize,
+}
+
+#[repr(C)]
+struct MessageHeader {
+    name: *const u8,
+    name_length: u32,
+    name_padding: u32,
+    vectors: *const IoVec,
+    vector_count: usize,
+    control: *const RightsControl,
+    control_length: usize,
+    flags: i32,
+    flags_padding: u32,
+}
+
+#[repr(C, align(8))]
+struct RightsControl {
+    length: usize,
+    level: i32,
+    kind: i32,
+    fd: i32,
+    padding: u32,
+}
+
+const _: () = assert!(size_of::<IoVec>() == 16);
+const _: () = assert!(size_of::<MessageHeader>() == 56);
+const _: () = assert!(size_of::<RightsControl>() == 24);
 
 global_asm!(
     r#"
@@ -174,10 +216,14 @@ fn submit_wayland_surface(socket: i64) {
     wire_length = build_initial_surface_wire(&mut wire).unwrap_or_else(|| exit(17));
     send_wayland_wire(socket, &wire[..wire_length]);
     let configure_serial = wait_configure(socket).unwrap_or_else(|| exit(18));
-    submit_configured_surface(socket, configure_serial);
+    let (backing_fd, pixels) = create_wayland_backing();
+    submit_configured_surface(socket, configure_serial, backing_fd, pixels);
     wait_presented(socket, 1).unwrap_or_else(|| exit(19));
-    submit_repeated_surface(socket);
+    submit_repeated_surface(socket, pixels);
     wait_presented(socket, 2).unwrap_or_else(|| exit(20));
+    if syscall1(SYS_CLOSE, backing_fd as u64) != 0 {
+        exit(28);
+    }
 }
 
 fn send_wayland_wire(socket: i64, wire: &[u8]) {
@@ -192,7 +238,68 @@ fn send_wayland_wire(socket: i64, wire: &[u8]) {
     }
 }
 
-fn submit_configured_surface(socket: i64, configure_serial: u32) {
+fn send_wayland_wire_with_fd(socket: i64, wire: &[u8], fd: i64) {
+    let vector = IoVec {
+        base: wire.as_ptr(),
+        length: wire.len(),
+    };
+    let control = RightsControl {
+        length: 20,
+        level: SOL_SOCKET,
+        kind: SCM_RIGHTS,
+        fd: fd as i32,
+        padding: 0,
+    };
+    let header = MessageHeader {
+        name: core::ptr::null(),
+        name_length: 0,
+        name_padding: 0,
+        vectors: &raw const vector,
+        vector_count: 1,
+        control: &raw const control,
+        control_length: size_of::<RightsControl>(),
+        flags: 0,
+        flags_padding: 0,
+    };
+    if syscall3(SYS_SENDMSG, socket as u64, (&raw const header) as u64, 0) != wire.len() as i64 {
+        exit(27);
+    }
+}
+
+fn create_wayland_backing() -> (i64, &'static mut [u8]) {
+    let fd = syscall2(SYS_MEMFD_CREATE, WAYLAND_MEMFD_NAME.as_ptr() as u64, 0);
+    if fd != FIRST_DYNAMIC_FD + 1 {
+        exit(24);
+    }
+    if syscall2(SYS_FTRUNCATE, fd as u64, SURFACE_PIXEL_LENGTH as u64) != 0 {
+        exit(25);
+    }
+    let address = syscall6(
+        SYS_MMAP,
+        0,
+        SHARED_MAPPING_LENGTH as u64,
+        PROT_READ_WRITE,
+        MAP_SHARED,
+        fd as u64,
+        0,
+    );
+    if address != SHARED_MAPPING_ADDRESS as i64 {
+        exit(26);
+    }
+    // SAFETY: mmap installed one writable shared page at this fixed address;
+    // the memfd was truncated to exactly the surface backing length.
+    let pixels = unsafe {
+        core::slice::from_raw_parts_mut(SHARED_MAPPING_ADDRESS as *mut u8, SURFACE_PIXEL_LENGTH)
+    };
+    (fd, pixels)
+}
+
+fn submit_configured_surface(
+    socket: i64,
+    configure_serial: u32,
+    backing_fd: i64,
+    pixels: &mut [u8],
+) {
     let mut wire = [0u8; WAYLAND_SURFACE_MAX_WIRE_SIZE];
     let wire_length = build_configured_surface_wire(
         &mut wire,
@@ -202,17 +309,21 @@ fn submit_configured_surface(socket: i64, configure_serial: u32) {
         SURFACE_PIXEL_LENGTH as i32,
     )
     .unwrap_or_else(|| exit(22));
-    submit_pixel_surface(socket, &wire[..wire_length], false);
+    fill_surface_pixels(pixels, false);
+    send_wayland_wire_with_fd(socket, &wire[..wire_length], backing_fd);
 }
 
-fn submit_repeated_surface(socket: i64) {
+fn submit_repeated_surface(socket: i64, pixels: &mut [u8]) {
     let mut wire = [0u8; WAYLAND_SURFACE_MAX_WIRE_SIZE];
     let wire_length = build_repeated_surface_wire(&mut wire).unwrap_or_else(|| exit(23));
-    submit_pixel_surface(socket, &wire[..wire_length], true);
+    fill_surface_pixels(pixels, true);
+    send_wayland_wire(socket, &wire[..wire_length]);
 }
 
-fn submit_pixel_surface(socket: i64, wire: &[u8], second_frame: bool) {
-    let mut pixels = [0u8; WAYLAND_SURFACE_MAX_PIXEL_SIZE];
+fn fill_surface_pixels(pixels: &mut [u8], second_frame: bool) {
+    if pixels.len() != SURFACE_PIXEL_LENGTH {
+        exit(29);
+    }
     for y in 0..SURFACE_HEIGHT {
         for x in 0..SURFACE_WIDTH {
             let color: u32 =
@@ -247,15 +358,6 @@ fn submit_pixel_surface(socket: i64, wire: &[u8], second_frame: bool) {
             pixels[offset..offset + 4].copy_from_slice(&color.to_le_bytes());
         }
     }
-    if syscall2(
-        WAYLAND_BACKING_STAGE_SYSCALL,
-        pixels.as_ptr() as u64,
-        SURFACE_PIXEL_LENGTH as u64,
-    ) != 0
-    {
-        exit(24);
-    }
-    send_wayland_wire(socket, wire);
 }
 
 fn build_initial_surface_wire(wire: &mut [u8]) -> Option<usize> {
@@ -462,10 +564,10 @@ fn wait_presented(socket: i64, callback_data: u32) -> Option<()> {
     Some(())
 }
 
-fn receive_wayland_event<'a>(
+fn receive_wayland_event(
     socket: i64,
-    destination: &'a mut [u8; WAYLAND_EVENT_MAX_WIRE_SIZE],
-) -> Option<&'a [u8]> {
+    destination: &mut [u8; WAYLAND_EVENT_MAX_WIRE_SIZE],
+) -> Option<&[u8]> {
     let length = syscall3(
         SYS_READ,
         socket as u64,
@@ -732,6 +834,34 @@ fn syscall4(number: u64, first: u64, second: u64, third: u64, fourth: u64) -> i6
             in("rsi") second,
             in("rdx") third,
             in("r10") fourth,
+            out("rcx") _,
+            out("r11") _,
+        );
+    }
+    result
+}
+
+fn syscall6(
+    number: u64,
+    first: u64,
+    second: u64,
+    third: u64,
+    fourth: u64,
+    fifth: u64,
+    sixth: u64,
+) -> i64 {
+    let result: i64;
+    // SAFETY: SlopOS configures the Linux x86-64 register convention.
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") number => result,
+            in("rdi") first,
+            in("rsi") second,
+            in("rdx") third,
+            in("r10") fourth,
+            in("r8") fifth,
+            in("r9") sixth,
             out("rcx") _,
             out("r11") _,
         );

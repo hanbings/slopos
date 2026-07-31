@@ -1463,8 +1463,8 @@ enum SurfacePhase {
 /// commit. After presentation it permits further attach/damage/frame/commit
 /// cycles against the configured buffer and releases each callback ID for
 /// reuse. Transport of the one file descriptor and its storage is deliberately
-/// left to the caller; SlopOS currently supplies those through its versioned
-/// bootstrap syscall rather than a Unix-domain socket with `SCM_RIGHTS`.
+/// left to the caller; the descriptor is required with `wl_shm.create_pool`,
+/// while later commits reuse the already imported pool without another FD.
 #[derive(Clone)]
 pub struct SingleSurfaceSession<const OBJECTS: usize> {
     connection: Connection<OBJECTS>,
@@ -1537,10 +1537,10 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
     ) -> Result<SurfaceSessionEvent, SurfaceError> {
         if wire.is_empty()
             || matches!(self.phase, SurfacePhase::Committed)
-            || (matches!(self.phase, SurfacePhase::AwaitConfiguredCommit)
-                != (inline_file_descriptor.is_some() && pixel_length != 0))
+            || (matches!(self.phase, SurfacePhase::AwaitConfiguredCommit) != (pixel_length != 0))
             || (!matches!(self.phase, SurfacePhase::AwaitConfiguredCommit)
                 && (inline_file_descriptor.is_some() || pixel_length != 0))
+            || (self.pool.is_some() && inline_file_descriptor.is_some())
         {
             return Err(SurfaceError::UnexpectedRequest);
         }
@@ -2368,9 +2368,8 @@ mod tests {
         );
 
         let (wire, length) = repeated_surface_batch(true);
-        let SurfaceSessionEvent::Committed(surface) = session
-            .accept_batch(&wire[..length], Some(0x534c), 3_072)
-            .unwrap()
+        let SurfaceSessionEvent::Committed(surface) =
+            session.accept_batch(&wire[..length], None, 3_072).unwrap()
         else {
             panic!("repeated configured commit did not publish a surface");
         };
@@ -2435,7 +2434,11 @@ mod tests {
         session.present().unwrap();
         let (wire, length) = repeated_surface_batch(true);
         assert_eq!(
-            session.accept_batch(&wire[..length], Some(0x534c), 3_068),
+            session.accept_batch(&wire[..length], Some(0x534c), 3_072),
+            Err(SurfaceError::UnexpectedRequest)
+        );
+        assert_eq!(
+            session.accept_batch(&wire[..length], None, 3_068),
             Err(SurfaceError::InvalidBuffer)
         );
     }

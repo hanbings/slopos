@@ -21,6 +21,7 @@ mod pci;
 mod process;
 mod ps2;
 mod serial;
+mod shared_memory_service;
 mod timer;
 mod virtio;
 mod wallpaper_file;

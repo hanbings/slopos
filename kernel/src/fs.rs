@@ -972,6 +972,9 @@ async fn complete_process_read(
             return crate::process::resume_probe(pid, bytes as i64, Some(&output[..bytes]));
         }
         Ok(DescriptorObject::File(_)) => {}
+        Ok(DescriptorObject::SharedMemory { .. }) => {
+            return crate::process::resume_probe(pid, LINUX_EBADF, None);
+        }
         Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
     }
     let process_index = process_index(pid)
@@ -1024,12 +1027,31 @@ async fn complete_process_write(
     match crate::process::descriptor_object(pid, request.fd) {
         Ok(DescriptorObject::LocalSocket { index, generation }) => {
             let handle = slopos_ipc::SocketHandle::from_parts(index, generation);
-            let bytes = match crate::local_socket_service::send(pid, handle, request.input()) {
+            let result = match request.shared_rights() {
+                Some(shared) if request.is_sendmsg() => {
+                    crate::local_socket_service::send_with_rights(
+                        pid,
+                        handle,
+                        request.input(),
+                        shared,
+                    )
+                }
+                None if !request.is_sendmsg() => {
+                    crate::local_socket_service::send(pid, handle, request.input())
+                }
+                _ => return crate::process::resume_probe(pid, LINUX_EBADF, None),
+            };
+            let bytes = match result {
                 Ok(bytes) => bytes,
                 Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
             };
+            let operation = if request.is_sendmsg() {
+                "sendmsg/SCM_RIGHTS"
+            } else {
+                "write"
+            };
             crate::serial::serialln(format_args!(
-                "SLOPOS-IPC: process write complete pid={pid} fd={} family=AF_UNIX type=SOCK_STREAM requested={} bytes={bytes} user_pages={} async=true",
+                "SLOPOS-IPC: process write complete pid={pid} fd={} family=AF_UNIX type=SOCK_STREAM operation={operation} requested={} bytes={bytes} user_pages={} async=true",
                 request.fd,
                 request.input().len(),
                 request.user_pages()
@@ -1037,6 +1059,9 @@ async fn complete_process_write(
             return crate::process::resume_probe(pid, bytes as i64, None);
         }
         Ok(DescriptorObject::File(_)) => {}
+        Ok(DescriptorObject::SharedMemory { .. }) => {
+            return crate::process::resume_probe(pid, LINUX_EBADF, None);
+        }
         Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
     }
     let process_index = process_index(pid)
@@ -1091,6 +1116,20 @@ fn complete_process_close(
             ));
             return crate::process::resume_probe(pid, 0, None);
         }
+        Ok(DescriptorObject::SharedMemory { index, generation }) => {
+            let handle =
+                crate::shared_memory_service::SharedMemoryHandle::from_parts(index, generation);
+            if crate::shared_memory_service::release(handle).is_err()
+                || crate::process::close_fd(pid, request.fd).is_err()
+            {
+                return crate::process::resume_probe(pid, LINUX_EBADF, None);
+            }
+            crate::serial::serialln(format_args!(
+                "SLOPOS-IPC: process close complete pid={pid} fd={} object=memfd shared={index}:{generation} async=false",
+                request.fd
+            ));
+            return crate::process::resume_probe(pid, 0, None);
+        }
         Ok(DescriptorObject::File(_)) => {}
         Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
     }
@@ -1122,12 +1161,25 @@ fn release_exited_process_files(device: &BlockDevice, open_files: &mut ProcessOp
     let object_count = crate::process::descriptor_objects(pid, &mut objects)
         .unwrap_or_else(|_| device.fail("exited process descriptor snapshot failed"));
     let mut socket_objects = 0usize;
+    let mut shared_objects = 0usize;
     for object in objects[..object_count].iter().flatten() {
-        if let DescriptorObject::LocalSocket { index, generation } = object {
-            let handle = slopos_ipc::SocketHandle::from_parts(*index, *generation);
-            crate::local_socket_service::close(pid, handle)
-                .unwrap_or_else(|_| device.fail("exited process socket cleanup failed"));
-            socket_objects += 1;
+        match object {
+            DescriptorObject::LocalSocket { index, generation } => {
+                let handle = slopos_ipc::SocketHandle::from_parts(*index, *generation);
+                crate::local_socket_service::close(pid, handle)
+                    .unwrap_or_else(|_| device.fail("exited process socket cleanup failed"));
+                socket_objects += 1;
+            }
+            DescriptorObject::SharedMemory { index, generation } => {
+                let handle = crate::shared_memory_service::SharedMemoryHandle::from_parts(
+                    *index,
+                    *generation,
+                );
+                crate::shared_memory_service::release(handle)
+                    .unwrap_or_else(|_| device.fail("exited process memfd cleanup failed"));
+                shared_objects += 1;
+            }
+            DescriptorObject::File(_) => {}
         }
     }
     let descriptors = crate::process::close_all_files(pid)
@@ -1138,11 +1190,11 @@ fn release_exited_process_files(device: &BlockDevice, open_files: &mut ProcessOp
             backing_objects += 1;
         }
     }
-    if descriptors != backing_objects + socket_objects {
+    if descriptors != backing_objects + socket_objects + shared_objects {
         device.fail("exited process descriptor/backing cleanup diverged");
     }
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={pid} exit resources released descriptors={descriptors} backing_objects={backing_objects} socket_objects={socket_objects} address_space_release=pending-reap"
+        "SLOPOS-PROCESS: pid={pid} exit resources released descriptors={descriptors} backing_objects={backing_objects} socket_objects={socket_objects} shared_objects={shared_objects} address_space_release=pending-reap"
     ));
 }
 

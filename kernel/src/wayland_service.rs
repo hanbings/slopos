@@ -7,8 +7,8 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use core::task::{Context, Poll};
 use slopos_desktop_protocol::{
     WAYLAND_EVENT_CONFIGURE, WAYLAND_EVENT_MAX_WIRE_SIZE, WAYLAND_EVENT_PRESENTED,
-    WAYLAND_EVENT_REGISTRY, WAYLAND_INLINE_SHM_FD, WAYLAND_SURFACE_MAX_PIXEL_SIZE,
-    WAYLAND_SURFACE_MAX_SIZE, WaylandServerEvent, WaylandSurfaceCommit,
+    WAYLAND_EVENT_REGISTRY, WAYLAND_SURFACE_MAX_PIXEL_SIZE, WAYLAND_SURFACE_MAX_SIZE,
+    WaylandServerEvent, WaylandSurfaceCommit,
 };
 use slopos_wayland::{
     CORE_GLOBALS, CommittedSurface, SingleSurfaceSession, SurfaceSessionEvent,
@@ -20,6 +20,7 @@ const DESKTOP_SERVICE_PID: u32 = 2;
 const SURFACE_BANKS: usize = 2;
 const NO_BANK: usize = usize::MAX;
 const CONFIGURE_SERIAL: u32 = 1;
+const SERVER_SHM_FD: i32 = 1;
 
 struct SurfaceBank {
     metadata: Option<CommittedSurface>,
@@ -60,16 +61,6 @@ struct SharedStaging(UnsafeCell<[u8; WAYLAND_SURFACE_MAX_SIZE]>);
 unsafe impl Sync for SharedStaging {}
 
 static STAGING: SharedStaging = SharedStaging(UnsafeCell::new([0; WAYLAND_SURFACE_MAX_SIZE]));
-
-struct SharedBacking(UnsafeCell<[u8; WAYLAND_SURFACE_MAX_PIXEL_SIZE]>);
-
-// SAFETY: PID 2 is the sole staging writer and cannot issue another syscall
-// until the current IF-masked entry returns. The subsequent socket read
-// consumes the immutable staged bytes before publishing the surface.
-unsafe impl Sync for SharedBacking {}
-
-static BACKING: SharedBacking = SharedBacking(UnsafeCell::new([0; WAYLAND_SURFACE_MAX_PIXEL_SIZE]));
-static BACKING_LENGTH: AtomicUsize = AtomicUsize::new(0);
 
 struct SharedSession(UnsafeCell<Option<SingleSurfaceSession<16>>>);
 
@@ -140,25 +131,6 @@ pub unsafe fn staging_buffer() -> &'static mut [u8; WAYLAND_SURFACE_MAX_SIZE] {
     unsafe { &mut *STAGING.0.get() }
 }
 
-pub fn stage_backing(pid: u32, pixels: &[u8]) -> Result<(), WaylandServiceError> {
-    if pid != DESKTOP_SERVICE_PID {
-        return Err(WaylandServiceError::PermissionDenied);
-    }
-    if pixels.is_empty()
-        || pixels.len() > WAYLAND_SURFACE_MAX_PIXEL_SIZE
-        || pixels.len() % 4 != 0
-        || BACKING_LENGTH.load(Ordering::Acquire) != 0
-    {
-        return Err(WaylandServiceError::InvalidProtocol);
-    }
-    // SAFETY: PID 2 owns the staging slot and syscall entry is serialized.
-    let backing = unsafe { &mut *BACKING.0.get() };
-    backing[..pixels.len()].copy_from_slice(pixels);
-    backing[pixels.len()..].fill(0);
-    BACKING_LENGTH.store(pixels.len(), Ordering::Release);
-    Ok(())
-}
-
 pub fn submit(
     pid: u32,
     commit: WaylandSurfaceCommit<'_>,
@@ -166,24 +138,22 @@ pub fn submit(
     commit
         .validate()
         .map_err(|_| WaylandServiceError::InvalidProtocol)?;
-    submit_parts(pid, commit.wire, commit.pixels)
+    submit_parts(pid, commit.wire, !commit.pixels.is_empty(), commit.pixels)
 }
 
-pub fn submit_wire(pid: u32, wire: &[u8]) -> Result<WaylandSubmission, WaylandServiceError> {
-    let pixel_length = BACKING_LENGTH.load(Ordering::Acquire);
-    // SAFETY: acquire observes the completed PID 2 staging copy; it remains
-    // immutable until this synchronous submission returns.
-    let pixels = unsafe { &(&*BACKING.0.get())[..pixel_length] };
-    let submission = submit_parts(pid, wire, pixels)?;
-    if matches!(submission, WaylandSubmission::Surface { .. }) {
-        BACKING_LENGTH.store(0, Ordering::Release);
-    }
-    Ok(submission)
+pub fn submit_wire(
+    pid: u32,
+    wire: &[u8],
+    descriptor_received: bool,
+    pixels: &[u8],
+) -> Result<WaylandSubmission, WaylandServiceError> {
+    submit_parts(pid, wire, descriptor_received, pixels)
 }
 
 fn submit_parts(
     pid: u32,
     wire: &[u8],
+    descriptor_received: bool,
     pixels: &[u8],
 ) -> Result<WaylandSubmission, WaylandServiceError> {
     if pid != DESKTOP_SERVICE_PID {
@@ -208,7 +178,7 @@ fn submit_parts(
         None => SingleSurfaceSession::new(CONFIGURE_SERIAL)
             .map_err(|_| WaylandServiceError::InvalidProtocol)?,
     };
-    let descriptor = (!pixels.is_empty()).then_some(WAYLAND_INLINE_SHM_FD);
+    let descriptor = descriptor_received.then_some(SERVER_SHM_FD);
     let progress = candidate
         .accept_batch(wire, descriptor, pixels.len())
         .map_err(|_| WaylandServiceError::InvalidProtocol)?;
@@ -304,7 +274,7 @@ fn publish_surface(
     GENERATION.store(next_generation, Ordering::Release);
     crate::executor::wake_task(crate::executor::INPUT_TASK);
     crate::serial::serialln(format_args!(
-        "SLOPOS-WAYLAND-SERVER: commit accepted pid={pid} generation={next_generation} transport=AF_UNIX/SOCK_STREAM backing=inline-bootstrap-v1 lifecycle={lifecycle} objects=registry/compositor/shm/xdg_toplevel surface={} buffer={} callback={} geometry={}x{} stride={} format={} title=\"{}\" app_id={} wire_bytes={} pixel_bytes={}",
+        "SLOPOS-WAYLAND-SERVER: commit accepted pid={pid} generation={next_generation} transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle={lifecycle} objects=registry/compositor/shm/xdg_toplevel surface={} buffer={} callback={} geometry={}x{} stride={} format={} title=\"{}\" app_id={} wire_bytes={} pixel_bytes={}",
         metadata.surface,
         metadata.buffer,
         metadata.frame_callback,

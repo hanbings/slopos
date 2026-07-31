@@ -18,6 +18,8 @@ pub const USER_CODE_PAGES: usize = 3;
 pub const USER_STACK_PAGES: usize = 3;
 pub const USER_STACK_BASE: u64 = USER_CODE_BASE + USER_CODE_PAGES as u64 * PAGE_SIZE;
 pub const USER_STACK_TOP: u64 = USER_STACK_BASE + USER_STACK_PAGES as u64 * PAGE_SIZE;
+pub const USER_SHARED_BASE: u64 = USER_STACK_TOP;
+pub const USER_SHARED_END: u64 = USER_SHARED_BASE + PAGE_SIZE;
 
 pub struct PagingStats {
     pub pml4: u64,
@@ -205,6 +207,32 @@ pub fn release_user_address_space(address_space: UserAddressSpace) -> usize {
         released += 1;
     }
     released
+}
+
+pub fn map_user_shared_page(user_table: u64, frame: u64) -> Result<(), ()> {
+    if user_table & (PAGE_SIZE - 1) != 0 || frame & (PAGE_SIZE - 1) != 0 {
+        return Err(());
+    }
+    let index = ((USER_SHARED_BASE >> 12) & 0x1ff) as usize;
+    if get_entry(user_table, index) & PRESENT != 0 {
+        return Err(());
+    }
+    set_entry(
+        user_table,
+        index,
+        frame | PRESENT | WRITABLE | USER_ACCESSIBLE,
+    );
+    // SAFETY: this virtual page belongs to the active process. Invalidating a
+    // previously non-present translation makes the new shared mapping visible
+    // before returning to CPL3.
+    unsafe {
+        asm!(
+            "invlpg [{address}]",
+            address = in(reg) USER_SHARED_BASE,
+            options(nostack, preserves_flags)
+        )
+    };
+    Ok(())
 }
 
 fn current_root() -> u64 {
