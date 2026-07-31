@@ -25,9 +25,9 @@ pub use wallpaper::{
 };
 pub use waybar::{
     BarButton, BarConfigError, BarFormatError, BarFormatValue, BarLayer, BarMode, BarModuleConfig,
-    BarModuleConfigList, BarModuleList, BarPosition, BarText, MAX_BAR_MODE_NAME, MAX_BAR_MODES,
-    MAX_BAR_MODULE_CONFIGS, MAX_BAR_MODULES, MAX_BAR_TEXT, WaybarConfig, format_bar_text,
-    parse_waybar_config,
+    BarModuleConfigList, BarModuleList, BarPosition, BarSignal, BarSignalAction, BarText,
+    MAX_BAR_MODE_NAME, MAX_BAR_MODES, MAX_BAR_MODULE_CONFIGS, MAX_BAR_MODULES, MAX_BAR_TEXT,
+    WaybarConfig, format_bar_text, parse_waybar_config,
 };
 pub use waybar_style::{
     MAX_WAYBAR_STYLE_RULES, ResolvedWaybarStyle, WaybarStyle, WaybarStyleError, parse_waybar_style,
@@ -366,6 +366,57 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
 
     pub const fn config(&self) -> LayoutConfig {
         self.config
+    }
+
+    pub const fn reserved_top(&self) -> u16 {
+        self.reserved_top
+    }
+
+    pub fn set_reserved_top(&mut self, reserved_top: u16) -> bool {
+        let reserved_top = reserved_top.min(self.output_height);
+        if self.reserved_top == reserved_top {
+            return false;
+        }
+        self.reserved_top = reserved_top;
+        let available_height = self.output_height.saturating_sub(self.reserved_top);
+        let maximum_single = available_height
+            .saturating_sub(self.config.gaps.saturating_mul(2))
+            .max(1);
+        for column in &mut self.columns[..self.column_count] {
+            if column.tabbed_height != 0 {
+                column.tabbed_height = column.tabbed_height.min(maximum_single);
+            }
+            if column.window_count == 0 || column.window_heights[0] == 0 {
+                continue;
+            }
+            let maximum_total = available_height
+                .saturating_sub(
+                    self.config
+                        .gaps
+                        .saturating_mul(column.window_count as u16 + 1),
+                )
+                .max(column.window_count as u16);
+            let total = column.window_heights[..column.window_count]
+                .iter()
+                .fold(0u32, |sum, height| sum.saturating_add(u32::from(*height)));
+            if total <= u32::from(maximum_total) {
+                continue;
+            }
+            let mut remaining = maximum_total;
+            for index in 0..column.window_count {
+                let windows_left = (column.window_count - index - 1) as u16;
+                let scaled = if index + 1 == column.window_count {
+                    remaining
+                } else {
+                    ((u32::from(column.window_heights[index]) * u32::from(maximum_total)) / total)
+                        .clamp(1, u32::from(remaining.saturating_sub(windows_left)))
+                        as u16
+                };
+                column.window_heights[index] = scaled;
+                remaining = remaining.saturating_sub(scaled);
+            }
+        }
+        true
     }
 
     pub const fn len(&self) -> usize {

@@ -7,12 +7,12 @@ use crate::ps2::{Controller, DesktopEvent, InputEvent, Key, KeyEvent, KeyModifie
 use crate::serial::serialln;
 use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
-    BarButton, BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers,
-    ColumnDisplay, CropGravity, ImgRequest, MAX_NIRI_BINDINGS, NiriAction, NiriBinding,
-    NiriShellConfig, RasterImage, ResizeFilter, ResizeMode, ResolvedWaybarStyle, Shadow,
-    ShadowColor, SwwwCommand, SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon,
-    WaybarConfig, WaybarStyle, WorkspaceReference, WorkspaceSet, format_bar_text,
-    parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
+    BarButton, BarFormatValue, BarModuleList, BarPosition, BarSignal, BarSignalAction, BarText,
+    BindingKey, BindingModifiers, ColumnDisplay, CropGravity, ImgRequest, MAX_NIRI_BINDINGS,
+    NiriAction, NiriBinding, NiriShellConfig, RasterImage, ResizeFilter, ResizeMode,
+    ResolvedWaybarStyle, Shadow, ShadowColor, SwwwCommand, SwwwDaemonError, SwwwDefaults,
+    TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference, WorkspaceSet,
+    format_bar_text, parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
     parse_swww_environment, parse_waybar_config, parse_waybar_style, resize_filter_sample,
     transition_eased_progress, transition_pixel_with_options,
 };
@@ -1282,6 +1282,52 @@ impl Desktop {
         ));
     }
 
+    fn handle_waybar_signal(&mut self, signal: BarSignal) {
+        let action = self.bar.signal_action(signal);
+        let previous_mode = self.bar.mode_name;
+        let previous_reserved_top = self.bar.reserved_top();
+        let visibility_changed = match action {
+            BarSignalAction::Show => self.bar.set_visibility(true),
+            BarSignalAction::Hide => self.bar.set_visibility(false),
+            BarSignalAction::Toggle => {
+                self.bar.toggle_visibility();
+                true
+            }
+            BarSignalAction::Reload => {
+                self.request_config_reload();
+                false
+            }
+            BarSignalAction::Noop => false,
+        };
+        let reserved_top_changed = if visibility_changed {
+            self.workspaces.set_reserved_top(self.bar.reserved_top())
+        } else {
+            false
+        };
+        if visibility_changed {
+            self.log_bar_geometry("signal");
+        }
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: signal={} action={} state_visible={} effective_visible={} mode={}->{} reserved_top={}->{} layout_updated={}",
+            signal.name(),
+            action.name(),
+            self.bar.visibility_state(),
+            self.bar.visible,
+            previous_mode,
+            self.bar.mode_name,
+            previous_reserved_top,
+            self.bar.reserved_top(),
+            reserved_top_changed
+        ));
+        self.set_response(match action {
+            BarSignalAction::Show => "WAYBAR SHOW SIGNAL APPLIED",
+            BarSignalAction::Hide => "WAYBAR HIDE SIGNAL APPLIED",
+            BarSignalAction::Toggle => "WAYBAR TOGGLE SIGNAL APPLIED",
+            BarSignalAction::Reload => "WAYBAR RELOAD SIGNAL APPLIED",
+            BarSignalAction::Noop => "WAYBAR NOOP SIGNAL APPLIED",
+        });
+    }
+
     fn log_bar_geometry(&self, source: &str) {
         let (x, y, width, height) = self.bar_rect();
         serialln(format_args!(
@@ -2160,7 +2206,7 @@ impl Desktop {
             unsafe { core::str::from_utf8_unchecked(&command_bytes[..self.command_length]) };
         let mut animate = false;
         if command == "HELP" {
-            self.set_response("HELP STATUS ABOUT CLEAR RELOAD [BAD] FAULT / SWWW ...")
+            self.set_response("HELP STATUS ABOUT CLEAR RELOAD WAYBAR SIGUSR1|SIGUSR2 / SWWW ...")
         } else if command == "STATUS" {
             self.set_response("KERNEL OK / 3 NIRI COLUMNS / PS2 READY")
         } else if command == "ABOUT" {
@@ -2171,6 +2217,10 @@ impl Desktop {
         } else if command == "RELOAD" {
             self.request_config_reload();
             self.set_response("DESKTOP CONFIG RELOAD REQUESTED")
+        } else if command == "WAYBAR SIGUSR1" {
+            self.handle_waybar_signal(BarSignal::User1)
+        } else if command == "WAYBAR SIGUSR2" {
+            self.handle_waybar_signal(BarSignal::User2)
         } else if command == "FAULT" {
             crate::interrupts::trigger_page_fault()
         } else if command == "CLEAR" || command.is_empty() {
@@ -2300,7 +2350,8 @@ impl Desktop {
         let allowed = matches!(
             &self.command[..self.command_length],
             b"HELP" | b"STATUS" | b"ABOUT" | b"CLEAR" | b"RELOAD" | b"SWWW-DAEMON"
-        ) || self.command[..self.command_length].starts_with(b"SWWW ");
+        ) || self.command[..self.command_length].starts_with(b"SWWW ")
+            || self.command[..self.command_length].starts_with(b"WAYBAR ");
         let animate = if allowed {
             self.execute_command()
         } else {

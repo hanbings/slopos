@@ -1703,6 +1703,33 @@ impl<const WINDOWS: usize> FloatingLayout<WINDOWS> {
         self.count == 0
     }
 
+    fn set_reserved_top(&mut self, reserved_top: u16) -> bool {
+        let reserved_top = reserved_top.min(self.output_height);
+        if self.reserved_top == reserved_top {
+            return false;
+        }
+        self.reserved_top = reserved_top;
+        for index in 0..self.count {
+            let mut rect = self.entries[index].rect;
+            fit_floating_rect(
+                &mut rect,
+                self.output_width,
+                self.output_height,
+                self.reserved_top,
+            );
+            self.entries[index].rect = rect;
+            let mut default_rect = self.entries[index].default_rect;
+            fit_floating_rect(
+                &mut default_rect,
+                self.output_width,
+                self.output_height,
+                self.reserved_top,
+            );
+            self.entries[index].default_rect = default_rect;
+        }
+        true
+    }
+
     fn contains(&self, window: u32) -> bool {
         self.index_of(window).is_some()
     }
@@ -2027,6 +2054,19 @@ impl<const WINDOWS: usize> FloatingLayout<WINDOWS> {
     }
 }
 
+fn fit_floating_rect(rect: &mut Rect, output_width: u16, output_height: u16, reserved_top: u16) {
+    rect.width = rect.width.min(output_width).max(1);
+    rect.height = rect
+        .height
+        .min(output_height.saturating_sub(reserved_top))
+        .max(1);
+    let maximum_x = i32::from(output_width.saturating_sub(rect.width));
+    let maximum_y =
+        i32::from(output_height.saturating_sub(rect.height)).max(i32::from(reserved_top));
+    rect.x = rect.x.clamp(0, maximum_x.max(0));
+    rect.y = rect.y.clamp(i32::from(reserved_top), maximum_y);
+}
+
 fn resolve_size_change(change: ColumnWidthChange, current: u16, available: u16, gap: u16) -> i32 {
     match change {
         ColumnWidthChange::Set(size) => i32::from(size.resolve(available, gap)),
@@ -2142,6 +2182,35 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
 
     pub fn config(&self) -> LayoutConfig {
         self.layouts[self.active].config()
+    }
+
+    pub const fn reserved_top(&self) -> u16 {
+        self.layouts[self.active].reserved_top()
+    }
+
+    pub fn set_reserved_top(&mut self, reserved_top: u16) -> bool {
+        if self.reserved_top() == reserved_top {
+            return false;
+        }
+        for layout in &mut self.layouts {
+            layout.set_reserved_top(reserved_top);
+        }
+        for floating in &mut self.floating {
+            floating.set_reserved_top(reserved_top);
+        }
+        let output_width = self.floating[self.active].output_width;
+        let output_height = self.floating[self.active].output_height;
+        let reserved_top = reserved_top.min(output_height);
+        for entry in self.remembered_floating.iter_mut().flatten() {
+            fit_floating_rect(&mut entry.rect, output_width, output_height, reserved_top);
+            fit_floating_rect(
+                &mut entry.default_rect,
+                output_width,
+                output_height,
+                reserved_top,
+            );
+        }
+        true
     }
 
     pub fn open_window(&mut self, workspace: usize, window: u32) -> Result<(), WorkspaceError> {
@@ -4591,5 +4660,30 @@ mod tests {
             workspaces.set_window_fullscreen(2, 10, true),
             Err(WorkspaceError::InvalidWorkspace)
         );
+    }
+
+    #[test]
+    fn updates_tiled_and_floating_geometry_when_the_reserved_top_changes() {
+        let mut workspaces =
+            WorkspaceSet::<2, 2, 2>::new(1, 1, 1000, 700, 40, LayoutConfig::default()).unwrap();
+        workspaces.open_window(0, 10).unwrap();
+        workspaces.open_floating_window(0, 11).unwrap();
+        assert_eq!(workspaces.reserved_top(), 40);
+        let tiled_with_bar = workspaces.tile_rect(10).unwrap();
+        assert!(tiled_with_bar.y >= 40);
+
+        assert!(workspaces.set_reserved_top(0));
+        assert_eq!(workspaces.reserved_top(), 0);
+        let tiled_without_bar = workspaces.tile_rect(10).unwrap();
+        assert_eq!(tiled_without_bar.y, tiled_with_bar.y - 40);
+        assert_eq!(tiled_without_bar.height, tiled_with_bar.height + 40);
+        assert!(workspaces.move_focused_floating(0, -1000));
+        assert_eq!(workspaces.tile_rect(11).unwrap().y, 0);
+
+        assert!(workspaces.set_reserved_top(40));
+        assert_eq!(workspaces.reserved_top(), 40);
+        assert_eq!(workspaces.tile_rect(10).unwrap(), tiled_with_bar);
+        assert_eq!(workspaces.tile_rect(11).unwrap().y, 40);
+        assert!(!workspaces.set_reserved_top(40));
     }
 }

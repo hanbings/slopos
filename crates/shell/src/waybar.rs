@@ -55,11 +55,78 @@ impl BarMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarSignal {
+    User1,
+    User2,
+}
+
+impl BarSignal {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::User1 => "SIGUSR1",
+            Self::User2 => "SIGUSR2",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarSignalAction {
+    Show,
+    Hide,
+    Toggle,
+    Reload,
+    Noop,
+}
+
+impl BarSignalAction {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Show => "show",
+            Self::Hide => "hide",
+            Self::Toggle => "toggle",
+            Self::Reload => "reload",
+            Self::Noop => "noop",
+        }
+    }
+
+    const fn from_name(name: &str) -> Option<Self> {
+        match name.as_bytes() {
+            b"show" => Some(Self::Show),
+            b"hide" => Some(Self::Hide),
+            b"toggle" => Some(Self::Toggle),
+            b"reload" => Some(Self::Reload),
+            b"noop" => Some(Self::Noop),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BarModeOptions {
     layer: BarLayer,
     exclusive: bool,
     passthrough: bool,
     visible: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BarModeState<'a> {
+    mode: BarMode,
+    name: &'a str,
+    options: BarModeOptions,
+}
+
+impl BarModeState<'_> {
+    const fn preset(name: &'static str) -> Self {
+        let Some((mode, options)) = BarModeOptions::preset(name) else {
+            panic!("invalid built-in Waybar mode")
+        };
+        Self {
+            mode,
+            name,
+            options,
+        }
+    }
 }
 
 impl BarModeOptions {
@@ -317,14 +384,21 @@ pub struct WaybarConfig<'a> {
     pub exclusive: bool,
     pub passthrough: bool,
     pub visible: bool,
+    pub on_sigusr1: BarSignalAction,
+    pub on_sigusr2: BarSignalAction,
     pub modules_left: BarModuleList<'a>,
     pub modules_center: BarModuleList<'a>,
     pub modules_right: BarModuleList<'a>,
     pub module_configs: BarModuleConfigList<'a>,
+    shown_mode: BarModeState<'a>,
+    hidden_mode: BarModeState<'a>,
+    visibility_state: bool,
 }
 
 impl Default for WaybarConfig<'_> {
     fn default() -> Self {
+        let shown_mode = BarModeState::preset("default");
+        let hidden_mode = BarModeState::preset("invisible");
         Self {
             position: BarPosition::Top,
             height: 30,
@@ -340,15 +414,20 @@ impl Default for WaybarConfig<'_> {
             exclusive: true,
             passthrough: false,
             visible: true,
+            on_sigusr1: BarSignalAction::Toggle,
+            on_sigusr2: BarSignalAction::Reload,
             modules_left: BarModuleList::empty(),
             modules_center: BarModuleList::empty(),
             modules_right: BarModuleList::empty(),
             module_configs: BarModuleConfigList::empty(),
+            shown_mode,
+            hidden_mode,
+            visibility_state: true,
         }
     }
 }
 
-impl WaybarConfig<'_> {
+impl<'a> WaybarConfig<'a> {
     pub fn reserved_top(self) -> u16 {
         if !self.visible || !self.exclusive || self.position != BarPosition::Top {
             return 0;
@@ -360,6 +439,43 @@ impl WaybarConfig<'_> {
 
     pub const fn layer_is_above_windows(self) -> bool {
         matches!(self.layer, BarLayer::Top | BarLayer::Overlay)
+    }
+
+    pub const fn visibility_state(self) -> bool {
+        self.visibility_state
+    }
+
+    pub const fn signal_action(self, signal: BarSignal) -> BarSignalAction {
+        match signal {
+            BarSignal::User1 => self.on_sigusr1,
+            BarSignal::User2 => self.on_sigusr2,
+        }
+    }
+
+    pub fn set_visibility(&mut self, visible: bool) -> bool {
+        if self.visibility_state == visible {
+            return false;
+        }
+        self.visibility_state = visible;
+        self.apply_mode_state(if visible {
+            self.shown_mode
+        } else {
+            self.hidden_mode
+        });
+        true
+    }
+
+    pub fn toggle_visibility(&mut self) {
+        self.set_visibility(!self.visibility_state);
+    }
+
+    fn apply_mode_state(&mut self, state: BarModeState<'a>) {
+        self.mode = state.mode;
+        self.mode_name = state.name;
+        self.layer = state.options.layer;
+        self.exclusive = state.options.exclusive;
+        self.passthrough = state.options.passthrough;
+        self.visible = state.options.visible;
     }
 }
 
@@ -663,6 +779,8 @@ impl<'a> JsonParser<'a> {
     const START_HIDDEN: u32 = 1 << 16;
     const MODES: u32 = 1 << 17;
     const VISIBLE: u32 = 1 << 18;
+    const ON_SIGUSR1: u32 = 1 << 19;
+    const ON_SIGUSR2: u32 = 1 << 20;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -782,6 +900,16 @@ impl<'a> JsonParser<'a> {
                                 _ => return Err(BarConfigError::UnexpectedToken),
                             };
                         }
+                        "on-sigusr1" => {
+                            mark_once(&mut fields, Self::ON_SIGUSR1)?;
+                            config.on_sigusr1 = BarSignalAction::from_name(self.string_value()?)
+                                .unwrap_or(BarSignalAction::Toggle);
+                        }
+                        "on-sigusr2" => {
+                            mark_once(&mut fields, Self::ON_SIGUSR2)?;
+                            config.on_sigusr2 = BarSignalAction::from_name(self.string_value()?)
+                                .unwrap_or(BarSignalAction::Reload);
+                        }
                         "modules-left" => {
                             mark_once(&mut fields, Self::LEFT)?;
                             config.modules_left = self.module_list()?;
@@ -846,32 +974,43 @@ impl<'a> JsonParser<'a> {
         if fields & Self::VISIBLE != 0 {
             default_options.visible = config.visible;
         }
-        let requested_mode = if start_hidden {
-            "invisible"
-        } else {
-            selected_mode
+        let resolve_mode = |requested_mode| {
+            if requested_mode == "default" {
+                BarModeState {
+                    mode: BarMode::Default,
+                    name: "default",
+                    options: default_options,
+                }
+            } else if let Some(options) = modes.get(requested_mode) {
+                BarModeState {
+                    mode: BarModeOptions::preset(requested_mode)
+                        .map(|(mode, _)| mode)
+                        .unwrap_or(BarMode::Custom),
+                    name: requested_mode,
+                    options,
+                }
+            } else if let Some((mode, options)) = BarModeOptions::preset(requested_mode) {
+                BarModeState {
+                    mode,
+                    name: requested_mode,
+                    options,
+                }
+            } else {
+                BarModeState {
+                    mode: BarMode::Default,
+                    name: "default",
+                    options: default_options,
+                }
+            }
         };
-        let (mode, mode_name, options) = if requested_mode == "default" {
-            (BarMode::Default, "default", default_options)
-        } else if let Some(options) = modes.get(requested_mode) {
-            (
-                BarModeOptions::preset(requested_mode)
-                    .map(|(mode, _)| mode)
-                    .unwrap_or(BarMode::Custom),
-                requested_mode,
-                options,
-            )
-        } else if let Some((mode, options)) = BarModeOptions::preset(requested_mode) {
-            (mode, requested_mode, options)
+        config.shown_mode = resolve_mode(selected_mode);
+        config.hidden_mode = resolve_mode("invisible");
+        config.visibility_state = !start_hidden;
+        config.apply_mode_state(if start_hidden {
+            config.hidden_mode
         } else {
-            (BarMode::Default, "default", default_options)
-        };
-        config.mode = mode;
-        config.mode_name = mode_name;
-        config.layer = options.layer;
-        config.exclusive = options.exclusive;
-        config.passthrough = options.passthrough;
-        config.visible = options.visible;
+            config.shown_mode
+        });
         Ok(config)
     }
 
@@ -1433,6 +1572,15 @@ mod tests {
         assert!(config.exclusive);
         assert!(!config.passthrough);
         assert!(config.visible);
+        assert!(config.visibility_state());
+        assert_eq!(
+            config.signal_action(BarSignal::User1),
+            BarSignalAction::Toggle
+        );
+        assert_eq!(
+            config.signal_action(BarSignal::User2),
+            BarSignalAction::Reload
+        );
         assert_eq!(config.reserved_top(), 30);
         assert!(config.modules_left.is_empty());
         assert_eq!(
@@ -1464,6 +1612,8 @@ mod tests {
             r#"{ "passthrough": 1 }"#,
             r#"{ "start_hidden": "true" }"#,
             r#"{ "visible": 1 }"#,
+            r#"{ "on-sigusr1": 1 }"#,
+            r#"{ "on-sigusr2": false }"#,
             r#"{ "modes": [] }"#,
             r#"{ "modes": { "reading": { "visible": 1 } } }"#,
             r#"{ "modes": { "reading": {}, "reading": {} } }"#,
@@ -1640,10 +1790,19 @@ mod tests {
         assert_eq!(unknown.layer, BarLayer::Top);
         assert!(!unknown.exclusive);
 
-        let configured_hidden = parse_waybar_config(
+        let mut configured_hidden = parse_waybar_config(
             r#"{
+                "mode": "reading",
                 "start_hidden": true,
+                "on-sigusr1": "show",
+                "on-sigusr2": "noop",
                 "modes": {
+                    "reading": {
+                        "layer": "top",
+                        "exclusive": true,
+                        "passthrough": false,
+                        "visible": true
+                    },
                     "invisible": {
                         "layer": "overlay",
                         "passthrough": false,
@@ -1659,6 +1818,37 @@ mod tests {
         assert!(!configured_hidden.exclusive);
         assert!(!configured_hidden.passthrough);
         assert!(configured_hidden.visible);
+        assert!(!configured_hidden.visibility_state());
+        assert_eq!(
+            configured_hidden.signal_action(BarSignal::User1),
+            BarSignalAction::Show
+        );
+        assert_eq!(
+            configured_hidden.signal_action(BarSignal::User2),
+            BarSignalAction::Noop
+        );
+        assert!(configured_hidden.set_visibility(true));
+        assert_eq!(configured_hidden.mode, BarMode::Custom);
+        assert_eq!(configured_hidden.mode_name, "reading");
+        assert_eq!(configured_hidden.layer, BarLayer::Top);
+        assert!(configured_hidden.exclusive);
+        assert!(!configured_hidden.passthrough);
+        assert!(configured_hidden.visible);
+        assert!(configured_hidden.visibility_state());
+        assert!(!configured_hidden.set_visibility(true));
+        configured_hidden.toggle_visibility();
+        assert_eq!(configured_hidden.mode, BarMode::Invisible);
+        assert!(!configured_hidden.visibility_state());
+
+        let invalid_actions = parse_waybar_config(
+            r#"{
+                "on-sigusr1": "invalid",
+                "on-sigusr2": "also-invalid"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(invalid_actions.on_sigusr1, BarSignalAction::Toggle);
+        assert_eq!(invalid_actions.on_sigusr2, BarSignalAction::Reload);
         assert_eq!(
             parse_waybar_config(
                 r#"{

@@ -127,6 +127,12 @@ qmp_wheel_burst() {
     monitor_type "status"
     sleep 2
     echo "screendump ${repo_dir}/evidence/terminal-status.ppm"
+    monitor_type "waybar sigusr1"
+    sleep 2
+    echo "screendump ${repo_dir}/evidence/waybar-sigusr1-hidden.ppm"
+    monitor_type "waybar sigusr1"
+    sleep 2
+    echo "screendump ${repo_dir}/evidence/waybar-sigusr1-restored.ppm"
     monitor_type "reload"
     sleep 3
     monitor_type "reload bad"
@@ -579,6 +585,15 @@ grep -Fq \
     "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=1 init=wait4 resources=retained" \
     "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: signal=SIGUSR1 action=toggle state_visible=false effective_visible=false mode=default->invisible reserved_top=40->0 layout_updated=true" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: signal=SIGUSR1 action=toggle state_visible=true effective_visible=true mode=invisible->default reserved_top=0->40 layout_updated=true" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=invisible exclusive=false passthrough=true visible=false reserved_top=0 source=signal" \
+    "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: reload requested generation=1 accepted=true" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: VFS load published initial=false generation=2 atomic=true" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: reload applied generation=2 atomic=true" "${serial_log}"
@@ -818,6 +833,8 @@ grep -Fq "SLOPOS-DESKTOP: window closed kind=TERMINAL" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=SYSTEM" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window closed kind=CONFIG" "${serial_log}"
 test -s "${repo_dir}/evidence/terminal-status.ppm"
+test -s "${repo_dir}/evidence/waybar-sigusr1-hidden.ppm"
+test -s "${repo_dir}/evidence/waybar-sigusr1-restored.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-vfs-loaded.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
@@ -922,6 +939,15 @@ if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-lanczos3.ppm" 512 300)" !
     echo "swww Lanczos3 filter did not use its windowed-sinc convolution kernel" >&2
     exit 1
 fi
+if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/waybar-sigusr1-hidden.ppm" 100 45)" != "6558f5" ]]; then
+    echo "Waybar SIGUSR1 hide did not release the exclusive top reservation" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/waybar-sigusr1-restored.ppm" 100 10)" != "161a2a" ]] \
+    || [[ "$(ppm_pixel_hex "${repo_dir}/evidence/waybar-sigusr1-restored.ppm" 100 45)" != "111144" ]]; then
+    echo "Waybar SIGUSR1 show did not restore the bar and niri working area" >&2
+    exit 1
+fi
 for image in niri-window-workspace-target niri-window-workspace-returned; do
     if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/${image}.ppm" 10 10)" != "6558f5" ]] \
         || [[ "$(ppm_pixel_hex "${repo_dir}/evidence/${image}.ppm" 100 100)" != "171c2b" ]] \
@@ -938,6 +964,10 @@ fi
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${repo_dir}/evidence/terminal-status.ppm" \
         >"${repo_dir}/evidence/terminal-status.png"
+    pnmtopng "${repo_dir}/evidence/waybar-sigusr1-hidden.ppm" \
+        >"${repo_dir}/evidence/waybar-sigusr1-hidden.png"
+    pnmtopng "${repo_dir}/evidence/waybar-sigusr1-restored.ppm" \
+        >"${repo_dir}/evidence/waybar-sigusr1-restored.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-switched.ppm" \
         >"${repo_dir}/evidence/wallpaper-switched.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-vfs-loaded.ppm" \
@@ -1077,4 +1107,4 @@ if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${repo_dir}/evidence/wallpaper-only.ppm" \
         >"${repo_dir}/evidence/wallpaper-only.png"
 fi
-echo "SlopOS VFS config reload/rollback, swww, niri workspace/bind/rule, Waybar workspace click, viewport, keyboard/pointer resize, reorder, and close verified"
+echo "SlopOS VFS config reload/rollback, swww, niri workspace/bind/rule, Waybar signal visibility/workspace click, viewport, keyboard/pointer resize, reorder, and close verified"
