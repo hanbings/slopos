@@ -3,7 +3,7 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use slopos_shell::{
-    ImgRequest, MAX_WALLPAPER_PATH, ResizeMode, TransitionOptions, TransitionPosition,
+    CropGravity, ImgRequest, MAX_WALLPAPER_PATH, ResizeMode, TransitionOptions, TransitionPosition,
     TransitionType, parse_ppm,
 };
 
@@ -120,6 +120,8 @@ impl WallpaperFileRequest {
                 position: TransitionPosition::center(),
                 invert_y: false,
                 resize: ResizeMode::Crop,
+                crop_gravity: CropGravity::Center,
+                fill_color: 0,
             },
         }
     }

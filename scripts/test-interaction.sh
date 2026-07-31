@@ -167,6 +167,20 @@ qmp_wheel_burst() {
     monitor_type "swww img sunset.ppm --transition-type wipe --transition-angle 30 --transition-step 64"
     sleep 4
     echo "screendump ${repo_dir}/evidence/wallpaper-wipe-angle.ppm"
+    monitor_type "img aurora.ppm -t none --resize fit --fill-color 123456"
+    sleep 3
+    echo "screendump ${repo_dir}/evidence/wallpaper-fit-fill.ppm"
+    sleep 1
+    monitor_type "img aurora.ppm -t none --resize crop --crop-gravity right"
+    sleep 3
+    echo "screendump ${repo_dir}/evidence/wallpaper-crop-right.ppm"
+    sleep 1
+    monitor_type "img sunset.ppm -t none --resize stretch"
+    sleep 3
+    echo "screendump ${repo_dir}/evidence/wallpaper-stretched.ppm"
+    sleep 1
+    monitor_type "img sunset.ppm -t none --resize crop"
+    sleep 3
     echo "sendkey meta_l-comma 50"
     sleep 1
     echo "sendkey meta_l-ctrl-shift-2 50"
@@ -590,6 +604,9 @@ grep -Fq "SLOPOS-SWWW: image=AURORA.PPM output=* transition=grow step=64 fps=30 
 grep -Fq "SLOPOS-SWWW: transition complete type=grow step=64 fps=30 frames=5 angle=45 position=0,0 invert_y=false" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=wipe step=64 fps=30 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: transition complete type=wipe step=64 fps=30 frames=5 angle=30 position=512,384 invert_y=false" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: geometry resize=fit x=0 y=43 width=1024 height=682 crop_gravity=center fill=123456 source=embedded" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: geometry resize=crop x=-128 y=0 width=1152 height=768 crop_gravity=right fill=000000 source=embedded" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
@@ -771,6 +788,9 @@ test -s "${repo_dir}/evidence/wallpaper-vfs-loaded.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
 test -s "${repo_dir}/evidence/wallpaper-grow-top-left.ppm"
 test -s "${repo_dir}/evidence/wallpaper-wipe-angle.ppm"
+test -s "${repo_dir}/evidence/wallpaper-fit-fill.ppm"
+test -s "${repo_dir}/evidence/wallpaper-crop-right.ppm"
+test -s "${repo_dir}/evidence/wallpaper-stretched.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-target.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-returned.ppm"
 test -s "${repo_dir}/evidence/niri-column-workspace-target.ppm"
@@ -828,6 +848,30 @@ test -s "${repo_dir}/evidence/niri-workspace-previous.ppm"
 test -s "${repo_dir}/evidence/waybar-workspace-click.ppm"
 test -s "${repo_dir}/evidence/workspace-config.ppm"
 test -s "${repo_dir}/evidence/wallpaper-only.ppm"
+
+ppm_pixel_hex() {
+    local image="$1"
+    local x="$2"
+    local y="$3"
+    local offset=$((16 + 3 * (y * 1024 + x)))
+    dd if="${image}" bs=1 skip="${offset}" count=3 status=none \
+        | od -An -tx1 \
+        | tr -d ' \n'
+}
+
+if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-fit-fill.ppm" 0 767)" != "123456" ]]; then
+    echo "swww fit did not pad the output with --fill-color" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-crop-right.ppm" 512 100)" != "442299" ]]; then
+    echo "swww crop did not anchor the image to --crop-gravity right" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-stretched.ppm" 512 767)" != "221133" ]]; then
+    echo "swww stretch did not map the image to the complete output" >&2
+    exit 1
+fi
+
 if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; then
     echo "persistent userspace reached an unexpected exit or fatal path" >&2
     exit 1
@@ -845,6 +889,12 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-grow-top-left.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-wipe-angle.ppm" \
         >"${repo_dir}/evidence/wallpaper-wipe-angle.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-fit-fill.ppm" \
+        >"${repo_dir}/evidence/wallpaper-fit-fill.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-crop-right.ppm" \
+        >"${repo_dir}/evidence/wallpaper-crop-right.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-stretched.ppm" \
+        >"${repo_dir}/evidence/wallpaper-stretched.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-target.ppm" \
         >"${repo_dir}/evidence/niri-window-workspace-target.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-returned.ppm" \

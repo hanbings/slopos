@@ -8,11 +8,11 @@ use crate::serial::serialln;
 use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
     BarButton, BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers,
-    ColumnDisplay, ImgRequest, MAX_NIRI_BINDINGS, NiriAction, NiriBinding, NiriShellConfig,
-    PpmImage, ResizeMode, ResolvedWaybarStyle, Shadow, ShadowColor, SwwwCommand, SwwwDaemonError,
-    SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference,
-    WorkspaceSet, format_bar_text, parse_niri_layout, parse_niri_shell_config, parse_ppm,
-    parse_swww_command, parse_swww_environment, parse_waybar_config, parse_waybar_style,
+    ColumnDisplay, CropGravity, ImgRequest, MAX_NIRI_BINDINGS, NiriAction, NiriBinding,
+    NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle, Shadow, ShadowColor, SwwwCommand,
+    SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle,
+    WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout, parse_niri_shell_config,
+    parse_ppm, parse_swww_command, parse_swww_environment, parse_waybar_config, parse_waybar_style,
     transition_pixel_with_options,
 };
 
@@ -486,15 +486,17 @@ impl Desktop {
     }
 
     fn render_wallpaper(&self, framebuffer: &mut Framebuffer) {
-        framebuffer.rect(
-            0,
-            0,
-            self.screen_width,
-            self.screen_height,
-            self.wallpaper
-                .clear_color()
-                .unwrap_or(self.workspaces.config().background_color),
-        );
+        let transition = self.wallpaper.transition();
+        let background = self.wallpaper.clear_color().unwrap_or_else(|| {
+            if self.wallpaper.current_image().is_some()
+                && matches!(transition.resize, ResizeMode::Fit | ResizeMode::No)
+            {
+                transition.fill_color
+            } else {
+                self.workspaces.config().background_color
+            }
+        });
+        framebuffer.rect(0, 0, self.screen_width, self.screen_height, background);
         if self.wallpaper.current_image().is_none() {
             return;
         }
@@ -505,8 +507,9 @@ impl Desktop {
         if previous.width() != current.width() || previous.height() != current.height() {
             crate::fatal("swww transition image dimensions differ");
         }
-        let (destination_x, destination_y, scale) = wallpaper_destination(
-            self.wallpaper.transition().resize,
+        let destination = wallpaper_destination(
+            transition.resize,
+            transition.crop_gravity,
             current,
             self.screen_width,
             self.screen_height,
@@ -521,25 +524,46 @@ impl Desktop {
                 let new = new_pixels
                     .next()
                     .unwrap_or_else(|| crate::fatal("swww current PPM pixel stream truncated"));
-                let sample_x = destination_x + i32::from(x) * scale + scale / 2;
-                let sample_y = destination_y + i32::from(y) * scale + scale / 2;
+                let (pixel_x, pixel_y, pixel_width, pixel_height) =
+                    destination.pixel_rect((x, y), (current.width(), current.height()));
+                let sample_x = pixel_x + pixel_width / 2;
+                let sample_y = pixel_y + pixel_height / 2;
                 let color = transition_pixel_with_options(
-                    self.wallpaper.transition(),
+                    transition,
                     self.wallpaper.progress(),
                     (sample_x, sample_y),
                     (self.screen_width as u16, self.screen_height as u16),
                     old,
                     new,
                 );
-                framebuffer.rect(
-                    destination_x + i32::from(x) * scale,
-                    destination_y + i32::from(y) * scale,
-                    scale,
-                    scale,
-                    color,
-                );
+                framebuffer.rect(pixel_x, pixel_y, pixel_width, pixel_height, color);
             }
         }
+    }
+
+    fn log_wallpaper_geometry(&self, source: &str) {
+        let Some(image) = self.wallpaper_current_image else {
+            return;
+        };
+        let transition = self.wallpaper.transition();
+        let destination = wallpaper_destination(
+            transition.resize,
+            transition.crop_gravity,
+            image,
+            self.screen_width,
+            self.screen_height,
+        );
+        serialln(format_args!(
+            "SLOPOS-SWWW: geometry resize={} x={} y={} width={} height={} crop_gravity={} fill={:06X} source={}",
+            transition.resize.name(),
+            destination.x,
+            destination.y,
+            destination.width,
+            destination.height,
+            transition.crop_gravity.name(),
+            transition.fill_color,
+            source
+        ));
     }
 
     fn animate_wallpaper(&mut self, framebuffer: &mut Framebuffer) {
@@ -855,6 +879,7 @@ impl Desktop {
                             self.wallpaper.transition().step,
                             self.wallpaper.transition().fps
                         ));
+                        self.log_wallpaper_geometry("vfs");
                         (self.wallpaper.transition_active(), true)
                     }
                     Err(error) => {
@@ -2084,6 +2109,7 @@ impl Desktop {
                                     self.wallpaper.transition().step,
                                     self.wallpaper.transition().fps
                                 ));
+                                self.log_wallpaper_geometry("embedded");
                                 animate = self.wallpaper.transition_active();
                             }
                             Err(error) => self.set_response(swww_error(error)),
@@ -3238,34 +3264,104 @@ fn wallpaper_asset(path: &str) -> Option<PpmImage<'static>> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct WallpaperDestination {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+impl WallpaperDestination {
+    fn pixel_rect(
+        self,
+        position: (u16, u16),
+        image_dimensions: (u16, u16),
+    ) -> (i32, i32, i32, i32) {
+        let image_width = i32::from(image_dimensions.0);
+        let image_height = i32::from(image_dimensions.1);
+        let source_x = i32::from(position.0);
+        let source_y = i32::from(position.1);
+        let left = projected_edge(self.x, source_x, self.width, image_width);
+        let right = projected_edge(self.x, source_x + 1, self.width, image_width);
+        let top = projected_edge(self.y, source_y, self.height, image_height);
+        let bottom = projected_edge(self.y, source_y + 1, self.height, image_height);
+        (left, top, right - left, bottom - top)
+    }
+}
+
+fn projected_edge(origin: i32, index: i32, extent: i32, source_length: i32) -> i32 {
+    let offset = i64::from(index) * i64::from(extent) / i64::from(source_length);
+    (i64::from(origin) + offset) as i32
+}
+
 fn wallpaper_destination(
     resize: ResizeMode,
+    crop_gravity: CropGravity,
     image: PpmImage<'_>,
     output_width: i32,
     output_height: i32,
-) -> (i32, i32, i32) {
+) -> WallpaperDestination {
     let image_width = i32::from(image.width());
     let image_height = i32::from(image.height());
-    let scale = match resize {
-        ResizeMode::Crop => {
-            ceil_div(output_width, image_width).max(ceil_div(output_height, image_height))
-        }
-        ResizeMode::Fit => (output_width / image_width)
-            .min(output_height / image_height)
-            .max(1),
-        ResizeMode::No => 1,
+    let output_is_wider = i64::from(output_width) * i64::from(image_height)
+        >= i64::from(output_height) * i64::from(image_width);
+    let (width, height) = match resize {
+        ResizeMode::Crop if output_is_wider => (
+            output_width,
+            ceil_mul_div(image_height, output_width, image_width),
+        ),
+        ResizeMode::Crop => (
+            ceil_mul_div(image_width, output_height, image_height),
+            output_height,
+        ),
+        ResizeMode::Fit if output_is_wider => (
+            floor_mul_div(image_width, output_height, image_height).max(1),
+            output_height,
+        ),
+        ResizeMode::Fit => (
+            output_width,
+            floor_mul_div(image_height, output_width, image_width).max(1),
+        ),
+        ResizeMode::No => (image_width, image_height),
+        ResizeMode::Stretch => (output_width, output_height),
     };
-    let width = image_width * scale;
-    let height = image_height * scale;
-    (
-        (output_width - width) / 2,
-        (output_height - height) / 2,
-        scale,
-    )
+    let remaining_x = output_width - width;
+    let remaining_y = output_height - height;
+    let (x, y) = if resize == ResizeMode::Crop {
+        crop_gravity_offset(crop_gravity, remaining_x, remaining_y)
+    } else {
+        (remaining_x / 2, remaining_y / 2)
+    };
+    WallpaperDestination {
+        x,
+        y,
+        width,
+        height,
+    }
 }
 
-fn ceil_div(value: i32, divisor: i32) -> i32 {
-    (value + divisor - 1) / divisor
+fn crop_gravity_offset(gravity: CropGravity, remaining_x: i32, remaining_y: i32) -> (i32, i32) {
+    let x = match gravity {
+        CropGravity::TopLeft | CropGravity::Left | CropGravity::BottomLeft => 0,
+        CropGravity::TopRight | CropGravity::Right | CropGravity::BottomRight => remaining_x,
+        CropGravity::Center | CropGravity::Top | CropGravity::Bottom => remaining_x / 2,
+    };
+    let y = match gravity {
+        CropGravity::TopLeft | CropGravity::Top | CropGravity::TopRight => 0,
+        CropGravity::BottomLeft | CropGravity::Bottom | CropGravity::BottomRight => remaining_y,
+        CropGravity::Center | CropGravity::Left | CropGravity::Right => remaining_y / 2,
+    };
+    (x, y)
+}
+
+fn floor_mul_div(left: i32, right: i32, divisor: i32) -> i32 {
+    ((i64::from(left) * i64::from(right)) / i64::from(divisor)) as i32
+}
+
+fn ceil_mul_div(left: i32, right: i32, divisor: i32) -> i32 {
+    let value = i64::from(left) * i64::from(right);
+    ((value + i64::from(divisor) - 1) / i64::from(divisor)) as i32
 }
 
 fn swww_error(error: SwwwDaemonError) -> &'static str {

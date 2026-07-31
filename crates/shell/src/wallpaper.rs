@@ -52,6 +52,47 @@ pub enum ResizeMode {
     Crop,
     Fit,
     No,
+    Stretch,
+}
+
+impl ResizeMode {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Crop => "crop",
+            Self::Fit => "fit",
+            Self::No => "no",
+            Self::Stretch => "stretch",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CropGravity {
+    Center,
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    Right,
+    BottomLeft,
+    Bottom,
+    BottomRight,
+}
+
+impl CropGravity {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Center => "center",
+            Self::TopLeft => "top-left",
+            Self::Top => "top",
+            Self::TopRight => "top-right",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::BottomLeft => "bottom-left",
+            Self::Bottom => "bottom",
+            Self::BottomRight => "bottom-right",
+        }
+    }
 }
 
 const POSITION_SCALE: u32 = 10_000;
@@ -100,6 +141,8 @@ pub struct TransitionOptions {
     pub position: TransitionPosition,
     pub invert_y: bool,
     pub resize: ResizeMode,
+    pub crop_gravity: CropGravity,
+    pub fill_color: u32,
 }
 
 impl Default for TransitionOptions {
@@ -113,6 +156,8 @@ impl Default for TransitionOptions {
             position: TransitionPosition::center(),
             invert_y: false,
             resize: ResizeMode::Crop,
+            crop_gravity: CropGravity::Center,
+            fill_color: 0,
         }
     }
 }
@@ -154,6 +199,7 @@ pub enum SwwwParseError {
     InvalidNumber,
     InvalidTransition,
     InvalidResize,
+    InvalidCropGravity,
     InvalidPosition,
     InvalidBoolean,
     InvalidColor,
@@ -238,7 +284,7 @@ fn parse_img<'a>(
     while let Some(argument) = args.next() {
         if equal(argument, "-o") || equal(argument, "--outputs") {
             output = Some(args.next().ok_or(SwwwParseError::MissingValue)?);
-        } else if equal(argument, "--transition-type") {
+        } else if equal(argument, "-t") || equal(argument, "--transition-type") {
             transition.kind = parse_transition(args.next().ok_or(SwwwParseError::MissingValue)?)?;
             transition.step = transition.kind.default_step();
         } else if equal(argument, "--transition-step") {
@@ -255,13 +301,22 @@ fn parse_img<'a>(
             transition.position = parse_position(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if equal(argument, "--invert-y") {
             transition.invert_y = parse_bool(args.next().ok_or(SwwwParseError::MissingValue)?)?;
+        } else if equal(argument, "--no-resize") {
+            transition.resize = ResizeMode::No;
         } else if equal(argument, "--resize") {
             transition.resize = match args.next().ok_or(SwwwParseError::MissingValue)? {
                 value if equal(value, "crop") => ResizeMode::Crop,
                 value if equal(value, "fit") => ResizeMode::Fit,
                 value if equal(value, "no") => ResizeMode::No,
+                value if equal(value, "stretch") => ResizeMode::Stretch,
                 _ => return Err(SwwwParseError::InvalidResize),
             };
+        } else if equal(argument, "--crop-gravity") {
+            transition.crop_gravity =
+                parse_crop_gravity(args.next().ok_or(SwwwParseError::MissingValue)?)?;
+        } else if equal(argument, "--fill-color") {
+            transition.fill_color =
+                parse_hex_color(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if argument.starts_with('-') {
             return Err(SwwwParseError::UnexpectedArgument);
         } else if path.replace(argument).is_some() {
@@ -453,6 +508,30 @@ fn parse_bool(value: &str) -> Result<bool, SwwwParseError> {
     }
 }
 
+fn parse_crop_gravity(value: &str) -> Result<CropGravity, SwwwParseError> {
+    if equal(value, "center") {
+        Ok(CropGravity::Center)
+    } else if equal(value, "top-left") {
+        Ok(CropGravity::TopLeft)
+    } else if equal(value, "top") {
+        Ok(CropGravity::Top)
+    } else if equal(value, "top-right") {
+        Ok(CropGravity::TopRight)
+    } else if equal(value, "left") {
+        Ok(CropGravity::Left)
+    } else if equal(value, "right") {
+        Ok(CropGravity::Right)
+    } else if equal(value, "bottom-left") {
+        Ok(CropGravity::BottomLeft)
+    } else if equal(value, "bottom") {
+        Ok(CropGravity::Bottom)
+    } else if equal(value, "bottom-right") {
+        Ok(CropGravity::BottomRight)
+    } else {
+        Err(SwwwParseError::InvalidCropGravity)
+    }
+}
+
 fn parse_u16(value: &str) -> Result<u16, SwwwParseError> {
     u16::try_from(parse_u32(value)?).map_err(|_| SwwwParseError::InvalidNumber)
 }
@@ -634,6 +713,8 @@ impl WallpaperDaemon {
                 position: TransitionPosition::center(),
                 invert_y: false,
                 resize: ResizeMode::Crop,
+                crop_gravity: CropGravity::Center,
+                fill_color: 0,
             },
             progress: 0,
             transition_active: false,
@@ -1160,6 +1241,25 @@ mod tests {
         assert_eq!(request.transition.step, 64);
         assert_eq!(request.transition.fps, 60);
         assert_eq!(request.transition.resize, ResizeMode::Fit);
+        let SwwwCommand::Img(request) = parse_swww_command(
+            "img aurora.ppm -t none --resize stretch --crop-gravity bottom-right --fill-color 1a2b3c",
+            SwwwDefaults::default(),
+        )
+        .unwrap() else {
+            panic!("expected image request");
+        };
+        assert_eq!(request.transition.resize, ResizeMode::Stretch);
+        assert_eq!(request.transition.kind, TransitionType::None);
+        assert_eq!(request.transition.crop_gravity, CropGravity::BottomRight);
+        assert_eq!(request.transition.fill_color, 0x1a2b3c);
+        let SwwwCommand::Img(request) = parse_swww_command(
+            "img aurora.ppm --resize fit --no-resize",
+            SwwwDefaults::default(),
+        )
+        .unwrap() else {
+            panic!("expected image request");
+        };
+        assert_eq!(request.transition.resize, ResizeMode::No);
         assert_eq!(
             parse_swww_command("swww clear", SwwwDefaults::default()),
             Ok(SwwwCommand::Clear(ClearRequest {
@@ -1266,6 +1366,24 @@ mod tests {
         assert_eq!(
             parse_swww_command("swww img one.ppm --invert-y yes", SwwwDefaults::default()),
             Err(SwwwParseError::InvalidBoolean)
+        );
+        assert_eq!(
+            parse_swww_command("swww img one.ppm --resize squish", SwwwDefaults::default()),
+            Err(SwwwParseError::InvalidResize)
+        );
+        assert_eq!(
+            parse_swww_command(
+                "swww img one.ppm --crop-gravity diagonal",
+                SwwwDefaults::default()
+            ),
+            Err(SwwwParseError::InvalidCropGravity)
+        );
+        assert_eq!(
+            parse_swww_command(
+                "swww img one.ppm --fill-color 12345z",
+                SwwwDefaults::default()
+            ),
+            Err(SwwwParseError::InvalidColor)
         );
         assert_eq!(
             parse_swww_command("swww clear #1a804a", SwwwDefaults::default()),
