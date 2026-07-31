@@ -13,7 +13,7 @@ use slopos_shell::{
     SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle,
     WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout, parse_niri_shell_config,
     parse_ppm, parse_swww_command, parse_swww_environment, parse_waybar_config, parse_waybar_style,
-    transition_pixel_with_options,
+    transition_eased_progress, transition_pixel_with_options,
 };
 
 const WINDOW_COUNT: usize = 3;
@@ -590,7 +590,7 @@ impl Desktop {
             transition.invert_y,
         );
         serialln(format_args!(
-            "SLOPOS-SWWW: transition complete type={} step={} fps={} duration_ms={} sampled_step={} frames={} angle={} position={},{} invert_y={}",
+            "SLOPOS-SWWW: transition complete type={} step={} fps={} duration_ms={} sampled_step={} frames={} angle={} position={},{} invert_y={} bezier={},{},{},{} midpoint={}",
             transition.kind.name(),
             transition.step,
             transition.fps,
@@ -600,7 +600,12 @@ impl Desktop {
             transition.angle_degrees,
             origin.0,
             origin.1,
-            transition.invert_y
+            transition.invert_y,
+            transition.bezier.x1,
+            transition.bezier.y1,
+            transition.bezier.x2,
+            transition.bezier.y2,
+            transition_eased_progress(transition, 128)
         ));
     }
 

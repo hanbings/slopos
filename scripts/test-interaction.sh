@@ -42,6 +42,7 @@ monitor_type() {
             " ") echo "sendkey spc 10" ;;
             "-") echo "sendkey minus 10" ;;
             ".") echo "sendkey dot 10" ;;
+            ",") echo "sendkey comma 10" ;;
             "/") echo "sendkey slash 10" ;;
             *) echo "sendkey ${character} 10" ;;
         esac
@@ -169,6 +170,8 @@ qmp_wheel_burst() {
     echo "screendump ${repo_dir}/evidence/wallpaper-wipe-angle.ppm"
     monitor_type "img aurora.ppm -t wipe --transition-duration .1"
     sleep 4
+    monitor_type "img sunset.ppm -t fade --transition-bezier 0,0,1,0"
+    sleep 8
     monitor_type "img aurora.ppm -t none --resize fit --fill-color 123456"
     sleep 3
     echo "screendump ${repo_dir}/evidence/wallpaper-fit-fill.ppm"
@@ -608,6 +611,8 @@ grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=wipe step=64 fps=30 
 grep -Fq "SLOPOS-SWWW: transition complete type=wipe step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=30 position=512,384 invert_y=false" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=AURORA.PPM output=* transition=wipe step=90 fps=30 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: transition complete type=wipe step=90 fps=30 duration_ms=100 sampled_step=85 frames=4 angle=45 position=512,384 invert_y=false" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=fade step=2 fps=30 source=embedded" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: transition complete type=fade step=2 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=512,384 invert_y=false bezier=0,0,10000,0 midpoint=32" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=fit x=0 y=43 width=1024 height=682 crop_gravity=center fill=123456 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=crop x=-128 y=0 width=1152 height=768 crop_gravity=right fill=000000 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded" "${serial_log}"

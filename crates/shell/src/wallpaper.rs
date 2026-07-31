@@ -96,6 +96,41 @@ impl CropGravity {
 }
 
 const POSITION_SCALE: u32 = 10_000;
+const BEZIER_SCALE: i32 = 10_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransitionBezier {
+    pub x1: i32,
+    pub y1: i32,
+    pub x2: i32,
+    pub y2: i32,
+}
+
+impl TransitionBezier {
+    pub const fn swww_default() -> Self {
+        Self {
+            x1: 5_400,
+            y1: 0,
+            x2: 3_400,
+            y2: 9_900,
+        }
+    }
+
+    pub const fn linear() -> Self {
+        Self {
+            x1: 0,
+            y1: 0,
+            x2: BEZIER_SCALE,
+            y2: BEZIER_SCALE,
+        }
+    }
+}
+
+impl Default for TransitionBezier {
+    fn default() -> Self {
+        Self::swww_default()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransitionCoordinate {
@@ -140,6 +175,7 @@ pub struct TransitionOptions {
     pub angle_degrees: u16,
     pub position: TransitionPosition,
     pub invert_y: bool,
+    pub bezier: TransitionBezier,
     pub resize: ResizeMode,
     pub crop_gravity: CropGravity,
     pub fill_color: u32,
@@ -155,6 +191,7 @@ impl Default for TransitionOptions {
             angle_degrees: 45,
             position: TransitionPosition::center(),
             invert_y: false,
+            bezier: TransitionBezier::default(),
             resize: ResizeMode::Crop,
             crop_gravity: CropGravity::Center,
             fill_color: 0,
@@ -201,6 +238,7 @@ pub enum SwwwParseError {
     InvalidResize,
     InvalidCropGravity,
     InvalidPosition,
+    InvalidBezier,
     InvalidBoolean,
     InvalidColor,
     UnexpectedArgument,
@@ -270,6 +308,8 @@ pub fn parse_swww_environment(input: &str) -> Result<SwwwDefaults, SwwwParseErro
             defaults.transition.position = parse_position(value)?;
         } else if name == "SWWW_INVERT_Y" {
             defaults.transition.invert_y = parse_bool(value)?;
+        } else if name == "SWWW_TRANSITION_BEZIER" {
+            defaults.transition.bezier = parse_bezier(value)?;
         }
     }
     Ok(defaults)
@@ -301,6 +341,8 @@ fn parse_img<'a>(
             transition.position = parse_position(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if equal(argument, "--invert-y") {
             transition.invert_y = parse_bool(args.next().ok_or(SwwwParseError::MissingValue)?)?;
+        } else if equal(argument, "--transition-bezier") {
+            transition.bezier = parse_bezier(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if equal(argument, "--no-resize") {
             transition.resize = ResizeMode::No;
         } else if equal(argument, "--resize") {
@@ -529,6 +571,84 @@ fn parse_duration_milliseconds(value: &str) -> Result<u32, SwwwParseError> {
         .ok_or(SwwwParseError::InvalidNumber)
 }
 
+fn parse_bezier(value: &str) -> Result<TransitionBezier, SwwwParseError> {
+    let mut components = value.split(',');
+    let bezier = TransitionBezier {
+        x1: parse_signed_fixed(
+            components.next().ok_or(SwwwParseError::InvalidBezier)?,
+            BEZIER_SCALE,
+        )?,
+        y1: parse_signed_fixed(
+            components.next().ok_or(SwwwParseError::InvalidBezier)?,
+            BEZIER_SCALE,
+        )?,
+        x2: parse_signed_fixed(
+            components.next().ok_or(SwwwParseError::InvalidBezier)?,
+            BEZIER_SCALE,
+        )?,
+        y2: parse_signed_fixed(
+            components.next().ok_or(SwwwParseError::InvalidBezier)?,
+            BEZIER_SCALE,
+        )?,
+    };
+    if components.next().is_some()
+        || !(0..=BEZIER_SCALE).contains(&bezier.x1)
+        || !(0..=BEZIER_SCALE).contains(&bezier.x2)
+        || bezier
+            == (TransitionBezier {
+                x1: 0,
+                y1: 0,
+                x2: 0,
+                y2: 0,
+            })
+    {
+        return Err(SwwwParseError::InvalidBezier);
+    }
+    Ok(bezier)
+}
+
+fn parse_signed_fixed(value: &str, scale: i32) -> Result<i32, SwwwParseError> {
+    let value = value.trim();
+    let (negative, magnitude) = if let Some(value) = value.strip_prefix('-') {
+        (true, value)
+    } else if let Some(value) = value.strip_prefix('+') {
+        (false, value)
+    } else {
+        (false, value)
+    };
+    let (whole, fraction) = magnitude.split_once('.').unwrap_or((magnitude, ""));
+    if fraction.contains('.') || (whole.is_empty() && fraction.is_empty()) {
+        return Err(SwwwParseError::InvalidBezier);
+    }
+    let whole = if whole.is_empty() {
+        0
+    } else {
+        i64::from(parse_u32(whole).map_err(|_| SwwwParseError::InvalidBezier)?)
+    };
+    let digits_in_scale = 4u8;
+    let mut fractional = 0i64;
+    let mut digits = 0u8;
+    for byte in fraction.bytes() {
+        if !byte.is_ascii_digit() {
+            return Err(SwwwParseError::InvalidBezier);
+        }
+        if digits < digits_in_scale {
+            fractional = fractional * 10 + i64::from(byte - b'0');
+            digits += 1;
+        }
+    }
+    while digits < digits_in_scale {
+        fractional *= 10;
+        digits += 1;
+    }
+    let magnitude = whole
+        .checked_mul(i64::from(scale))
+        .and_then(|value| value.checked_add(fractional))
+        .ok_or(SwwwParseError::InvalidBezier)?;
+    let signed = if negative { -magnitude } else { magnitude };
+    i32::try_from(signed).map_err(|_| SwwwParseError::InvalidBezier)
+}
+
 fn parse_bool(value: &str) -> Result<bool, SwwwParseError> {
     if equal(value, "true") {
         Ok(true)
@@ -743,6 +863,7 @@ impl WallpaperDaemon {
                 angle_degrees: 45,
                 position: TransitionPosition::center(),
                 invert_y: false,
+                bezier: TransitionBezier::swww_default(),
                 resize: ResizeMode::Crop,
                 crop_gravity: CropGravity::Center,
                 fill_color: 0,
@@ -972,6 +1093,7 @@ pub fn transition_pixel_with_options(
     if progress == u8::MAX {
         return new;
     }
+    let progress = transition_eased_progress(options, progress);
     match options.kind {
         TransitionType::Simple | TransitionType::Fade => blend(old, new, progress),
         TransitionType::Left => {
@@ -1022,6 +1144,39 @@ pub fn transition_pixel_with_options(
         ),
         TransitionType::None | TransitionType::Any | TransitionType::Random => new,
     }
+}
+
+pub fn transition_eased_progress(options: TransitionOptions, progress: u8) -> u8 {
+    if progress == 0
+        || progress == u8::MAX
+        || matches!(options.kind, TransitionType::None | TransitionType::Simple)
+    {
+        return progress;
+    }
+    let scale = i64::from(BEZIER_SCALE);
+    let target_x = (i64::from(progress) * scale + i64::from(u8::MAX) / 2) / i64::from(u8::MAX);
+    let mut low = 0i64;
+    let mut high = scale;
+    while low < high {
+        let middle = (low + high) / 2;
+        if cubic_bezier_coordinate(options.bezier.x1, options.bezier.x2, middle) < target_x {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    let eased = cubic_bezier_coordinate(options.bezier.y1, options.bezier.y2, low).clamp(0, scale);
+    ((eased * i64::from(u8::MAX) + scale / 2) / scale) as u8
+}
+
+fn cubic_bezier_coordinate(first: i32, second: i32, time: i64) -> i64 {
+    let scale = i128::from(BEZIER_SCALE);
+    let time = i128::from(time);
+    let inverse = scale - time;
+    let numerator = 3 * inverse * inverse * time * i128::from(first)
+        + 3 * inverse * time * time * i128::from(second)
+        + time * time * time * scale;
+    (numerator / (scale * scale * scale)) as i64
 }
 
 fn choose(reveal: bool, old: u32, new: u32) -> u32 {
@@ -1318,7 +1473,7 @@ mod tests {
     #[test]
     fn applies_environment_defaults_and_transition_specific_step() {
         let defaults = parse_swww_environment(
-            "SWWW_TRANSITION=grow\nSWWW_TRANSITION_STEP=33\nSWWW_TRANSITION_FPS=60\nSWWW_TRANSITION_DURATION=2.125\nSWWW_TRANSITION_ANGLE=120\nSWWW_TRANSITION_POS=top-right\nSWWW_INVERT_Y=true\n",
+            "SWWW_TRANSITION=grow\nSWWW_TRANSITION_STEP=33\nSWWW_TRANSITION_FPS=60\nSWWW_TRANSITION_DURATION=2.125\nSWWW_TRANSITION_ANGLE=120\nSWWW_TRANSITION_POS=top-right\nSWWW_INVERT_Y=true\nSWWW_TRANSITION_BEZIER=.25,-.1,.75,1.2\n",
         )
         .unwrap();
         assert_eq!(defaults.transition.kind, TransitionType::Grow);
@@ -1334,9 +1489,18 @@ mod tests {
             }
         );
         assert!(defaults.transition.invert_y);
+        assert_eq!(
+            defaults.transition.bezier,
+            TransitionBezier {
+                x1: 2_500,
+                y1: -1_000,
+                x2: 7_500,
+                y2: 12_000,
+            }
+        );
 
         let SwwwCommand::Img(request) = parse_swww_command(
-            "img image.ppm --transition-type wipe --transition-angle 30 --transition-pos 0.25,0.75 --invert-y false",
+            "img image.ppm --transition-type wipe --transition-angle 30 --transition-pos 0.25,0.75 --invert-y false --transition-bezier 0,0,1,0",
             defaults,
         )
         .unwrap()
@@ -1354,6 +1518,15 @@ mod tests {
             }
         );
         assert!(!request.transition.invert_y);
+        assert_eq!(
+            request.transition.bezier,
+            TransitionBezier {
+                x1: 0,
+                y1: 0,
+                x2: 10_000,
+                y2: 0,
+            }
+        );
         let SwwwCommand::Img(request) = parse_swww_command(
             "img image.ppm --transition-duration .25",
             SwwwDefaults::default(),
@@ -1431,6 +1604,9 @@ mod tests {
             ),
             Err(SwwwParseError::InvalidNumber)
         );
+        for bezier in ["0,0,0,0", "0,0,1", "-.1,0,1,1", "0,0,1.1,1", "0,a,1,1"] {
+            assert_eq!(parse_bezier(bezier), Err(SwwwParseError::InvalidBezier));
+        }
         assert_eq!(
             parse_swww_command("swww clear #1a804a", SwwwDefaults::default()),
             Err(SwwwParseError::InvalidColor)
@@ -1531,6 +1707,36 @@ mod tests {
     fn transition_masks_and_blending_reach_expected_pixels() {
         let old = 0x00_00_00;
         let new = 0xff_80_40;
+        let linear = TransitionOptions {
+            kind: TransitionType::Fade,
+            bezier: TransitionBezier::linear(),
+            ..TransitionOptions::default()
+        };
+        assert_eq!(transition_eased_progress(linear, 128), 128);
+        let curved = TransitionOptions {
+            bezier: TransitionBezier {
+                x1: 0,
+                y1: 0,
+                x2: 10_000,
+                y2: 0,
+            },
+            ..linear
+        };
+        assert_eq!(transition_eased_progress(curved, 128), 32);
+        assert_eq!(
+            transition_pixel_with_options(curved, 128, (0, 0), (4, 4), old, new),
+            0x20_10_08
+        );
+        assert_eq!(
+            transition_eased_progress(
+                TransitionOptions {
+                    kind: TransitionType::Simple,
+                    ..curved
+                },
+                128
+            ),
+            128
+        );
         assert_eq!(
             transition_pixel(TransitionType::Simple, 0, (0, 0), (4, 4), old, new),
             old
@@ -1551,16 +1757,21 @@ mod tests {
             transition_pixel(TransitionType::Left, 90, (3, 0), (4, 4), old, new),
             old
         );
+        let center = TransitionOptions {
+            kind: TransitionType::Center,
+            bezier: TransitionBezier::linear(),
+            ..TransitionOptions::default()
+        };
         assert_eq!(
-            transition_pixel(TransitionType::Center, 1, (2, 2), (4, 4), old, new),
+            transition_pixel_with_options(center, 1, (2, 2), (4, 4), old, new),
             new
         );
         assert_eq!(
-            transition_pixel(TransitionType::Center, 254, (0, 0), (4, 4), old, new),
+            transition_pixel_with_options(center, 254, (0, 0), (4, 4), old, new),
             old
         );
         assert_eq!(
-            transition_pixel(TransitionType::Center, 255, (0, 0), (4, 4), old, new),
+            transition_pixel_with_options(center, 255, (0, 0), (4, 4), old, new),
             new
         );
         assert_eq!(
@@ -1571,6 +1782,7 @@ mod tests {
         let mut options = TransitionOptions {
             kind: TransitionType::Wipe,
             angle_degrees: 0,
+            bezier: TransitionBezier::linear(),
             ..TransitionOptions::default()
         };
         assert_eq!(
