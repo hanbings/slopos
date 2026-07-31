@@ -118,6 +118,17 @@ monitor_type() {
     echo "sendkey meta_l-home 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-focus-column-first.ppm"
+    echo "sendkey meta_l-shift-pgdn 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-workspace-moved-down.ppm"
+    echo "sendkey meta_l-alt-c 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-workspace-reordered-name.ppm"
+    echo "sendkey meta_l-alt-m 50"
+    sleep 1
+    echo "sendkey meta_l-shift-pgup 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-workspace-moved-up.ppm"
     echo "sendkey meta_l-shift-f 50"
     sleep 1
     echo "mouse_move -441 -364"
@@ -473,6 +484,14 @@ grep -Fq "SLOPOS-NIRI: binding action=focus-column-last changed=true workspace=1
 grep -Fq "SLOPOS-DESKTOP: column reordered kind=SYSTEM x=16 direction=move-column-to-first layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: column reordered kind=SYSTEM x=520 direction=move-column-to-last layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-column-first changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace reordered action=move-workspace-down workspace=2 name=main previous=1 focused=0 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=move-workspace-down changed=true workspace=2 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=1 name=config focused=2" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=config" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace reordered action=move-workspace-up workspace=1 name=main previous=2 focused=0 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=move-workspace-up changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: fullscreen toggled state=active kind=TERMINAL restore_layer=tiling x=0 y=0 width=1024 height=768 bar=covered layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=TERMINAL restore_layer=tiling x=16 y=56 width=488 height=696 bar=visible layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-window-to-floating changed=true workspace=1 name=main focused=0" "${serial_log}"
@@ -616,6 +635,9 @@ test -s "${repo_dir}/evidence/niri-focus-column-last.ppm"
 test -s "${repo_dir}/evidence/niri-column-moved-first.ppm"
 test -s "${repo_dir}/evidence/niri-column-moved-last.ppm"
 test -s "${repo_dir}/evidence/niri-focus-column-first.ppm"
+test -s "${repo_dir}/evidence/niri-workspace-moved-down.ppm"
+test -s "${repo_dir}/evidence/niri-workspace-reordered-name.ppm"
+test -s "${repo_dir}/evidence/niri-workspace-moved-up.ppm"
 test -s "${repo_dir}/evidence/niri-tiled-fullscreen.ppm"
 test -s "${repo_dir}/evidence/niri-tiled-fullscreen-restored.ppm"
 test -s "${repo_dir}/evidence/niri-floating-fullscreen.ppm"
@@ -686,6 +708,12 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-column-moved-last.png"
     pnmtopng "${repo_dir}/evidence/niri-focus-column-first.ppm" \
         >"${repo_dir}/evidence/niri-focus-column-first.png"
+    pnmtopng "${repo_dir}/evidence/niri-workspace-moved-down.ppm" \
+        >"${repo_dir}/evidence/niri-workspace-moved-down.png"
+    pnmtopng "${repo_dir}/evidence/niri-workspace-reordered-name.ppm" \
+        >"${repo_dir}/evidence/niri-workspace-reordered-name.png"
+    pnmtopng "${repo_dir}/evidence/niri-workspace-moved-up.ppm" \
+        >"${repo_dir}/evidence/niri-workspace-moved-up.png"
     pnmtopng "${repo_dir}/evidence/niri-tiled-fullscreen.ppm" \
         >"${repo_dir}/evidence/niri-tiled-fullscreen.png"
     pnmtopng "${repo_dir}/evidence/niri-tiled-fullscreen-restored.ppm" \

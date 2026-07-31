@@ -98,6 +98,7 @@ impl Desktop {
         let workspace_count = niri.workspaces.len() + 1;
         let mut workspaces = WorkspaceSet::new(
             workspace_count,
+            niri.workspaces.len(),
             u16::try_from(width).unwrap_or(u16::MAX),
             u16::try_from(height).unwrap_or(u16::MAX),
             bar.height,
@@ -639,6 +640,7 @@ impl Desktop {
         let workspace_count = niri.workspaces.len() + 1;
         let mut workspaces = WorkspaceSet::new(
             workspace_count,
+            niri.workspaces.len(),
             u16::try_from(self.screen_width).unwrap_or(u16::MAX),
             u16::try_from(self.screen_height).unwrap_or(u16::MAX),
             bar.height,
@@ -1580,6 +1582,8 @@ impl Desktop {
                     | NiriAction::FocusWorkspaceDown
                     | NiriAction::FocusWorkspacePrevious
                     | NiriAction::FocusWorkspace(_)
+                    | NiriAction::MoveWorkspaceUp
+                    | NiriAction::MoveWorkspaceDown
             );
         let changed = if blocked_by_fullscreen {
             false
@@ -1606,6 +1610,8 @@ impl Desktop {
                         .focus_workspace(workspace)
                         .unwrap_or_else(|_| crate::fatal("niri focus-workspace failed"))
                 }
+                NiriAction::MoveWorkspaceUp => self.workspaces.move_workspace_up(),
+                NiriAction::MoveWorkspaceDown => self.workspaces.move_workspace_down(),
                 NiriAction::MoveColumnToWorkspaceUp => {
                     let active = self.workspaces.active();
                     active > 0
@@ -1741,6 +1747,24 @@ impl Desktop {
             );
         }
         self.sync_focused_window();
+        if changed
+            && matches!(
+                action,
+                NiriAction::MoveWorkspaceUp | NiriAction::MoveWorkspaceDown
+            )
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: workspace reordered action={} workspace={} name={} previous={} focused={} layout=niri",
+                action_name(action),
+                self.workspaces.active() + 1,
+                self.active_workspace_name(),
+                self.workspaces.previous() + 1,
+                self.workspaces
+                    .focused_window()
+                    .map(|window| window as i32)
+                    .unwrap_or(-1)
+            ));
+        }
         if changed && matches!(action, NiriAction::FullscreenWindow) {
             self.scrolling_view = false;
             self.resizing_column = false;
@@ -2091,11 +2115,17 @@ impl Desktop {
             WorkspaceReference::Index(workspace) => usize::from(workspace)
                 .saturating_sub(1)
                 .min(self.workspaces.len() - 1),
-            WorkspaceReference::Name(name) => self
-                .niri
-                .workspaces
-                .index_of(name)
-                .unwrap_or_else(|| crate::fatal("validated niri workspace name disappeared")),
+            WorkspaceReference::Name(name) => {
+                let identity = self
+                    .niri
+                    .workspaces
+                    .index_of(name)
+                    .and_then(|identity| u8::try_from(identity).ok())
+                    .unwrap_or_else(|| crate::fatal("validated niri workspace name disappeared"));
+                self.workspaces
+                    .workspace_for_identity(identity)
+                    .unwrap_or_else(|| crate::fatal("named niri workspace identity disappeared"))
+            }
         }
     }
 
@@ -2151,9 +2181,10 @@ impl Desktop {
     }
 
     fn active_workspace_name(&self) -> &'static str {
-        self.niri
-            .workspaces
-            .get(self.workspaces.active())
+        self.workspaces
+            .workspace_identity(self.workspaces.active())
+            .unwrap_or_else(|_| crate::fatal("active niri workspace disappeared"))
+            .and_then(|identity| self.niri.workspaces.get(usize::from(identity)))
             .map(|workspace| workspace.name)
             .unwrap_or("<empty>")
     }
@@ -2280,6 +2311,8 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::FocusWorkspaceDown => "focus-workspace-down",
         NiriAction::FocusWorkspacePrevious => "focus-workspace-previous",
         NiriAction::FocusWorkspace(_) => "focus-workspace",
+        NiriAction::MoveWorkspaceUp => "move-workspace-up",
+        NiriAction::MoveWorkspaceDown => "move-workspace-down",
         NiriAction::MoveColumnToWorkspaceUp => "move-column-to-workspace-up",
         NiriAction::MoveColumnToWorkspaceDown => "move-column-to-workspace-down",
         NiriAction::MoveColumnToWorkspace(_) => "move-column-to-workspace",

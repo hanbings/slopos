@@ -73,6 +73,8 @@ pub enum NiriAction<'a> {
     FocusWorkspaceDown,
     FocusWorkspacePrevious,
     FocusWorkspace(WorkspaceReference<'a>),
+    MoveWorkspaceUp,
+    MoveWorkspaceDown,
     MoveColumnToWorkspaceUp,
     MoveColumnToWorkspaceDown,
     MoveColumnToWorkspace(WorkspaceReference<'a>),
@@ -529,6 +531,8 @@ impl<'a> ShellConfigParser<'a> {
             "focus-workspace-down" => NiriAction::FocusWorkspaceDown,
             "focus-workspace-previous" => NiriAction::FocusWorkspacePrevious,
             "focus-workspace" => NiriAction::FocusWorkspace(self.parse_workspace_reference()?),
+            "move-workspace-up" => NiriAction::MoveWorkspaceUp,
+            "move-workspace-down" => NiriAction::MoveWorkspaceDown,
             "move-column-to-workspace-up" => NiriAction::MoveColumnToWorkspaceUp,
             "move-column-to-workspace-down" => NiriAction::MoveColumnToWorkspaceDown,
             "move-column-to-workspace" => {
@@ -1214,6 +1218,7 @@ pub struct WorkspaceSet<const WORKSPACES: usize, const COLUMNS: usize, const WIN
     floating: [FloatingLayout<WINDOWS>; WORKSPACES],
     floating_active: [bool; WORKSPACES],
     fullscreen: [Option<u32>; WORKSPACES],
+    identities: [Option<u8>; WORKSPACES],
     count: usize,
     active: usize,
     previous: usize,
@@ -1224,13 +1229,22 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
 {
     pub fn new(
         count: usize,
+        persistent: usize,
         output_width: u16,
         output_height: u16,
         reserved_top: u16,
         config: LayoutConfig,
     ) -> Result<Self, WorkspaceError> {
-        if count == 0 || count > WORKSPACES {
+        if count == 0
+            || count > WORKSPACES
+            || persistent > count
+            || persistent > usize::from(u8::MAX)
+        {
             return Err(WorkspaceError::InvalidCount);
+        }
+        let mut identities = [None; WORKSPACES];
+        for (index, identity) in identities[..persistent].iter_mut().enumerate() {
+            *identity = Some(u8::try_from(index).map_err(|_| WorkspaceError::InvalidCount)?);
         }
         Ok(Self {
             layouts: core::array::from_fn(|_| {
@@ -1241,6 +1255,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             }),
             floating_active: [false; WORKSPACES],
             fullscreen: [None; WORKSPACES],
+            identities,
             count,
             active: 0,
             previous: 0,
@@ -1261,6 +1276,20 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
 
     pub const fn previous(&self) -> usize {
         self.previous
+    }
+
+    pub fn workspace_identity(&self, workspace: usize) -> Result<Option<u8>, WorkspaceError> {
+        self.identities
+            .get(workspace)
+            .filter(|_| workspace < self.count)
+            .copied()
+            .ok_or(WorkspaceError::InvalidWorkspace)
+    }
+
+    pub fn workspace_for_identity(&self, identity: u8) -> Option<usize> {
+        self.identities[..self.count]
+            .iter()
+            .position(|current| *current == Some(identity))
     }
 
     pub fn workspace_is_empty(&self, workspace: usize) -> Result<bool, WorkspaceError> {
@@ -1836,6 +1865,20 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         Ok(changed)
     }
 
+    pub fn move_workspace_up(&mut self) -> bool {
+        if self.active == 0 {
+            return false;
+        }
+        self.move_active_workspace_to(self.active - 1)
+    }
+
+    pub fn move_workspace_down(&mut self) -> bool {
+        if self.active + 1 >= self.count {
+            return false;
+        }
+        self.move_active_workspace_to(self.active + 1)
+    }
+
     pub fn move_focused_column_to_workspace(
         &mut self,
         workspace: usize,
@@ -1898,13 +1941,20 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn normalize_dynamic(&mut self, persistent: usize) -> Result<bool, WorkspaceError> {
-        if persistent >= self.count {
+        if persistent >= self.count
+            || self.identities[..self.count]
+                .iter()
+                .filter(|identity| identity.is_some())
+                .count()
+                != persistent
+        {
             return Err(WorkspaceError::InvalidCount);
         }
         let mut changed = false;
-        let mut workspace = persistent;
+        let mut workspace = 0;
         while workspace + 1 < self.count {
-            if self.layouts[workspace].is_empty()
+            if self.identities[workspace].is_none()
+                && self.layouts[workspace].is_empty()
                 && self.floating[workspace].is_empty()
                 && self.active != workspace
             {
@@ -1913,6 +1963,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
                     self.floating.swap(index, index + 1);
                     self.floating_active.swap(index, index + 1);
                     self.fullscreen.swap(index, index + 1);
+                    self.identities.swap(index, index + 1);
                 }
                 self.count -= 1;
                 if self.active > workspace {
@@ -1931,13 +1982,44 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         if (!self.layouts[self.count - 1].is_empty() || !self.floating[self.count - 1].is_empty())
             && self.count < WORKSPACES
         {
-            if !self.layouts[self.count].is_empty() || !self.floating[self.count].is_empty() {
+            if !self.layouts[self.count].is_empty()
+                || !self.floating[self.count].is_empty()
+                || self.fullscreen[self.count].is_some()
+                || self.identities[self.count].is_some()
+            {
                 return Err(WorkspaceError::InvalidCount);
             }
+            self.identities[self.count] = None;
             self.count += 1;
             changed = true;
         }
         Ok(changed)
+    }
+
+    fn move_active_workspace_to(&mut self, target: usize) -> bool {
+        let active_is_empty_dynamic = self.identities[self.active].is_none()
+            && self.layouts[self.active].is_empty()
+            && self.floating[self.active].is_empty();
+        let target_is_empty_dynamic = self.identities[target].is_none()
+            && self.layouts[target].is_empty()
+            && self.floating[target].is_empty();
+        if active_is_empty_dynamic || target_is_empty_dynamic {
+            return false;
+        }
+
+        let source = self.active;
+        self.layouts.swap(source, target);
+        self.floating.swap(source, target);
+        self.floating_active.swap(source, target);
+        self.fullscreen.swap(source, target);
+        self.identities.swap(source, target);
+        self.active = target;
+        if self.previous == source {
+            self.previous = target;
+        } else if self.previous == target {
+            self.previous = source;
+        }
+        true
     }
 }
 
@@ -1960,6 +2042,8 @@ mod tests {
                 Mod+Ctrl+Home { move-column-to-first; }
                 Mod+Ctrl+End { move-column-to-last; }
                 Mod+Shift+Down repeat=false { move-column-to-workspace-down; }
+                Mod+Shift+Page_Up { move-workspace-up; }
+                Mod+Shift+Page_Down { move-workspace-down; }
                 Mod+1 { focus-workspace 1; }
                 Mod+Ctrl+2 { move-column-to-workspace 2; }
                 Mod+Alt+C { focus-workspace "config"; }
@@ -2020,7 +2104,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 48);
+        assert_eq!(config.bindings.len(), 50);
         assert_eq!(
             config
                 .bindings
@@ -2073,6 +2157,20 @@ mod tests {
                 BindingKey::Down
             ),
             Some(NiriAction::MoveColumnToWorkspaceDown)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::SHIFT),
+                BindingKey::PageUp
+            ),
+            Some(NiriAction::MoveWorkspaceUp)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::SHIFT),
+                BindingKey::PageDown
+            ),
+            Some(NiriAction::MoveWorkspaceDown)
         );
         assert_eq!(
             config.bindings.action(
@@ -2429,7 +2527,7 @@ mod tests {
     #[test]
     fn moves_windows_between_tiling_and_floating_layers() {
         let mut workspaces =
-            WorkspaceSet::<3, 3, 3>::new(2, 1000, 700, 40, LayoutConfig::default()).unwrap();
+            WorkspaceSet::<3, 3, 3>::new(2, 2, 1000, 700, 40, LayoutConfig::default()).unwrap();
         workspaces.open_window(0, 1).unwrap();
         workspaces.open_window(0, 2).unwrap();
         workspaces.focus_window(1).unwrap();
@@ -2500,7 +2598,7 @@ mod tests {
         assert_eq!(workspaces.focused_window(), Some(3));
 
         let mut floating_only =
-            WorkspaceSet::<2, 2, 2>::new(1, 1000, 700, 40, LayoutConfig::default()).unwrap();
+            WorkspaceSet::<2, 2, 2>::new(1, 1, 1000, 700, 40, LayoutConfig::default()).unwrap();
         floating_only.open_floating_window(0, 9).unwrap();
         assert!(floating_only.focused_window_is_floating());
         assert_eq!(floating_only.focused_window(), Some(9));
@@ -2509,7 +2607,7 @@ mod tests {
     #[test]
     fn switches_workspaces_and_moves_the_focused_column() {
         let mut workspaces =
-            WorkspaceSet::<4, 3, 1>::new(3, 1000, 700, 40, LayoutConfig::default()).unwrap();
+            WorkspaceSet::<4, 3, 1>::new(3, 2, 1000, 700, 40, LayoutConfig::default()).unwrap();
         workspaces.open_window(0, 10).unwrap();
         workspaces.open_window(0, 20).unwrap();
         workspaces.focus_window(10).unwrap();
@@ -2553,9 +2651,53 @@ mod tests {
     }
 
     #[test]
+    fn reorders_complete_named_and_dynamic_workspaces() {
+        let mut workspaces =
+            WorkspaceSet::<4, 3, 3>::new(3, 2, 1000, 700, 40, LayoutConfig::default()).unwrap();
+        workspaces.open_window(0, 10).unwrap();
+        workspaces.open_floating_window(0, 11).unwrap();
+        workspaces.open_window(1, 20).unwrap();
+        workspaces.focus_window(10).unwrap();
+        assert!(workspaces.toggle_focused_window_fullscreen());
+
+        assert!(workspaces.move_workspace_down());
+        assert_eq!(workspaces.active(), 1);
+        assert_eq!(workspaces.workspace_identity(1).unwrap(), Some(0));
+        assert_eq!(workspaces.workspace_for_identity(0), Some(1));
+        assert_eq!(workspaces.workspace_for_identity(1), Some(0));
+        assert_eq!(workspaces.focused_window(), Some(10));
+        assert_eq!(workspaces.fullscreen_window(), Some(10));
+        assert!(workspaces.window_is_floating(11));
+        assert!(workspaces.tile_rect(20).is_err());
+        assert!(!workspaces.focus_workspace_previous());
+
+        assert!(workspaces.move_workspace_up());
+        assert_eq!(workspaces.active(), 0);
+        assert_eq!(workspaces.workspace_identity(0).unwrap(), Some(0));
+        assert!(workspaces.toggle_focused_window_fullscreen());
+        workspaces.focus_window(11).unwrap();
+        assert!(workspaces.focused_window_is_floating());
+
+        workspaces.open_window(2, 30).unwrap();
+        assert!(workspaces.focus_workspace(2).unwrap());
+        assert!(workspaces.normalize_dynamic(2).unwrap());
+        assert_eq!(workspaces.len(), 4);
+        assert_eq!(workspaces.workspace_identity(2).unwrap(), None);
+        assert!(workspaces.move_workspace_up());
+        assert_eq!(workspaces.active(), 1);
+        assert_eq!(workspaces.workspace_identity(1).unwrap(), None);
+        assert_eq!(workspaces.workspace_for_identity(1), Some(2));
+        assert_eq!(workspaces.focused_window(), Some(30));
+        assert!(workspaces.move_workspace_down());
+        assert_eq!(workspaces.active(), 2);
+        assert!(!workspaces.move_workspace_down());
+        assert!(workspaces.workspace_is_empty(3).unwrap());
+    }
+
+    #[test]
     fn distinguishes_window_and_column_workspace_transfers() {
         let mut workspaces =
-            WorkspaceSet::<3, 3, 3>::new(2, 1000, 700, 40, LayoutConfig::default()).unwrap();
+            WorkspaceSet::<3, 3, 3>::new(2, 2, 1000, 700, 40, LayoutConfig::default()).unwrap();
         workspaces.open_window(0, 10).unwrap();
         workspaces.open_window(0, 20).unwrap();
         workspaces.focus_window(10).unwrap();
@@ -2590,7 +2732,7 @@ mod tests {
     #[test]
     fn fullscreen_hides_siblings_and_restores_tiled_or_floating_geometry() {
         let mut workspaces =
-            WorkspaceSet::<3, 3, 3>::new(2, 1000, 700, 40, LayoutConfig::default()).unwrap();
+            WorkspaceSet::<3, 3, 3>::new(2, 2, 1000, 700, 40, LayoutConfig::default()).unwrap();
         workspaces.open_window(0, 10).unwrap();
         workspaces.open_window(0, 20).unwrap();
         workspaces.focus_window(10).unwrap();
