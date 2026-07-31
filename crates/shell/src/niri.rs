@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 
 use crate::{
-    ColumnWidth, ColumnWidthChange, LayoutConfig, LayoutError, Rect, ScrollLayout, TabbedColumnInfo,
+    ColumnDisplay, ColumnWidth, ColumnWidthChange, LayoutConfig, LayoutError, Rect, ScrollLayout,
+    TabbedColumnInfo,
 };
 
 pub const MAX_NIRI_WORKSPACES: usize = 8;
@@ -227,6 +228,7 @@ pub struct NiriWindowRule<'a> {
     pub open_maximized: Option<bool>,
     pub default_column_width: Option<ColumnWidth>,
     pub default_window_height: Option<ColumnWidth>,
+    pub default_column_display: Option<ColumnDisplay>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -309,6 +311,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         height
+    }
+
+    pub fn column_display_for(self, app_id: &str) -> Option<ColumnDisplay> {
+        let mut display = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.default_column_display {
+                    display = Some(value);
+                }
+            }
+        }
+        display
     }
 
     fn push(&mut self, rule: NiriWindowRule<'a>) -> Result<(), NiriConfigError> {
@@ -508,6 +522,7 @@ impl<'a> ShellConfigParser<'a> {
             open_maximized: None,
             default_column_width: None,
             default_window_height: None,
+            default_column_display: None,
         };
         loop {
             match self.next_non_end() {
@@ -559,6 +574,14 @@ impl<'a> ShellConfigParser<'a> {
                 }
                 KdlToken::Word("default-window-height") => {
                     rule.default_window_height = Some(self.parse_rule_size()?);
+                }
+                KdlToken::Word("default-column-display") => {
+                    rule.default_column_display = Some(match self.next() {
+                        KdlToken::String("normal") => ColumnDisplay::Normal,
+                        KdlToken::String("tabbed") => ColumnDisplay::Tabbed,
+                        _ => return Err(NiriConfigError::InvalidWindowRule),
+                    });
+                    self.finish_node()?;
                 }
                 KdlToken::Word(_) | KdlToken::String(_) | KdlToken::Equal => {
                     self.skip_node()?;
@@ -1456,11 +1479,22 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         width: Option<ColumnWidth>,
         height: Option<ColumnWidth>,
     ) -> Result<(), WorkspaceError> {
+        self.open_window_with_properties(workspace, window, width, height, None)
+    }
+
+    pub fn open_window_with_properties(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
+        display: Option<ColumnDisplay>,
+    ) -> Result<(), WorkspaceError> {
         self.layouts
             .get_mut(workspace)
             .filter(|_| workspace < self.count)
             .ok_or(WorkspaceError::InvalidWorkspace)?
-            .open_window_with_dimensions(window, width, height)
+            .open_window_with_properties(window, width, height, display)
             .map_err(WorkspaceError::Layout)
     }
 
@@ -1733,24 +1767,45 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn expel_window_from_column(&mut self) -> bool {
+        self.expel_window_from_column_with_display(None)
+    }
+
+    pub fn expel_window_from_column_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if self.focused_window_is_floating() {
             return false;
         }
-        self.layouts[self.active].expel_window_from_column()
+        self.layouts[self.active].expel_window_from_column_with_display(display)
     }
 
     pub fn consume_or_expel_focused_window_left(&mut self) -> bool {
+        self.consume_or_expel_focused_window_left_with_display(None)
+    }
+
+    pub fn consume_or_expel_focused_window_left_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if self.focused_window_is_floating() {
             return false;
         }
-        self.layouts[self.active].consume_or_expel_focused_window_left()
+        self.layouts[self.active].consume_or_expel_focused_window_left_with_display(display)
     }
 
     pub fn consume_or_expel_focused_window_right(&mut self) -> bool {
+        self.consume_or_expel_focused_window_right_with_display(None)
+    }
+
+    pub fn consume_or_expel_focused_window_right_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if self.focused_window_is_floating() {
             return false;
         }
-        self.layouts[self.active].consume_or_expel_focused_window_right()
+        self.layouts[self.active].consume_or_expel_focused_window_right_with_display(display)
     }
 
     pub fn toggle_focused_column_tabbed_display(&mut self) -> bool {
@@ -1761,8 +1816,15 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn toggle_focused_window_floating(&mut self) -> bool {
+        self.toggle_focused_window_floating_with_display(None)
+    }
+
+    pub fn toggle_focused_window_floating_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if self.focused_window_is_floating() {
-            self.move_focused_window_to_tiling()
+            self.move_focused_window_to_tiling_with_display(display)
         } else {
             self.move_focused_window_to_floating()
         }
@@ -1792,6 +1854,13 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn move_focused_window_to_tiling(&mut self) -> bool {
+        self.move_focused_window_to_tiling_with_display(None)
+    }
+
+    pub fn move_focused_window_to_tiling_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if !self.focused_window_is_floating() {
             return false;
         }
@@ -1801,7 +1870,10 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         let entry = self.floating[self.active]
             .remove(window)
             .expect("focused floating window is present");
-        if self.layouts[self.active].open_window(window).is_err() {
+        if self.layouts[self.active]
+            .open_window_with_properties(window, None, None, display)
+            .is_err()
+        {
             self.floating[self.active]
                 .add_entry(entry)
                 .expect("removed floating window has capacity to roll back");
@@ -1951,17 +2023,32 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn maximize_focused_column(&mut self) -> bool {
-        if self.focused_window_is_floating() && !self.toggle_focused_window_floating() {
+        self.maximize_focused_column_with_display(None)
+    }
+
+    pub fn maximize_focused_column_with_display(&mut self, display: Option<ColumnDisplay>) -> bool {
+        if self.focused_window_is_floating()
+            && !self.toggle_focused_window_floating_with_display(display)
+        {
             return false;
         }
         self.layouts[self.active].toggle_maximize_focused_column()
     }
 
     pub fn maximize_focused_window_to_edges(&mut self) -> bool {
-        if self.focused_window_is_floating() && !self.toggle_focused_window_floating() {
+        self.maximize_focused_window_to_edges_with_display(None)
+    }
+
+    pub fn maximize_focused_window_to_edges_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
+        if self.focused_window_is_floating()
+            && !self.toggle_focused_window_floating_with_display(display)
+        {
             return false;
         }
-        self.layouts[self.active].toggle_maximize_focused_window_to_edges()
+        self.layouts[self.active].toggle_maximize_focused_window_to_edges_with_display(display)
     }
 
     pub fn center_focused_column(&mut self) -> bool {
@@ -2070,20 +2157,29 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         &mut self,
         workspace: usize,
     ) -> Result<bool, WorkspaceError> {
-        self.move_focused_to_workspace(workspace, true)
+        self.move_focused_to_workspace(workspace, true, None)
     }
 
     pub fn move_focused_window_to_workspace(
         &mut self,
         workspace: usize,
     ) -> Result<bool, WorkspaceError> {
-        self.move_focused_to_workspace(workspace, false)
+        self.move_focused_window_to_workspace_with_display(workspace, None)
+    }
+
+    pub fn move_focused_window_to_workspace_with_display(
+        &mut self,
+        workspace: usize,
+        display: Option<ColumnDisplay>,
+    ) -> Result<bool, WorkspaceError> {
+        self.move_focused_to_workspace(workspace, false, display)
     }
 
     fn move_focused_to_workspace(
         &mut self,
         workspace: usize,
         whole_column: bool,
+        display: Option<ColumnDisplay>,
     ) -> Result<bool, WorkspaceError> {
         if workspace >= self.count {
             return Err(WorkspaceError::InvalidWorkspace);
@@ -2114,7 +2210,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             let moved = if whole_column {
                 source.move_focused_column_to(destination)
             } else {
-                source.move_focused_window_to(destination)
+                source.move_focused_window_to_with_display(destination, display)
             }
             .map_err(WorkspaceError::Layout)?;
             if !moved {
@@ -2280,6 +2376,7 @@ mod tests {
                 open-maximized true
                 default-column-width { fixed 600; }
                 default-window-height { fixed 400; }
+                default-column-display "normal"
             }
             window-rule {
                 match app-id="slopos-config"
@@ -2288,6 +2385,7 @@ mod tests {
                 open-maximized true
                 default-column-width { proportion 0.333; }
                 default-window-height { proportion 0.333; }
+                default-column-display "normal"
             }
             window-rule {
                 match app-id="slopos-config"
@@ -2296,6 +2394,7 @@ mod tests {
                 open-maximized false
                 default-column-width { proportion 0.667; }
                 default-window-height { proportion 0.5; }
+                default-column-display "tabbed"
             }
             "#,
         )
@@ -2732,6 +2831,14 @@ mod tests {
             config.window_rules.window_height_for("slopos-config"),
             Some(ColumnWidth::Proportion(500))
         );
+        assert_eq!(
+            config.window_rules.column_display_for("slopos-terminal"),
+            Some(ColumnDisplay::Normal)
+        );
+        assert_eq!(
+            config.window_rules.column_display_for("slopos-config"),
+            Some(ColumnDisplay::Tabbed)
+        );
     }
 
     #[test]
@@ -2756,6 +2863,15 @@ mod tests {
             parse_niri_shell_config("window-rule { open-maximized maybe; }"),
             Err(NiriConfigError::InvalidWindowRule)
         );
+        for input in [
+            r#"window-rule { default-column-display "stacked"; }"#,
+            "window-rule { default-column-display tabbed; }",
+        ] {
+            assert_eq!(
+                parse_niri_shell_config(input),
+                Err(NiriConfigError::InvalidWindowRule)
+            );
+        }
         for input in [
             "window-rule { default-column-width { proportion 1.5; } }",
             "window-rule { default-column-width { fixed nope; } }",
@@ -2830,6 +2946,7 @@ mod tests {
                 height: 440,
             }
         );
+        assert_eq!(workspaces.tabbed_column_info(1), None);
         assert_eq!(workspaces.tile_rect(2).unwrap().x, 16);
         assert!(workspaces.switch_focus_between_floating_and_tiling());
         assert_eq!(workspaces.focused_window(), Some(2));
@@ -2895,11 +3012,12 @@ mod tests {
         let mut workspaces =
             WorkspaceSet::<2, 2, 2>::new(1, 1, 1000, 700, 40, LayoutConfig::default()).unwrap();
         workspaces
-            .open_window_with_dimensions(
+            .open_window_with_properties(
                 0,
                 1,
                 Some(ColumnWidth::Proportion(667)),
                 Some(ColumnWidth::Proportion(500)),
+                Some(ColumnDisplay::Tabbed),
             )
             .unwrap();
         assert_eq!(
@@ -2910,6 +3028,13 @@ mod tests {
                 width: 640,
                 height: 306,
             }
+        );
+        assert_eq!(
+            workspaces.tabbed_column_info(1),
+            Some(TabbedColumnInfo {
+                active_tab: 0,
+                tab_count: 1,
+            })
         );
 
         workspaces
@@ -2938,6 +3063,14 @@ mod tests {
         assert_eq!(workspaces.tile_rect(2).unwrap().height, 230);
         assert!(workspaces.reset_focused_window_height());
         assert_eq!(workspaces.tile_rect(2).unwrap().height, 270);
+        assert!(workspaces.move_focused_window_to_tiling_with_display(Some(ColumnDisplay::Tabbed)));
+        assert_eq!(
+            workspaces.tabbed_column_info(2),
+            Some(TabbedColumnInfo {
+                active_tab: 0,
+                tab_count: 1,
+            })
+        );
     }
 
     #[test]
@@ -3040,9 +3173,14 @@ mod tests {
         assert!(workspaces.consume_window_into_column());
         assert_eq!(workspaces.focused_window(), Some(20));
 
-        assert!(workspaces.move_focused_window_to_workspace(1).unwrap());
+        assert!(
+            workspaces
+                .move_focused_window_to_workspace_with_display(1, Some(ColumnDisplay::Tabbed))
+                .unwrap()
+        );
         assert_eq!(workspaces.active(), 1);
         assert_eq!(workspaces.focused_window(), Some(20));
+        assert_eq!(workspaces.tabbed_column_info(20).unwrap().tab_count, 1);
         assert!(workspaces.focus_workspace_previous());
         assert_eq!(workspaces.focused_window(), Some(10));
         assert!(workspaces.tile_rect(20).is_err());

@@ -8,11 +8,11 @@ use crate::serial::serialln;
 use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
     BarButton, BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers,
-    ImgRequest, NiriAction, NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle,
-    SwwwCommand, SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig,
-    WaybarStyle, WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout,
-    parse_niri_shell_config, parse_ppm, parse_swww_command, parse_swww_environment,
-    parse_waybar_config, parse_waybar_style, transition_pixel,
+    ColumnDisplay, ImgRequest, NiriAction, NiriShellConfig, PpmImage, ResizeMode,
+    ResolvedWaybarStyle, SwwwCommand, SwwwDaemonError, SwwwDefaults, TransitionType,
+    WallpaperDaemon, WaybarConfig, WaybarStyle, WorkspaceReference, WorkspaceSet, format_bar_text,
+    parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
+    parse_swww_environment, parse_waybar_config, parse_waybar_style, transition_pixel,
 };
 
 const WINDOW_COUNT: usize = 3;
@@ -116,6 +116,7 @@ impl Desktop {
             let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
             let column_width = niri.window_rules.column_width_for(app_id);
             let window_height = niri.window_rules.window_height_for(app_id);
+            let column_display = niri.window_rules.column_display_for(app_id);
             if floating {
                 workspaces
                     .open_floating_window_with_dimensions(
@@ -127,13 +128,21 @@ impl Desktop {
                     .unwrap_or_else(|_| crate::fatal("niri floating seed capacity mismatch"));
             } else {
                 workspaces
-                    .open_window_with_dimensions(
+                    .open_window_with_properties(
                         workspace,
                         window as u32,
                         column_width,
                         window_height,
+                        column_display,
                     )
                     .unwrap_or_else(|_| crate::fatal("niri layout seed capacity mismatch"));
+                if column_display == Some(ColumnDisplay::Tabbed) {
+                    serialln(format_args!(
+                        "SLOPOS-NIRI: window rule app_id={} property=default-column-display value=tabbed applied=true workspace={} source=config",
+                        app_id,
+                        workspace + 1
+                    ));
+                }
                 if maximized {
                     workspaces
                         .set_window_maximized(workspace, window as u32, true)
@@ -695,6 +704,7 @@ impl Desktop {
             let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
             let column_width = niri.window_rules.column_width_for(app_id);
             let window_height = niri.window_rules.window_height_for(app_id);
+            let column_display = niri.window_rules.column_display_for(app_id);
             if floating {
                 workspaces
                     .open_floating_window_with_dimensions(
@@ -706,13 +716,21 @@ impl Desktop {
                     .unwrap_or_else(|_| crate::fatal("published niri floating seed failed"));
             } else {
                 workspaces
-                    .open_window_with_dimensions(
+                    .open_window_with_properties(
                         workspace,
                         window as u32,
                         column_width,
                         window_height,
+                        column_display,
                     )
                     .unwrap_or_else(|_| crate::fatal("published niri layout seed failed"));
+                if column_display == Some(ColumnDisplay::Tabbed) {
+                    serialln(format_args!(
+                        "SLOPOS-NIRI: window rule app_id={} property=default-column-display value=tabbed applied=true workspace={} source=config",
+                        app_id,
+                        workspace + 1
+                    ));
+                }
                 if maximized {
                     workspaces
                         .set_window_maximized(workspace, window as u32, true)
@@ -1653,6 +1671,16 @@ impl Desktop {
     }
 
     fn execute_niri_action(&mut self, action: NiriAction<'static>) {
+        let rule_column_display = self
+            .workspaces
+            .focused_window()
+            .and_then(|window| usize::try_from(window).ok())
+            .filter(|window| *window < WINDOW_COUNT)
+            .and_then(|window| {
+                self.niri
+                    .window_rules
+                    .column_display_for(app_id(window_kind(window)))
+            });
         let blocked_by_fullscreen = self.workspaces.fullscreen_window().is_some()
             && !matches!(
                 action,
@@ -1719,7 +1747,10 @@ impl Desktop {
                     active > 0
                         && self
                             .workspaces
-                            .move_focused_window_to_workspace(active - 1)
+                            .move_focused_window_to_workspace_with_display(
+                                active - 1,
+                                rule_column_display,
+                            )
                             .unwrap_or_else(|_| {
                                 crate::fatal("niri move-window-to-workspace-up failed")
                             })
@@ -1729,7 +1760,10 @@ impl Desktop {
                     active + 1 < self.workspaces.len()
                         && self
                             .workspaces
-                            .move_focused_window_to_workspace(active + 1)
+                            .move_focused_window_to_workspace_with_display(
+                                active + 1,
+                                rule_column_display,
+                            )
                             .unwrap_or_else(|_| {
                                 crate::fatal("niri move-window-to-workspace-down failed")
                             })
@@ -1737,30 +1771,37 @@ impl Desktop {
                 NiriAction::MoveWindowToWorkspace(reference) => {
                     let workspace = self.resolve_workspace_reference(reference);
                     self.workspaces
-                        .move_focused_window_to_workspace(workspace)
+                        .move_focused_window_to_workspace_with_display(
+                            workspace,
+                            rule_column_display,
+                        )
                         .unwrap_or_else(|_| crate::fatal("niri move-window-to-workspace failed"))
                 }
                 NiriAction::ConsumeWindowIntoColumn => self.workspaces.consume_window_into_column(),
-                NiriAction::ExpelWindowFromColumn => self.workspaces.expel_window_from_column(),
-                NiriAction::ConsumeOrExpelWindowLeft => {
-                    self.workspaces.consume_or_expel_focused_window_left()
-                }
-                NiriAction::ConsumeOrExpelWindowRight => {
-                    self.workspaces.consume_or_expel_focused_window_right()
-                }
+                NiriAction::ExpelWindowFromColumn => self
+                    .workspaces
+                    .expel_window_from_column_with_display(rule_column_display),
+                NiriAction::ConsumeOrExpelWindowLeft => self
+                    .workspaces
+                    .consume_or_expel_focused_window_left_with_display(rule_column_display),
+                NiriAction::ConsumeOrExpelWindowRight => self
+                    .workspaces
+                    .consume_or_expel_focused_window_right_with_display(rule_column_display),
                 NiriAction::ToggleColumnTabbedDisplay => {
                     self.workspaces.toggle_focused_column_tabbed_display()
                 }
-                NiriAction::ToggleWindowFloating => {
-                    self.workspaces.toggle_focused_window_floating()
-                }
+                NiriAction::ToggleWindowFloating => self
+                    .workspaces
+                    .toggle_focused_window_floating_with_display(rule_column_display),
                 NiriAction::SwitchFocusBetweenFloatingAndTiling => {
                     self.workspaces.switch_focus_between_floating_and_tiling()
                 }
                 NiriAction::MoveWindowToFloating => {
                     self.workspaces.move_focused_window_to_floating()
                 }
-                NiriAction::MoveWindowToTiling => self.workspaces.move_focused_window_to_tiling(),
+                NiriAction::MoveWindowToTiling => self
+                    .workspaces
+                    .move_focused_window_to_tiling_with_display(rule_column_display),
                 NiriAction::FocusFloating => self.workspaces.focus_floating(),
                 NiriAction::FocusTiling => self.workspaces.focus_tiling(),
                 NiriAction::SwitchPresetColumnWidth => self.workspaces.switch_preset_column_width(),
@@ -1773,11 +1814,13 @@ impl Desktop {
                 NiriAction::SwitchPresetWindowHeightBack => {
                     self.workspaces.switch_preset_window_height_back()
                 }
-                NiriAction::MaximizeColumn => self.workspaces.maximize_focused_column(),
+                NiriAction::MaximizeColumn => self
+                    .workspaces
+                    .maximize_focused_column_with_display(rule_column_display),
                 NiriAction::FullscreenWindow => self.workspaces.toggle_focused_window_fullscreen(),
-                NiriAction::MaximizeWindowToEdges => {
-                    self.workspaces.maximize_focused_window_to_edges()
-                }
+                NiriAction::MaximizeWindowToEdges => self
+                    .workspaces
+                    .maximize_focused_window_to_edges_with_display(rule_column_display),
                 NiriAction::CenterColumn => self.workspaces.center_focused_column(),
                 NiriAction::CenterVisibleColumns => self.workspaces.center_visible_columns(),
                 NiriAction::ExpandColumnToAvailableWidth => {

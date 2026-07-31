@@ -383,6 +383,16 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         width: Option<ColumnWidth>,
         height: Option<ColumnWidth>,
     ) -> Result<(), LayoutError> {
+        self.open_window_with_properties(window, width, height, None)
+    }
+
+    pub fn open_window_with_properties(
+        &mut self,
+        window: u32,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
+        display: Option<ColumnDisplay>,
+    ) -> Result<(), LayoutError> {
         self.reject_duplicate(window)?;
         if self.column_count == COLUMNS {
             return Err(LayoutError::ColumnCapacity);
@@ -398,7 +408,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let mut column = Column::empty();
         column.windows[0] = window;
         column.window_count = 1;
-        column.display = self.config.default_column_display;
+        column.display = display.unwrap_or(self.config.default_column_display);
         column.width = width
             .unwrap_or(self.config.default_column_width)
             .resolve(self.output_width, self.config.gaps);
@@ -481,6 +491,13 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     }
 
     pub fn expel_window_from_column(&mut self) -> bool {
+        self.expel_window_from_column_with_display(None)
+    }
+
+    pub fn expel_window_from_column_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if self.column_count == 0
             || self.column_count == COLUMNS
             || self.columns[self.focused_column].window_count <= 1
@@ -504,7 +521,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let mut column = Column::empty();
         column.windows[0] = window;
         column.window_count = 1;
-        column.display = self.config.default_column_display;
+        column.display = display.unwrap_or(self.config.default_column_display);
         column.width = width;
         self.columns[destination] = column;
         self.column_count += 1;
@@ -513,11 +530,18 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     }
 
     pub fn consume_or_expel_focused_window_left(&mut self) -> bool {
+        self.consume_or_expel_focused_window_left_with_display(None)
+    }
+
+    pub fn consume_or_expel_focused_window_left_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if self.column_count == 0 {
             return false;
         }
         if self.columns[self.focused_column].window_count > 1 {
-            return self.extract_focused_window_to_side(true);
+            return self.extract_focused_window_to_side(true, display);
         }
         if self.focused_column == 0 {
             return false;
@@ -526,11 +550,18 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     }
 
     pub fn consume_or_expel_focused_window_right(&mut self) -> bool {
+        self.consume_or_expel_focused_window_right_with_display(None)
+    }
+
+    pub fn consume_or_expel_focused_window_right_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if self.column_count == 0 {
             return false;
         }
         if self.columns[self.focused_column].window_count > 1 {
-            return self.extract_focused_window_to_side(false);
+            return self.extract_focused_window_to_side(false, display);
         }
         if self.focused_column + 1 >= self.column_count {
             return false;
@@ -699,6 +730,14 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     }
 
     pub fn move_focused_window_to(&mut self, destination: &mut Self) -> Result<bool, LayoutError> {
+        self.move_focused_window_to_with_display(destination, None)
+    }
+
+    pub fn move_focused_window_to_with_display(
+        &mut self,
+        destination: &mut Self,
+        display: Option<ColumnDisplay>,
+    ) -> Result<bool, LayoutError> {
         if self.column_count == 0 {
             return Ok(false);
         }
@@ -715,7 +754,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         column.width = source.width;
         column.maximized = source.maximized;
         column.maximized_to_edges = source.maximized_to_edges;
-        column.display = destination.config.default_column_display;
+        column.display = display.unwrap_or(destination.config.default_column_display);
         let destination_index = if destination.column_count == 0 {
             0
         } else {
@@ -909,6 +948,13 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     }
 
     pub fn toggle_maximize_focused_window_to_edges(&mut self) -> bool {
+        self.toggle_maximize_focused_window_to_edges_with_display(None)
+    }
+
+    pub fn toggle_maximize_focused_window_to_edges_with_display(
+        &mut self,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if self.column_count == 0 {
             return false;
         }
@@ -918,7 +964,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
             return true;
         }
         if self.columns[self.focused_column].window_count > 1
-            && !self.extract_focused_window_to_side(false)
+            && !self.extract_focused_window_to_side(false, display)
         {
             return false;
         }
@@ -1261,7 +1307,11 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         true
     }
 
-    fn extract_focused_window_to_side(&mut self, left: bool) -> bool {
+    fn extract_focused_window_to_side(
+        &mut self,
+        left: bool,
+        display: Option<ColumnDisplay>,
+    ) -> bool {
         if self.column_count == 0
             || self.column_count == COLUMNS
             || self.columns[self.focused_column].window_count <= 1
@@ -1289,7 +1339,7 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         let mut column = Column::empty();
         column.windows[0] = window;
         column.window_count = 1;
-        column.display = self.config.default_column_display;
+        column.display = display.unwrap_or(self.config.default_column_display);
         column.width = width;
         self.columns[destination] = column;
         self.column_count += 1;
@@ -2148,9 +2198,12 @@ mod tests {
         assert_eq!(layout.tile_rect(2).unwrap().x, 262);
         assert_eq!(layout.tile_rect(2).unwrap().y, 373);
 
-        assert!(layout.consume_or_expel_focused_window_left());
+        assert!(
+            layout.consume_or_expel_focused_window_left_with_display(Some(ColumnDisplay::Tabbed))
+        );
         assert_eq!(layout.len(), 2);
         assert_eq!(layout.focused_window(), Some(2));
+        assert_eq!(layout.tabbed_column_info(2).unwrap().tab_count, 1);
         assert_eq!(layout.tile_rect(2).unwrap().x, 262);
         assert_eq!(layout.tile_rect(1).unwrap().x, 754);
 

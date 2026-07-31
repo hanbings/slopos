@@ -63,13 +63,14 @@ cp --reflink=auto --sparse=always "${esp_image}" "${runtime_esp}"
 cp --reflink=auto --sparse=always "${root_image}" "${runtime_root}"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
 sed \
-    -e '1i// user open-maximized override accepted by the SlopOS desktop service' \
+    -e '1i// user overrides' \
     -e 's/open-maximized false/open-maximized true/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 1\.0/proportion 0.5/' \
+    -e '/match app-id="slopos-config"/,/^}/ s/default-column-display "normal"/default-column-display "tabbed"/' \
     "${repo_dir}/assets/niri-config.kdl" >"${custom_niri}"
 custom_niri_bytes="$(wc -c <"${custom_niri}")"
-if (( custom_niri_bytes <= 4009 || custom_niri_bytes > 4096 )); then
+if (( custom_niri_bytes <= 4045 || custom_niri_bytes > 4096 )); then
     echo "custom niri fixture has unexpected size: ${custom_niri_bytes}" >&2
     exit 1
 fi
@@ -216,6 +217,9 @@ grep -Fq \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized value=true applied=true workspace=2 x=16 y=56 width=992 height=340 mode=maximized-column source=config" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=default-column-display value=tabbed applied=true workspace=2 source=config" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-DESKTOP: window resized kind=CONFIG width=656 layout=scrolling" \
