@@ -366,13 +366,22 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
     }
 
     pub fn open_window(&mut self, window: u32) -> Result<(), LayoutError> {
-        self.open_window_with_width(window, None)
+        self.open_window_with_dimensions(window, None, None)
     }
 
     pub fn open_window_with_width(
         &mut self,
         window: u32,
         width: Option<ColumnWidth>,
+    ) -> Result<(), LayoutError> {
+        self.open_window_with_dimensions(window, width, None)
+    }
+
+    pub fn open_window_with_dimensions(
+        &mut self,
+        window: u32,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
     ) -> Result<(), LayoutError> {
         self.reject_duplicate(window)?;
         if self.column_count == COLUMNS {
@@ -393,6 +402,20 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         column.width = width
             .unwrap_or(self.config.default_column_width)
             .resolve(self.output_width, self.config.gaps);
+        if let Some(height) = height.filter(|height| *height != ColumnWidth::Client) {
+            let available_height = self.output_height.saturating_sub(self.reserved_top);
+            let maximum = available_height
+                .saturating_sub(self.config.gaps.saturating_mul(2))
+                .max(1);
+            let height = height
+                .resolve(available_height, self.config.gaps)
+                .clamp(1, maximum);
+            if column.display == ColumnDisplay::Tabbed {
+                column.tabbed_height = height;
+            } else {
+                column.window_heights[0] = height;
+            }
+        }
         self.columns[insert_at] = column;
         self.column_count += 1;
         self.focused_column = insert_at;
@@ -2264,7 +2287,11 @@ mod tests {
     fn applies_initial_maximize_to_a_specific_column_without_stealing_focus() {
         let mut layout = ScrollLayout::<2, 1>::new(1000, 700, 30, LayoutConfig::default());
         layout
-            .open_window_with_width(1, Some(ColumnWidth::Proportion(667)))
+            .open_window_with_dimensions(
+                1,
+                Some(ColumnWidth::Proportion(667)),
+                Some(ColumnWidth::Proportion(500)),
+            )
             .unwrap();
         layout.open_window(2).unwrap();
         assert_eq!(layout.focused_window(), Some(2));
@@ -2272,9 +2299,11 @@ mod tests {
         assert!(layout.set_window_maximized(1, true).unwrap());
         assert_eq!(layout.focused_window(), Some(2));
         assert_eq!(layout.tile_rect(1).unwrap().width, 968);
+        assert_eq!(layout.tile_rect(1).unwrap().height, 311);
         assert!(!layout.set_window_maximized(1, true).unwrap());
         assert!(layout.set_window_maximized(1, false).unwrap());
         assert_eq!(layout.tile_rect(1).unwrap().width, 640);
+        assert_eq!(layout.tile_rect(1).unwrap().height, 311);
         assert_eq!(
             layout.set_window_maximized(99, true),
             Err(LayoutError::UnknownWindow)

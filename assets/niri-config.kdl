@@ -84,6 +84,7 @@ window-rule {
     open-floating false
     open-maximized false
     default-column-width { proportion 0.5; }
+    default-window-height { proportion 1.0; }
 }
 
 layout {

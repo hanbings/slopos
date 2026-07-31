@@ -115,13 +115,24 @@ impl Desktop {
             let floating = niri.window_rules.floating_for(app_id).unwrap_or(false);
             let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
             let column_width = niri.window_rules.column_width_for(app_id);
+            let window_height = niri.window_rules.window_height_for(app_id);
             if floating {
                 workspaces
-                    .open_floating_window(workspace, window as u32)
+                    .open_floating_window_with_dimensions(
+                        workspace,
+                        window as u32,
+                        column_width,
+                        window_height,
+                    )
                     .unwrap_or_else(|_| crate::fatal("niri floating seed capacity mismatch"));
             } else {
                 workspaces
-                    .open_window_with_width(workspace, window as u32, column_width)
+                    .open_window_with_dimensions(
+                        workspace,
+                        window as u32,
+                        column_width,
+                        window_height,
+                    )
                     .unwrap_or_else(|_| crate::fatal("niri layout seed capacity mismatch"));
                 if maximized {
                     workspaces
@@ -683,13 +694,24 @@ impl Desktop {
                 .unwrap_or_else(|| self.workspaces.window_is_floating_anywhere(window as u32));
             let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
             let column_width = niri.window_rules.column_width_for(app_id);
+            let window_height = niri.window_rules.window_height_for(app_id);
             if floating {
                 workspaces
-                    .open_floating_window(workspace, window as u32)
+                    .open_floating_window_with_dimensions(
+                        workspace,
+                        window as u32,
+                        column_width,
+                        window_height,
+                    )
                     .unwrap_or_else(|_| crate::fatal("published niri floating seed failed"));
             } else {
                 workspaces
-                    .open_window_with_width(workspace, window as u32, column_width)
+                    .open_window_with_dimensions(
+                        workspace,
+                        window as u32,
+                        column_width,
+                        window_height,
+                    )
                     .unwrap_or_else(|_| crate::fatal("published niri layout seed failed"));
                 if maximized {
                     workspaces

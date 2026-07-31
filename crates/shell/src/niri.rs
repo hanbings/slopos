@@ -226,6 +226,7 @@ pub struct NiriWindowRule<'a> {
     pub open_floating: Option<bool>,
     pub open_maximized: Option<bool>,
     pub default_column_width: Option<ColumnWidth>,
+    pub default_window_height: Option<ColumnWidth>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -296,6 +297,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         width
+    }
+
+    pub fn window_height_for(self, app_id: &str) -> Option<ColumnWidth> {
+        let mut height = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.default_window_height {
+                    height = Some(value);
+                }
+            }
+        }
+        height
     }
 
     fn push(&mut self, rule: NiriWindowRule<'a>) -> Result<(), NiriConfigError> {
@@ -494,6 +507,7 @@ impl<'a> ShellConfigParser<'a> {
             open_floating: None,
             open_maximized: None,
             default_column_width: None,
+            default_window_height: None,
         };
         loop {
             match self.next_non_end() {
@@ -541,7 +555,10 @@ impl<'a> ShellConfigParser<'a> {
                     self.finish_node()?;
                 }
                 KdlToken::Word("default-column-width") => {
-                    rule.default_column_width = Some(self.parse_rule_column_width()?);
+                    rule.default_column_width = Some(self.parse_rule_size()?);
+                }
+                KdlToken::Word("default-window-height") => {
+                    rule.default_window_height = Some(self.parse_rule_size()?);
                 }
                 KdlToken::Word(_) | KdlToken::String(_) | KdlToken::Equal => {
                     self.skip_node()?;
@@ -554,7 +571,7 @@ impl<'a> ShellConfigParser<'a> {
         }
     }
 
-    fn parse_rule_column_width(&mut self) -> Result<ColumnWidth, NiriConfigError> {
+    fn parse_rule_size(&mut self) -> Result<ColumnWidth, NiriConfigError> {
         self.expect_left_brace()?;
         let mut width = ColumnWidth::Client;
         let mut seen = false;
@@ -1038,6 +1055,16 @@ impl<const WINDOWS: usize> FloatingLayout<WINDOWS> {
     }
 
     fn add(&mut self, window: u32, source: Option<Rect>) -> Result<(), LayoutError> {
+        self.add_with_dimensions(window, source, None, None)
+    }
+
+    fn add_with_dimensions(
+        &mut self,
+        window: u32,
+        source: Option<Rect>,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
+    ) -> Result<(), LayoutError> {
         if self.contains(window) {
             return Err(LayoutError::DuplicateWindow);
         }
@@ -1046,7 +1073,7 @@ impl<const WINDOWS: usize> FloatingLayout<WINDOWS> {
         }
         let rect = source
             .map(|rect| self.rect_near_tiled(rect))
-            .unwrap_or_else(|| self.default_rect());
+            .unwrap_or_else(|| self.default_rect_with_dimensions(width, height));
         self.entries[self.count] = FloatingEntry {
             window,
             rect,
@@ -1220,13 +1247,41 @@ impl<const WINDOWS: usize> FloatingLayout<WINDOWS> {
         rect != previous
     }
 
-    fn default_rect(&self) -> Rect {
-        let gap = self.gap.min(self.output_width / 2);
-        let width = ColumnWidth::Proportion(500)
-            .resolve(self.output_width, gap)
+    fn default_rect_with_dimensions(
+        &self,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
+    ) -> Rect {
+        let width_gap = self.gap.min(self.output_width / 2);
+        let default_width = ColumnWidth::Proportion(500)
+            .resolve(self.output_width, width_gap)
             .max(1);
         let working_height = self.output_height.saturating_sub(self.reserved_top);
-        let height = ((u32::from(working_height) * 2) / 3).clamp(1, u32::from(u16::MAX)) as u16;
+        let height_gap = self.gap.min(working_height / 2);
+        let default_height =
+            ((u32::from(working_height) * 2) / 3).clamp(1, u32::from(u16::MAX)) as u16;
+        let maximum_width = self.output_width.max(1);
+        let maximum_height = working_height.max(1);
+        let width = width
+            .filter(|width| *width != ColumnWidth::Client)
+            .map(|width| width.resolve(self.output_width, width_gap))
+            .unwrap_or(default_width)
+            .clamp(
+                u16::try_from(MIN_FLOATING_WIDTH)
+                    .unwrap_or(u16::MAX)
+                    .min(maximum_width),
+                maximum_width,
+            );
+        let height = height
+            .filter(|height| *height != ColumnWidth::Client)
+            .map(|height| height.resolve(working_height, height_gap))
+            .unwrap_or(default_height)
+            .clamp(
+                u16::try_from(MIN_FLOATING_HEIGHT)
+                    .unwrap_or(u16::MAX)
+                    .min(maximum_height),
+                maximum_height,
+            );
         Rect {
             x: (i32::from(self.output_width) - i32::from(width)) / 2,
             y: i32::from(self.reserved_top) + (i32::from(working_height) - i32::from(height)) / 2,
@@ -1382,7 +1437,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn open_window(&mut self, workspace: usize, window: u32) -> Result<(), WorkspaceError> {
-        self.open_window_with_width(workspace, window, None)
+        self.open_window_with_dimensions(workspace, window, None, None)
     }
 
     pub fn open_window_with_width(
@@ -1391,11 +1446,21 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         window: u32,
         width: Option<ColumnWidth>,
     ) -> Result<(), WorkspaceError> {
+        self.open_window_with_dimensions(workspace, window, width, None)
+    }
+
+    pub fn open_window_with_dimensions(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
+    ) -> Result<(), WorkspaceError> {
         self.layouts
             .get_mut(workspace)
             .filter(|_| workspace < self.count)
             .ok_or(WorkspaceError::InvalidWorkspace)?
-            .open_window_with_width(window, width)
+            .open_window_with_dimensions(window, width, height)
             .map_err(WorkspaceError::Layout)
     }
 
@@ -1418,11 +1483,21 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         workspace: usize,
         window: u32,
     ) -> Result<(), WorkspaceError> {
+        self.open_floating_window_with_dimensions(workspace, window, None, None)
+    }
+
+    pub fn open_floating_window_with_dimensions(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        width: Option<ColumnWidth>,
+        height: Option<ColumnWidth>,
+    ) -> Result<(), WorkspaceError> {
         self.floating
             .get_mut(workspace)
             .filter(|_| workspace < self.count)
             .ok_or(WorkspaceError::InvalidWorkspace)?
-            .add(window, None)
+            .add_with_dimensions(window, None, width, height)
             .map_err(WorkspaceError::Layout)
     }
 
@@ -2204,6 +2279,7 @@ mod tests {
             window-rule {
                 open-maximized true
                 default-column-width { fixed 600; }
+                default-window-height { fixed 400; }
             }
             window-rule {
                 match app-id="slopos-config"
@@ -2211,6 +2287,7 @@ mod tests {
                 open-floating true
                 open-maximized true
                 default-column-width { proportion 0.333; }
+                default-window-height { proportion 0.333; }
             }
             window-rule {
                 match app-id="slopos-config"
@@ -2218,6 +2295,7 @@ mod tests {
                 open-floating false
                 open-maximized false
                 default-column-width { proportion 0.667; }
+                default-window-height { proportion 0.5; }
             }
             "#,
         )
@@ -2646,6 +2724,14 @@ mod tests {
             config.window_rules.column_width_for("slopos-config"),
             Some(ColumnWidth::Proportion(667))
         );
+        assert_eq!(
+            config.window_rules.window_height_for("slopos-terminal"),
+            Some(ColumnWidth::Fixed(400))
+        );
+        assert_eq!(
+            config.window_rules.window_height_for("slopos-config"),
+            Some(ColumnWidth::Proportion(500))
+        );
     }
 
     #[test]
@@ -2674,6 +2760,9 @@ mod tests {
             "window-rule { default-column-width { proportion 1.5; } }",
             "window-rule { default-column-width { fixed nope; } }",
             "window-rule { default-column-width { fixed 200; fixed 300; } }",
+            "window-rule { default-window-height { proportion 1.5; } }",
+            "window-rule { default-window-height { fixed nope; } }",
+            "window-rule { default-window-height { proportion 0.5; fixed 300; } }",
         ] {
             assert_eq!(
                 parse_niri_shell_config(input),
@@ -2685,6 +2774,13 @@ mod tests {
                 .unwrap()
                 .window_rules
                 .column_width_for("anything"),
+            Some(ColumnWidth::Client)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { default-window-height {} }")
+                .unwrap()
+                .window_rules
+                .window_height_for("anything"),
             Some(ColumnWidth::Client)
         );
         assert!(
@@ -2792,6 +2888,56 @@ mod tests {
         floating_only.open_floating_window(0, 9).unwrap();
         assert!(floating_only.focused_window_is_floating());
         assert_eq!(floating_only.focused_window(), Some(9));
+    }
+
+    #[test]
+    fn applies_rule_dimensions_to_tiled_and_floating_windows() {
+        let mut workspaces =
+            WorkspaceSet::<2, 2, 2>::new(1, 1, 1000, 700, 40, LayoutConfig::default()).unwrap();
+        workspaces
+            .open_window_with_dimensions(
+                0,
+                1,
+                Some(ColumnWidth::Proportion(667)),
+                Some(ColumnWidth::Proportion(500)),
+            )
+            .unwrap();
+        assert_eq!(
+            workspaces.tile_rect(1).unwrap(),
+            Rect {
+                x: 16,
+                y: 56,
+                width: 640,
+                height: 306,
+            }
+        );
+
+        workspaces
+            .open_floating_window_with_dimensions(
+                0,
+                2,
+                Some(ColumnWidth::Fixed(420)),
+                Some(ColumnWidth::Fixed(270)),
+            )
+            .unwrap();
+        workspaces.focus_window(2).unwrap();
+        assert_eq!(
+            workspaces.tile_rect(2).unwrap(),
+            Rect {
+                x: 290,
+                y: 235,
+                width: 420,
+                height: 270,
+            }
+        );
+        assert!(
+            workspaces
+                .change_focused_window_height(ColumnWidthChange::AdjustFixed(-40))
+                .unwrap()
+        );
+        assert_eq!(workspaces.tile_rect(2).unwrap().height, 230);
+        assert!(workspaces.reset_focused_window_height());
+        assert_eq!(workspaces.tile_rect(2).unwrap().height, 270);
     }
 
     #[test]
