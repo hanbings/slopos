@@ -111,8 +111,8 @@ if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
     exit 1
 fi
 sed \
-    -e '1i// Waybar overlay preset and pointer passthrough integration fixture' \
-    -e '/"spacing": 10,/a\    "mode": "overlay",' \
+    -e '1i// Waybar custom overlay mode and pointer passthrough integration fixture' \
+    -e '/"spacing": 10,/a\    "mode": "slop-overlay",\n    "modes": {\n        "slop-overlay": {\n            "layer": "overlay",\n            "exclusive": false,\n            "passthrough": true,\n            "visible": true\n        }\n    },' \
     "${repo_dir}/assets/waybar-config.jsonc" >"${overlay_waybar}"
 overlay_bytes="$(wc -c <"${overlay_waybar}")"
 if (( overlay_bytes <= 904 || overlay_bytes > 4096 )); then
@@ -485,7 +485,7 @@ grep -Fq \
     "bytes=${overlay_bytes} access=readonly async=true path=/etc/slopos/waybar.jsonc" \
     "${overlay_serial_log}"
 grep -Fq \
-    "SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=overlay mode=overlay exclusive=false passthrough=true visible=true reserved_top=0 source=config" \
+    "SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=overlay mode=slop-overlay exclusive=false passthrough=true visible=true reserved_top=0 source=config" \
     "${overlay_serial_log}"
 grep -Fq \
     "SLOPOS-DESKTOP: window closed kind=SYSTEM workspace=1" \

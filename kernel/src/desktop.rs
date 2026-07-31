@@ -1293,7 +1293,7 @@ impl Desktop {
             self.bar.spacing,
             self.bar.fixed_center,
             self.bar.layer.name(),
-            self.bar.mode.name(),
+            self.bar.mode_name,
             self.bar.exclusive,
             self.bar.passthrough,
             self.bar.visible,

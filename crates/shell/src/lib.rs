@@ -25,8 +25,9 @@ pub use wallpaper::{
 };
 pub use waybar::{
     BarButton, BarConfigError, BarFormatError, BarFormatValue, BarLayer, BarMode, BarModuleConfig,
-    BarModuleConfigList, BarModuleList, BarPosition, BarText, MAX_BAR_MODULE_CONFIGS,
-    MAX_BAR_MODULES, MAX_BAR_TEXT, WaybarConfig, format_bar_text, parse_waybar_config,
+    BarModuleConfigList, BarModuleList, BarPosition, BarText, MAX_BAR_MODE_NAME, MAX_BAR_MODES,
+    MAX_BAR_MODULE_CONFIGS, MAX_BAR_MODULES, MAX_BAR_TEXT, WaybarConfig, format_bar_text,
+    parse_waybar_config,
 };
 pub use waybar_style::{
     MAX_WAYBAR_STYLE_RULES, ResolvedWaybarStyle, WaybarStyle, WaybarStyleError, parse_waybar_style,

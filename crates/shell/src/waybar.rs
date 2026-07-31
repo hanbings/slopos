@@ -3,6 +3,8 @@
 pub const MAX_BAR_MODULES: usize = 16;
 pub const MAX_BAR_MODULE_CONFIGS: usize = 24;
 pub const MAX_BAR_TEXT: usize = 96;
+pub const MAX_BAR_MODES: usize = 8;
+pub const MAX_BAR_MODE_NAME: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BarPosition {
@@ -36,6 +38,7 @@ pub enum BarMode {
     Hide,
     Invisible,
     Overlay,
+    Custom,
 }
 
 impl BarMode {
@@ -46,7 +49,119 @@ impl BarMode {
             Self::Hide => "hide",
             Self::Invisible => "invisible",
             Self::Overlay => "overlay",
+            Self::Custom => "custom",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BarModeOptions {
+    layer: BarLayer,
+    exclusive: bool,
+    passthrough: bool,
+    visible: bool,
+}
+
+impl BarModeOptions {
+    const fn empty_custom() -> Self {
+        Self {
+            layer: BarLayer::Bottom,
+            exclusive: false,
+            passthrough: false,
+            visible: false,
+        }
+    }
+
+    const fn preset(name: &str) -> Option<(BarMode, Self)> {
+        match name.as_bytes() {
+            b"default" => Some((
+                BarMode::Default,
+                Self {
+                    layer: BarLayer::Bottom,
+                    exclusive: true,
+                    passthrough: false,
+                    visible: true,
+                },
+            )),
+            b"dock" => Some((
+                BarMode::Dock,
+                Self {
+                    layer: BarLayer::Bottom,
+                    exclusive: true,
+                    passthrough: false,
+                    visible: true,
+                },
+            )),
+            b"hide" => Some((
+                BarMode::Hide,
+                Self {
+                    layer: BarLayer::Overlay,
+                    exclusive: false,
+                    passthrough: false,
+                    visible: true,
+                },
+            )),
+            b"invisible" => Some((
+                BarMode::Invisible,
+                Self {
+                    layer: BarLayer::Bottom,
+                    exclusive: false,
+                    passthrough: true,
+                    visible: false,
+                },
+            )),
+            b"overlay" => Some((
+                BarMode::Overlay,
+                Self {
+                    layer: BarLayer::Overlay,
+                    exclusive: false,
+                    passthrough: true,
+                    visible: true,
+                },
+            )),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BarModeDefinition<'a> {
+    name: &'a str,
+    options: BarModeOptions,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BarModeList<'a> {
+    entries: [Option<BarModeDefinition<'a>>; MAX_BAR_MODES],
+    length: usize,
+}
+
+impl<'a> BarModeList<'a> {
+    const fn empty() -> Self {
+        Self {
+            entries: [None; MAX_BAR_MODES],
+            length: 0,
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<BarModeOptions> {
+        self.entries[..self.length]
+            .iter()
+            .flatten()
+            .find(|mode| mode.name == name)
+            .map(|mode| mode.options)
+    }
+
+    fn push(&mut self, mode: BarModeDefinition<'a>) -> Result<(), BarConfigError> {
+        if self.get(mode.name).is_some() {
+            return Err(BarConfigError::DuplicateField);
+        }
+        if self.length == self.entries.len() {
+            return Err(BarConfigError::TooManyModes);
+        }
+        self.entries[self.length] = Some(mode);
+        self.length += 1;
+        Ok(())
     }
 }
 
@@ -198,6 +313,7 @@ pub struct WaybarConfig<'a> {
     pub fixed_center: bool,
     pub layer: BarLayer,
     pub mode: BarMode,
+    pub mode_name: &'a str,
     pub exclusive: bool,
     pub passthrough: bool,
     pub visible: bool,
@@ -220,6 +336,7 @@ impl Default for WaybarConfig<'_> {
             fixed_center: true,
             layer: BarLayer::Bottom,
             mode: BarMode::Default,
+            mode_name: "default",
             exclusive: true,
             passthrough: false,
             visible: true,
@@ -257,6 +374,8 @@ pub enum BarConfigError {
     InvalidModuleOption,
     TooManyModules,
     TooManyModuleConfigs,
+    InvalidMode,
+    TooManyModes,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -542,6 +661,8 @@ impl<'a> JsonParser<'a> {
     const MODE: u32 = 1 << 14;
     const PASSTHROUGH: u32 = 1 << 15;
     const START_HIDDEN: u32 = 1 << 16;
+    const MODES: u32 = 1 << 17;
+    const VISIBLE: u32 = 1 << 18;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -560,6 +681,8 @@ impl<'a> JsonParser<'a> {
         let mut margin_bottom = None;
         let mut margin_left = None;
         let mut start_hidden = false;
+        let mut selected_mode = "default";
+        let mut modes = BarModeList::empty();
         loop {
             match self.next() {
                 Token::RightBrace => break,
@@ -632,14 +755,11 @@ impl<'a> JsonParser<'a> {
                         }
                         "mode" => {
                             mark_once(&mut fields, Self::MODE)?;
-                            config.mode = match self.string_value()? {
-                                "default" => BarMode::Default,
-                                "dock" => BarMode::Dock,
-                                "hide" => BarMode::Hide,
-                                "invisible" => BarMode::Invisible,
-                                "overlay" => BarMode::Overlay,
-                                _ => return Err(BarConfigError::UnexpectedToken),
-                            };
+                            selected_mode = self.mode_name_value()?;
+                        }
+                        "modes" => {
+                            mark_once(&mut fields, Self::MODES)?;
+                            modes = self.mode_definitions()?;
                         }
                         "passthrough" => {
                             mark_once(&mut fields, Self::PASSTHROUGH)?;
@@ -651,6 +771,13 @@ impl<'a> JsonParser<'a> {
                         "start_hidden" => {
                             mark_once(&mut fields, Self::START_HIDDEN)?;
                             start_hidden = match self.next() {
+                                Token::Bool(value) => value,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
+                        "visible" => {
+                            mark_once(&mut fields, Self::VISIBLE)?;
+                            config.visible = match self.next() {
                                 Token::Bool(value) => value,
                                 _ => return Err(BarConfigError::UnexpectedToken),
                             };
@@ -704,41 +831,134 @@ impl<'a> JsonParser<'a> {
             config.margin_bottom = bottom;
             config.margin_left = left;
         }
-        match config.mode {
-            BarMode::Default => {}
-            BarMode::Dock => {
-                config.layer = BarLayer::Bottom;
-                config.exclusive = true;
-                config.passthrough = false;
-                config.visible = true;
-            }
-            BarMode::Hide => {
-                config.layer = BarLayer::Overlay;
-                config.exclusive = false;
-                config.passthrough = false;
-                config.visible = true;
-            }
-            BarMode::Invisible => {
-                config.layer = BarLayer::Bottom;
-                config.exclusive = false;
-                config.passthrough = true;
-                config.visible = false;
-            }
-            BarMode::Overlay => {
-                config.layer = BarLayer::Overlay;
-                config.exclusive = false;
-                config.passthrough = true;
-                config.visible = true;
-            }
+        let mut default_options = modes
+            .get("default")
+            .unwrap_or_else(|| BarModeOptions::preset("default").unwrap().1);
+        if fields & Self::LAYER != 0 {
+            default_options.layer = config.layer;
         }
-        if start_hidden {
-            config.mode = BarMode::Invisible;
-            config.layer = BarLayer::Bottom;
-            config.exclusive = false;
-            config.passthrough = true;
-            config.visible = false;
+        if fields & Self::EXCLUSIVE != 0 {
+            default_options.exclusive = config.exclusive;
         }
+        if fields & Self::PASSTHROUGH != 0 {
+            default_options.passthrough = config.passthrough;
+        }
+        if fields & Self::VISIBLE != 0 {
+            default_options.visible = config.visible;
+        }
+        let requested_mode = if start_hidden {
+            "invisible"
+        } else {
+            selected_mode
+        };
+        let (mode, mode_name, options) = if requested_mode == "default" {
+            (BarMode::Default, "default", default_options)
+        } else if let Some(options) = modes.get(requested_mode) {
+            (
+                BarModeOptions::preset(requested_mode)
+                    .map(|(mode, _)| mode)
+                    .unwrap_or(BarMode::Custom),
+                requested_mode,
+                options,
+            )
+        } else if let Some((mode, options)) = BarModeOptions::preset(requested_mode) {
+            (mode, requested_mode, options)
+        } else {
+            (BarMode::Default, "default", default_options)
+        };
+        config.mode = mode;
+        config.mode_name = mode_name;
+        config.layer = options.layer;
+        config.exclusive = options.exclusive;
+        config.passthrough = options.passthrough;
+        config.visible = options.visible;
         Ok(config)
+    }
+
+    fn mode_definitions(&mut self) -> Result<BarModeList<'a>, BarConfigError> {
+        self.expect(Token::LeftBrace)?;
+        let mut modes = BarModeList::empty();
+        loop {
+            match self.next() {
+                Token::RightBrace => return Ok(modes),
+                Token::String(name) => {
+                    if !valid_mode_name(name) {
+                        return Err(BarConfigError::InvalidMode);
+                    }
+                    self.expect(Token::Colon)?;
+                    self.expect(Token::LeftBrace)?;
+                    let mut options = BarModeOptions::preset(name)
+                        .map(|(_, options)| options)
+                        .unwrap_or_else(BarModeOptions::empty_custom);
+                    let mut fields = 0u32;
+                    loop {
+                        match self.next() {
+                            Token::RightBrace => break,
+                            Token::String(option) => {
+                                self.expect(Token::Colon)?;
+                                match option {
+                                    "layer" => {
+                                        mark_once(&mut fields, 1 << 0)?;
+                                        options.layer = match self.string_value()? {
+                                            "bottom" => BarLayer::Bottom,
+                                            "top" => BarLayer::Top,
+                                            "overlay" => BarLayer::Overlay,
+                                            _ => return Err(BarConfigError::InvalidMode),
+                                        };
+                                    }
+                                    "exclusive" => {
+                                        mark_once(&mut fields, 1 << 1)?;
+                                        options.exclusive = self.mode_bool_value()?;
+                                    }
+                                    "passthrough" => {
+                                        mark_once(&mut fields, 1 << 2)?;
+                                        options.passthrough = self.mode_bool_value()?;
+                                    }
+                                    "visible" => {
+                                        mark_once(&mut fields, 1 << 3)?;
+                                        options.visible = self.mode_bool_value()?;
+                                    }
+                                    _ => self.skip_value()?,
+                                }
+                                match self.next() {
+                                    Token::Comma => {}
+                                    Token::RightBrace => break,
+                                    token => {
+                                        self.push(token);
+                                        return Err(BarConfigError::UnexpectedToken);
+                                    }
+                                }
+                            }
+                            Token::End => return Err(BarConfigError::UnexpectedEnd),
+                            _ => return Err(BarConfigError::UnexpectedToken),
+                        }
+                    }
+                    modes.push(BarModeDefinition { name, options })?;
+                    match self.next() {
+                        Token::Comma => {}
+                        Token::RightBrace => return Ok(modes),
+                        _ => return Err(BarConfigError::UnexpectedToken),
+                    }
+                }
+                Token::End => return Err(BarConfigError::UnexpectedEnd),
+                _ => return Err(BarConfigError::UnexpectedToken),
+            }
+        }
+    }
+
+    fn mode_name_value(&mut self) -> Result<&'a str, BarConfigError> {
+        let value = self.string_value()?;
+        valid_mode_name(value)
+            .then_some(value)
+            .ok_or(BarConfigError::InvalidMode)
+    }
+
+    fn mode_bool_value(&mut self) -> Result<bool, BarConfigError> {
+        match self.next() {
+            Token::Bool(value) => Ok(value),
+            Token::End => Err(BarConfigError::UnexpectedEnd),
+            _ => Err(BarConfigError::InvalidMode),
+        }
     }
 
     fn module_list(&mut self) -> Result<BarModuleList<'a>, BarConfigError> {
@@ -1044,6 +1264,14 @@ fn mark_once(fields: &mut u32, field: u32) -> Result<(), BarConfigError> {
     Ok(())
 }
 
+fn valid_mode_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_BAR_MODE_NAME
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 fn parse_usize(value: &str) -> Option<usize> {
     if value.is_empty() {
         return None;
@@ -1232,9 +1460,17 @@ mod tests {
             r#"{ "fixed-center": "false" }"#,
             r#"{ "exclusive": 1 }"#,
             r#"{ "layer": "background" }"#,
-            r#"{ "mode": "normal" }"#,
+            r#"{ "mode": "bad mode" }"#,
             r#"{ "passthrough": 1 }"#,
             r#"{ "start_hidden": "true" }"#,
+            r#"{ "visible": 1 }"#,
+            r#"{ "modes": [] }"#,
+            r#"{ "modes": { "reading": { "visible": 1 } } }"#,
+            r#"{ "modes": { "reading": {}, "reading": {} } }"#,
+            r#"{ "modes": {
+                "a": {}, "b": {}, "c": {}, "d": {}, "e": {},
+                "f": {}, "g": {}, "h": {}, "i": {}
+            } }"#,
         ] {
             assert!(parse_waybar_config(input).is_err());
         }
@@ -1308,6 +1544,7 @@ mod tests {
         ] {
             let config = parse_waybar_config(input).unwrap();
             assert_eq!(config.mode.name(), mode);
+            assert_eq!(config.mode_name, mode);
             assert_eq!(config.layer, layer);
             assert_eq!(config.exclusive, exclusive);
             assert_eq!(config.passthrough, passthrough);
@@ -1325,11 +1562,103 @@ mod tests {
         )
         .unwrap();
         assert_eq!(hidden.mode, BarMode::Invisible);
+        assert_eq!(hidden.mode_name, "invisible");
         assert_eq!(hidden.layer, BarLayer::Bottom);
         assert!(!hidden.exclusive);
         assert!(hidden.passthrough);
         assert!(!hidden.visible);
         assert_eq!(hidden.reserved_top(), 0);
+
+        let custom = parse_waybar_config(
+            r#"{
+                "mode": "reading",
+                "modes": {
+                    "reading": {
+                        "layer": "overlay",
+                        "exclusive": false,
+                        "passthrough": false,
+                        "visible": true,
+                        "animation": "ignored"
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(custom.mode, BarMode::Custom);
+        assert_eq!(custom.mode_name, "reading");
+        assert_eq!(custom.layer, BarLayer::Overlay);
+        assert!(!custom.exclusive);
+        assert!(!custom.passthrough);
+        assert!(custom.visible);
+        assert_eq!(custom.reserved_top(), 0);
+
+        let overridden_dock = parse_waybar_config(
+            r#"{
+                "mode": "dock",
+                "modes": {
+                    "dock": { "passthrough": true, "visible": false }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(overridden_dock.mode, BarMode::Dock);
+        assert_eq!(overridden_dock.mode_name, "dock");
+        assert_eq!(overridden_dock.layer, BarLayer::Bottom);
+        assert!(overridden_dock.exclusive);
+        assert!(overridden_dock.passthrough);
+        assert!(!overridden_dock.visible);
+
+        let custom_default = parse_waybar_config(
+            r#"{
+                "modes": {
+                    "default": {
+                        "layer": "overlay",
+                        "exclusive": false,
+                        "visible": false
+                    }
+                },
+                "layer": "top"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(custom_default.mode, BarMode::Default);
+        assert_eq!(custom_default.mode_name, "default");
+        assert_eq!(custom_default.layer, BarLayer::Top);
+        assert!(!custom_default.exclusive);
+        assert!(!custom_default.visible);
+
+        let unknown = parse_waybar_config(
+            r#"{
+                "mode": "not-configured",
+                "layer": "top",
+                "exclusive": false
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(unknown.mode, BarMode::Default);
+        assert_eq!(unknown.mode_name, "default");
+        assert_eq!(unknown.layer, BarLayer::Top);
+        assert!(!unknown.exclusive);
+
+        let configured_hidden = parse_waybar_config(
+            r#"{
+                "start_hidden": true,
+                "modes": {
+                    "invisible": {
+                        "layer": "overlay",
+                        "passthrough": false,
+                        "visible": true
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(configured_hidden.mode, BarMode::Invisible);
+        assert_eq!(configured_hidden.mode_name, "invisible");
+        assert_eq!(configured_hidden.layer, BarLayer::Overlay);
+        assert!(!configured_hidden.exclusive);
+        assert!(!configured_hidden.passthrough);
+        assert!(configured_hidden.visible);
         assert_eq!(
             parse_waybar_config(
                 r#"{
