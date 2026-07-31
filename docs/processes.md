@@ -3,15 +3,15 @@
 当前内核在中断子系统初始化、ext4 root mount 与 journal recovery 后，由 block task 驱动 PID 1 与 PID 2。它的目标是验证一条最小但真实的 VFS ELF→process table→cooperative/preemptive scheduler→x86-64 privilege/syscall→async block completion boundary，而不是模拟用户态日志：
 
 - 以独立 `slopos-elf` crate 校验 little-endian x86-64 `ET_EXEC`、program-header geometry、`PT_LOAD` range/alignment/overlap/W^X 与 executable entry；
-- 由 `userspace/init` 生成 26344-byte Rust ELF、由 `userspace/desktop` 生成另一个 26560-byte Rust ELF；rootfs builder 分别安装为 inode 23 `/sbin/slop-init` 和 inode 24 `/sbin/slop-shell`，kernel 的 ext4 path walker 各跨七个逻辑块读取全部 bytes；
+- 由 `userspace/init` 生成 26344-byte Rust ELF、由 `userspace/desktop` 生成另一个 26592-byte Rust ELF；rootfs builder 分别安装为 inode 23 `/sbin/slop-init` 和 inode 24 `/sbin/slop-shell`，kernel 的 ext4 path walker 各跨七个逻辑块读取全部 bytes；
 - UEFI 仍从 ESP `/slopos/init.elf` 读入 BootInfo v2 校验副本；kernel 要求 root VFS image 与该副本逐字节一致，差异会停止启动；
-- 从 ELF file offset `0x1000` 分别复制 init 的 2608-byte 与 desktop service 的 2528-byte R+X `PT_LOAD`，各 code page 的剩余部分保持为零；
+- 从 ELF file offset `0x1000` 分别复制 init 的 2608-byte 与 desktop service 的 2560-byte R+X `PT_LOAD`，各 code page 的剩余部分保持为零；
 - 把 image/CR3/entry/stack/user range 插入容量 4 的 `slopos-process` 表；状态机支持 `Ready → Running → Blocked/Runnable → Running → Exited`，每个 PID 独立保留 exit status、syscall count、pending syscall 与保存的 syscall frame；
 - 每个 slot 自带独立、容量 8 的 `slopos-vfs::FileDescriptorTable`；6 项宿主测试覆盖 Linux 初始栈、PID/parent/capacity、blocked/runnable/round-robin transition、exit/reap/`close_all`，以及两个进程各自取得 fd 3、独立 seek 且 offset 互不影响；
 - frame allocator 为两个进程各建一个 PML4，并保留 supervisor-only kernel identity map；allocator 另有容量 256 的 recycled-frame stack，拒绝未分配、未对齐、重复或超容量释放；
 - 每个地址空间都在 `0x40000000` 映射一个 CPL3 可读、不可写的 code page；
-- 每个地址空间都在 `0x40001000..0x40003000` 映射两个 CPL3 可读写 stack page；各 physical frame 独立，不依赖物理连续。kernel 从上层页顶向下复制各自的 `argv`/`envp` strings，再编码 `argc=2`、pointer vectors 和 9 对 Linux auxv，最终 `RSP=0x40002ec0` 且 16-byte aligned；
-- 用户入口 assembly 保留原始 `RSP` 并传给 Rust；两个程序在任何 syscall 前分别核对自身 `argv[0]`/`argv[1]`、3 项 environment、`AT_PAGESZ`/`AT_ENTRY`/uid/gid/secure/`AT_EXECFN`/`AT_NULL` 与所有 NUL boundary；
+- 每个地址空间都在 `0x40001000..0x40003000` 映射两个 CPL3 可读写 stack page；各 physical frame 独立，不依赖物理连续。kernel 从上层页顶向下复制各自的 `argv`/`envp` strings，再编码 `argc=2`、pointer vectors 和 9 对 Linux auxv；PID 1 最终 `RSP=0x40002ec0`，多一项环境的 PID 2 为 `0x40002ea0`，均 16-byte aligned；
+- 用户入口 assembly 保留原始 `RSP` 并传给 Rust；两个程序在任何 syscall 前分别核对自身 `argv[0]`/`argv[1]`、PID 1 的 3 项或 PID 2 的 4 项 environment、`AT_PAGESZ`/`AT_ENTRY`/uid/gid/secure/`AT_EXECFN`/`AT_NULL` 与所有 NUL boundary。PID 2 的额外项 `SLOPOS_WAYBAR_OUTPUT=SLOPOS-1` 同时供 Waybar `$VAR` output selector 使用；
 - 通过 user code selector `0x23`、user data selector `0x1b` 和 `IRETQ` 从 CPL0 进入 CPL3；
 - 先用 CPUID extended leaf 检查 SYSCALL/SYSRET，再配置并读回 `IA32_EFER.SCE`、`STAR`、`LSTAR` 与 `FMASK=0x47700`；
 - 用户 ELF 发出真实 `SYSCALL`（opcode `0f 05`）；entry 在 IF/TF/DF/IOPL/NT/AC 被 mask 后保存 user `RSP`、`RCX` return RIP、`R11` flags 与 15 个通用寄存器，切到暂停中的 kernel continuation stack，再进入 Rust handler；

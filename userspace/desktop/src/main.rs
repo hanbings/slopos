@@ -15,9 +15,9 @@ use slopos_desktop_protocol::{
 const USER_ENTRY: u64 = 0x4000_0000;
 const INITIAL_STACK_BASE: u64 = 0x4000_2000;
 const USER_STACK_TOP: u64 = 0x4000_3000;
-const INITIAL_STACK_WORDS: usize = 26;
+const INITIAL_STACK_WORDS: usize = 27;
 const INITIAL_ARGC: u64 = 2;
-const INITIAL_ENVC: usize = 3;
+const INITIAL_ENVC: usize = 4;
 const LINUX_AT_NULL: u64 = 0;
 const LINUX_AT_PAGESZ: u64 = 6;
 const LINUX_AT_ENTRY: u64 = 9;
@@ -49,6 +49,7 @@ static EXPECTED_ENVIRONMENT: [&[u8]; INITIAL_ENVC] = [
     b"SLOPOS_ROLE=desktop-shell",
     b"XDG_CURRENT_DESKTOP=SlopOS",
     b"WAYLAND_DISPLAY=wayland-0",
+    b"SLOPOS_WAYBAR_OUTPUT=SLOPOS-1",
 ];
 
 global_asm!(
@@ -219,7 +220,7 @@ fn initial_stack_is_valid(initial_stack: *const u64) -> bool {
     let words = unsafe { core::slice::from_raw_parts(initial_stack, INITIAL_STACK_WORDS) };
     if words[0] != INITIAL_ARGC
         || words[3] != 0
-        || words[7] != 0
+        || words[8] != 0
         || !stack_string_equals(words[1], EXPECTED_ARGV[0])
         || !stack_string_equals(words[2], EXPECTED_ARGV[1])
     {
@@ -230,7 +231,7 @@ fn initial_stack_is_valid(initial_stack: *const u64) -> bool {
             return false;
         }
     }
-    words[8..]
+    words[9..]
         == [
             LINUX_AT_PAGESZ,
             4096,

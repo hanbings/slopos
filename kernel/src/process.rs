@@ -52,6 +52,7 @@ const DESKTOP_ENVIRONMENT: &[&[u8]] = &[
     b"SLOPOS_ROLE=desktop-shell",
     b"XDG_CURRENT_DESKTOP=SlopOS",
     b"WAYLAND_DISPLAY=wayland-0",
+    b"SLOPOS_WAYBAR_OUTPUT=SLOPOS-1",
 ];
 const PAGE_SIZE: u64 = 4096;
 const IA32_EFER: u32 = 0xc000_0080;

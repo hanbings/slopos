@@ -138,7 +138,7 @@ if (( custom_style_bytes <= default_style_bytes || custom_style_bytes > 4096 ));
 fi
 sed \
     -e '1i// Waybar custom overlay mode and pointer passthrough integration fixture' \
-    -e '/"spacing": 10,/a\    "output": "SLOPOS-1",\n    "width": 800,\n    "no-center": true,\n    "mode": "slop-overlay",\n    "modes": {\n        "slop-overlay": {\n            "layer": "overlay",\n            "exclusive": false,\n            "passthrough": true,\n            "visible": true\n        }\n    },' \
+    -e '/"spacing": 10,/a\    "output": "$SLOPOS_WAYBAR_OUTPUT",\n    "width": 800,\n    "no-center": true,\n    "mode": "slop-overlay",\n    "modes": {\n        "slop-overlay": {\n            "layer": "overlay",\n            "exclusive": false,\n            "passthrough": true,\n            "visible": true\n        }\n    },' \
     "${repo_dir}/assets/waybar-config.jsonc" >"${overlay_waybar}"
 overlay_bytes="$(wc -c <"${overlay_waybar}")"
 if (( overlay_bytes <= 904 || overlay_bytes > 4096 )); then
@@ -555,6 +555,9 @@ grep -Fq \
     "bytes=${overlay_bytes} access=readonly async=true path=/etc/slopos/waybar.jsonc" \
     "${overlay_serial_log}"
 grep -Fq \
+    "argv1=--session envc=4 auxv_pairs=9" \
+    "${overlay_serial_log}"
+grep -Fq \
     "SLOPOS-WAYBAR: geometry position=top x=112 y=0 width=800 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=overlay mode=slop-overlay exclusive=false passthrough=true visible=true reserved_top=0 source=config" \
     "${overlay_serial_log}"
 grep -Fq \
@@ -724,4 +727,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded niri/Waybar override, output and output-dimensions selection, geometry, expand/fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"
+echo "SlopOS bounded niri/Waybar override, output environment expansion, output-dimensions selection, geometry, expand/fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"

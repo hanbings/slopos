@@ -174,6 +174,15 @@ impl<'a> BarOutputList<'a> {
     }
 
     pub fn matches(self, name: &str, identifier: &str) -> bool {
+        self.matches_with_environment(name, identifier, |_| None::<&str>)
+    }
+
+    pub fn matches_with_environment<'environment>(
+        self,
+        name: &str,
+        identifier: &str,
+        mut environment: impl FnMut(&str) -> Option<&'environment str>,
+    ) -> bool {
         if !self.configured {
             return true;
         }
@@ -183,18 +192,23 @@ impl<'a> BarOutputList<'a> {
                 return true;
             }
             if let Some(excluded) = output.strip_prefix('!') {
-                return !output_matches(excluded, name, identifier);
+                return !output_matches_with_environment(
+                    excluded,
+                    name,
+                    identifier,
+                    &mut environment,
+                );
             }
-            return output_matches(output, name, identifier);
+            return output_matches_with_environment(output, name, identifier, &mut environment);
         }
         for output in self.iter() {
             if let Some(excluded) = output.strip_prefix('!') {
-                if output_matches(excluded, name, identifier) {
+                if output_matches_with_environment(excluded, name, identifier, &mut environment) {
                     return false;
                 }
                 continue;
             }
-            if output_matches(output, name, identifier) {
+            if output_matches_with_environment(output, name, identifier, &mut environment) {
                 return true;
             }
             if output.starts_with('*') {
@@ -221,6 +235,20 @@ impl<'a> BarOutputList<'a> {
 
 fn output_matches(output: &str, name: &str, identifier: &str) -> bool {
     output == name || output == identifier
+}
+
+fn output_matches_with_environment<'environment>(
+    output: &str,
+    name: &str,
+    identifier: &str,
+    environment: &mut impl FnMut(&str) -> Option<&'environment str>,
+) -> bool {
+    if let Some(variable) = output.strip_prefix('$')
+        && environment(variable).is_some_and(|value| output_matches(value, name, identifier))
+    {
+        return true;
+    }
+    output_matches(output, name, identifier)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -698,8 +726,20 @@ impl<'a> WaybarConfig<'a> {
     }
 
     pub fn select_output(&mut self, name: &str, identifier: &str, width: i32, height: i32) -> bool {
+        self.select_output_with_environment(name, identifier, width, height, |_| None::<&str>)
+    }
+
+    pub fn select_output_with_environment<'environment>(
+        &mut self,
+        name: &str,
+        identifier: &str,
+        width: i32,
+        height: i32,
+        environment: impl FnMut(&str) -> Option<&'environment str>,
+    ) -> bool {
         self.output_selected = if self.output.takes_precedence() {
-            self.output.matches(name, identifier)
+            self.output
+                .matches_with_environment(name, identifier, environment)
         } else {
             self.output_dimensions.matches(width, height)
         };
@@ -2147,6 +2187,60 @@ mod tests {
         assert!(!gated.visible);
         assert!(gated.select_output("SLOPOS-1", "Other Display", 1024, 768));
         assert!(gated.visible);
+    }
+
+    #[test]
+    fn expands_waybar_output_environment_references() {
+        let mut string = parse_waybar_config(r#"{ "output": "$SLOPOS_WAYBAR_OUTPUT" }"#).unwrap();
+        assert!(!string.output.matches("SLOPOS-1", "Other Display"));
+        assert!(
+            string
+                .output
+                .matches_with_environment("SLOPOS-1", "Other Display", |variable| match variable {
+                    "SLOPOS_WAYBAR_OUTPUT" => Some("SLOPOS-1"),
+                    _ => None,
+                })
+        );
+        assert!(string.select_output_with_environment(
+            "SLOPOS-1",
+            "Other Display",
+            1024,
+            768,
+            |variable| match variable {
+                "SLOPOS_WAYBAR_OUTPUT" => Some("SLOPOS-1"),
+                _ => None,
+            }
+        ));
+        assert!(string.visible);
+
+        let excluded = parse_waybar_config(
+            r#"{ "output": ["!$EXCLUDED_OUTPUT", "$SLOPOS_WAYBAR_OUTPUT", "*"] }"#,
+        )
+        .unwrap();
+        assert!(!excluded.output.matches_with_environment(
+            "SLOPOS-1",
+            "Other Display",
+            |variable| match variable {
+                "EXCLUDED_OUTPUT" | "SLOPOS_WAYBAR_OUTPUT" => Some("SLOPOS-1"),
+                _ => None,
+            }
+        ));
+        assert!(excluded.output.matches_with_environment(
+            "SLOPOS-1",
+            "Other Display",
+            |variable| match variable {
+                "SLOPOS_WAYBAR_OUTPUT" => Some("SLOPOS-1"),
+                _ => None,
+            }
+        ));
+
+        let wrong_value = parse_waybar_config(r#"{ "output": "$OTHER_OUTPUT" }"#).unwrap();
+        assert!(
+            !wrong_value
+                .output
+                .matches_with_environment("SLOPOS-1", "Other Display", |_| Some("DP-2"))
+        );
+        assert!(wrong_value.output.matches("$OTHER_OUTPUT", "Other Display"));
     }
 
     #[test]

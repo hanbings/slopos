@@ -34,6 +34,16 @@ const SUNSET_PPM: &str = include_str!("../../assets/wallpapers/sunset.ppm");
 const AURORA_PATH: &str = "/usr/share/backgrounds/slopos-aurora.ppm";
 const SUNSET_PATH: &str = "/usr/share/backgrounds/slopos-sunset.ppm";
 
+fn waybar_environment(name: &str) -> Option<&'static str> {
+    match name {
+        "SLOPOS_ROLE" => Some("desktop-shell"),
+        "XDG_CURRENT_DESKTOP" => Some("SlopOS"),
+        "WAYLAND_DISPLAY" => Some("wayland-0"),
+        "SLOPOS_WAYBAR_OUTPUT" => Some(WAYBAR_OUTPUT_NAME),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum WindowKind {
     Terminal,
@@ -93,7 +103,13 @@ impl Desktop {
             .unwrap_or_else(|_| crate::fatal("niri shell config failed validation"));
         let mut bar = parse_waybar_config(WAYBAR_CONFIG)
             .unwrap_or_else(|_| crate::fatal("Waybar JSONC config failed validation"));
-        bar.select_output(WAYBAR_OUTPUT_NAME, WAYBAR_OUTPUT_IDENTIFIER, width, height);
+        bar.select_output_with_environment(
+            WAYBAR_OUTPUT_NAME,
+            WAYBAR_OUTPUT_IDENTIFIER,
+            width,
+            height,
+            waybar_environment,
+        );
         let bar_style = parse_waybar_style(WAYBAR_STYLE)
             .unwrap_or_else(|_| crate::fatal("Waybar CSS failed validation"));
         let swww_defaults = parse_swww_environment(SWWW_ENVIRONMENT)
@@ -1011,11 +1027,12 @@ impl Desktop {
             .unwrap_or_else(|_| crate::fatal("published niri shell config became invalid"));
         let mut bar = parse_waybar_config(sources.waybar)
             .unwrap_or_else(|_| crate::fatal("published Waybar config became invalid"));
-        bar.select_output(
+        bar.select_output_with_environment(
             WAYBAR_OUTPUT_NAME,
             WAYBAR_OUTPUT_IDENTIFIER,
             self.screen_width,
             self.screen_height,
+            waybar_environment,
         );
         let bar_style = parse_waybar_style(sources.waybar_style)
             .unwrap_or_else(|_| crate::fatal("published Waybar style became invalid"));
