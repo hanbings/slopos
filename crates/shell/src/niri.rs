@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 
 use crate::{
-    ColumnDisplay, ColumnWidth, ColumnWidthChange, LayoutConfig, LayoutError, Rect, ScrollLayout,
-    TabbedColumnInfo,
+    ColumnDisplay, ColumnWidth, ColumnWidthChange, FocusRing, LayoutConfig, LayoutError, Rect,
+    ScrollLayout, TabbedColumnInfo,
 };
 
 pub const MAX_NIRI_WORKSPACES: usize = 8;
@@ -274,6 +274,11 @@ pub struct NiriWindowRule<'a> {
     pub open_maximized_to_edges: Option<bool>,
     pub open_fullscreen: Option<bool>,
     pub open_focused: Option<bool>,
+    pub focus_ring_off: bool,
+    pub focus_ring_on: bool,
+    pub focus_ring_width: Option<u16>,
+    pub focus_ring_active_color: Option<u32>,
+    pub focus_ring_inactive_color: Option<u32>,
     pub default_floating_position: Option<FloatingPosition>,
     pub default_column_width: Option<ColumnWidth>,
     pub default_window_height: Option<ColumnWidth>,
@@ -384,6 +389,37 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         position
+    }
+
+    pub fn focus_ring_for(self, app_id: &str, base: FocusRing) -> Option<FocusRing> {
+        let mut ring = base;
+        let mut overridden = false;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_some() && rule.app_id != Some(app_id) {
+                continue;
+            }
+            if rule.focus_ring_off {
+                ring.enabled = false;
+                overridden = true;
+            }
+            if rule.focus_ring_on {
+                ring.enabled = true;
+                overridden = true;
+            }
+            if let Some(width) = rule.focus_ring_width {
+                ring.width = width;
+                overridden = true;
+            }
+            if let Some(color) = rule.focus_ring_active_color {
+                ring.active_color = color;
+                overridden = true;
+            }
+            if let Some(color) = rule.focus_ring_inactive_color {
+                ring.inactive_color = color;
+                overridden = true;
+            }
+        }
+        overridden.then_some(ring)
     }
 
     pub fn column_width_for(self, app_id: &str) -> Option<ColumnWidth> {
@@ -634,6 +670,11 @@ impl<'a> ShellConfigParser<'a> {
             open_maximized_to_edges: None,
             open_fullscreen: None,
             open_focused: None,
+            focus_ring_off: false,
+            focus_ring_on: false,
+            focus_ring_width: None,
+            focus_ring_active_color: None,
+            focus_ring_inactive_color: None,
             default_floating_position: None,
             default_column_width: None,
             default_window_height: None,
@@ -708,6 +749,7 @@ impl<'a> ShellConfigParser<'a> {
                     });
                     self.finish_node()?;
                 }
+                KdlToken::Word("focus-ring") => self.parse_rule_focus_ring(&mut rule)?,
                 KdlToken::Word("default-floating-position") => {
                     rule.default_floating_position = Some(self.parse_floating_position()?);
                 }
@@ -730,6 +772,59 @@ impl<'a> ShellConfigParser<'a> {
                 }
                 KdlToken::LeftBrace => self.skip_block()?,
                 KdlToken::RightBrace => return Ok(rule),
+                KdlToken::End => return Err(NiriConfigError::UnexpectedEnd),
+                KdlToken::EndNode => {}
+            }
+        }
+    }
+
+    fn parse_rule_focus_ring(
+        &mut self,
+        rule: &mut NiriWindowRule<'a>,
+    ) -> Result<(), NiriConfigError> {
+        self.expect_left_brace()?;
+        loop {
+            match self.next_non_end() {
+                KdlToken::Word("off") => {
+                    rule.focus_ring_off = true;
+                    self.finish_node()?;
+                }
+                KdlToken::Word("on") => {
+                    rule.focus_ring_on = true;
+                    self.finish_node()?;
+                }
+                KdlToken::Word("width") => {
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    rule.focus_ring_width = Some(
+                        parse_decimal_u16(value).map_err(|_| NiriConfigError::InvalidWindowRule)?,
+                    );
+                    self.finish_node()?;
+                }
+                KdlToken::Word("active-color") => {
+                    let KdlToken::String(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    rule.focus_ring_active_color = Some(
+                        super::parse_color(value)
+                            .map_err(|_| NiriConfigError::InvalidWindowRule)?,
+                    );
+                    self.finish_node()?;
+                }
+                KdlToken::Word("inactive-color") => {
+                    let KdlToken::String(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    rule.focus_ring_inactive_color = Some(
+                        super::parse_color(value)
+                            .map_err(|_| NiriConfigError::InvalidWindowRule)?,
+                    );
+                    self.finish_node()?;
+                }
+                KdlToken::Word(_) | KdlToken::String(_) | KdlToken::Equal => self.skip_node()?,
+                KdlToken::LeftBrace => self.skip_block()?,
+                KdlToken::RightBrace => return Ok(()),
                 KdlToken::End => return Err(NiriConfigError::UnexpectedEnd),
                 KdlToken::EndNode => {}
             }
@@ -2783,7 +2878,7 @@ mod tests {
     #[test]
     fn parses_named_workspaces_bindings_and_ordered_window_rules() {
         let config = parse_niri_shell_config(
-            r#"
+            r##"
             workspace "main"
             workspace "config" { open-on-output "SLOPOS-1"; }
             binds {
@@ -2847,6 +2942,11 @@ mod tests {
                 open-maximized-to-edges true
                 open-fullscreen true
                 open-focused true
+                focus-ring {
+                    off
+                    width 5
+                    active-color "#112233"
+                }
                 default-floating-position x=10 y=20
                 default-column-width { fixed 600; }
                 default-window-height { fixed 400; }
@@ -2860,6 +2960,11 @@ mod tests {
                 open-maximized-to-edges true
                 open-fullscreen true
                 open-focused true
+                focus-ring {
+                    on
+                    width 7
+                    inactive-color "#445566"
+                }
                 default-floating-position x=-10.4 y=200 relative-to="bottom-left"
                 default-column-width { proportion 0.333; }
                 default-window-height { proportion 0.333; }
@@ -2873,12 +2978,16 @@ mod tests {
                 open-maximized-to-edges false
                 open-fullscreen false
                 open-focused false
+                focus-ring {
+                    off
+                    active-color "#778899"
+                }
                 default-floating-position x=32.6 y=48.4 relative-to="bottom-right"
                 default-column-width { proportion 0.667; }
                 default-window-height { proportion 0.5; }
                 default-column-display "tabbed"
             }
-            "#,
+            "##,
         )
         .unwrap();
         assert_eq!(config.workspaces.len(), 2);
@@ -3357,6 +3466,40 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            config.window_rules.focus_ring_for(
+                "slopos-terminal",
+                FocusRing {
+                    enabled: true,
+                    width: 3,
+                    active_color: 0,
+                    inactive_color: 0,
+                }
+            ),
+            Some(FocusRing {
+                enabled: false,
+                width: 5,
+                active_color: 0x11_22_33,
+                inactive_color: 0,
+            })
+        );
+        assert_eq!(
+            config.window_rules.focus_ring_for(
+                "slopos-config",
+                FocusRing {
+                    enabled: true,
+                    width: 3,
+                    active_color: 0,
+                    inactive_color: 0,
+                }
+            ),
+            Some(FocusRing {
+                enabled: false,
+                width: 7,
+                active_color: 0x77_88_99,
+                inactive_color: 0x44_55_66,
+            })
+        );
+        assert_eq!(
             config.window_rules.floating_position_for("slopos-terminal"),
             Some(FloatingPosition {
                 x: 10,
@@ -3419,6 +3562,10 @@ mod tests {
             "window-rule { default-floating-position x=65536 y=0; }",
             "window-rule { default-floating-position x=65535.1 y=0; }",
             "window-rule { default-floating-position x=1.2345 y=0; }",
+            "window-rule { focus-ring { width -1; } }",
+            "window-rule { focus-ring { width 65536; } }",
+            "window-rule { focus-ring { active-color #ffffff; } }",
+            r##"window-rule { focus-ring { inactive-color "#zzzzzz"; } }"##,
         ] {
             assert_eq!(
                 parse_niri_shell_config(input),

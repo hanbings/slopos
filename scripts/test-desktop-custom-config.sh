@@ -71,6 +71,7 @@ sed \
     -e 's/open-maximized-to-edges false/open-maximized-to-edges true/' \
     -e 's/open-fullscreen false/open-fullscreen true/' \
     -e 's/open-focused false/open-focused true/' \
+    -e '/match app-id="slopos-config"/a\    focus-ring { off; }' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 1\.0/proportion 0.5/' \
     -e '/match app-id="slopos-config"/,/^}/ s/default-column-display "normal"/default-column-display "tabbed"/' \
@@ -265,6 +266,9 @@ grep -Fq \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=default-column-display value=tabbed applied=true workspace=2 source=config" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=focus-ring enabled=false width=3 active=0x7fc8ff inactive=0x505050 applied=true source=config" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-DESKTOP: window resized kind=CONFIG width=656 layout=scrolling" \

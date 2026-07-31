@@ -120,6 +120,7 @@ impl Desktop {
                 .unwrap_or(false);
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let open_focused = niri.window_rules.focused_for(app_id);
+            let focus_ring = niri.window_rules.focus_ring_for(app_id, config.focus_ring);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating =
                 niri.window_rules.floating_for(app_id).unwrap_or(false) && !maximized_to_edges;
@@ -223,6 +224,16 @@ impl Desktop {
                     rect.y,
                     rect.width,
                     rect.height
+                ));
+            }
+            if let Some(focus_ring) = focus_ring {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=focus-ring enabled={} width={} active={:#08x} inactive={:#08x} applied=true source=config",
+                    app_id,
+                    focus_ring.enabled,
+                    focus_ring.width,
+                    focus_ring.active_color,
+                    focus_ring.inactive_color
                 ));
             }
             match open_focused {
@@ -795,6 +806,7 @@ impl Desktop {
                 .unwrap_or(false);
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let open_focused = niri.window_rules.focused_for(app_id);
+            let focus_ring = niri.window_rules.focus_ring_for(app_id, layout.focus_ring);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating = niri
                 .window_rules
@@ -909,6 +921,16 @@ impl Desktop {
                     rect.y,
                     rect.width,
                     rect.height
+                ));
+            }
+            if let Some(focus_ring) = focus_ring {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={} property=focus-ring enabled={} width={} active={:#08x} inactive={:#08x} applied=true source=config",
+                    app_id,
+                    focus_ring.enabled,
+                    focus_ring.width,
+                    focus_ring.active_color,
+                    focus_ring.inactive_color
                 ));
             }
             match open_focused {
@@ -1133,6 +1155,11 @@ impl Desktop {
             return;
         }
         let active = self.workspaces.focused_window() == Some(index as u32);
+        let focus_ring = self
+            .niri
+            .window_rules
+            .focus_ring_for(app_id(window.kind), self.workspaces.config().focus_ring)
+            .unwrap_or(self.workspaces.config().focus_ring);
         framebuffer.rect(
             window.x + 7,
             window.y + 8,
@@ -1148,21 +1175,21 @@ impl Desktop {
             TITLE_HEIGHT,
             if active { self.accent() } else { WINDOW },
         );
-        if self.workspaces.config().focus_ring.enabled {
+        if focus_ring.enabled {
             framebuffer.outline(
                 window.x,
                 window.y,
                 window.width,
                 window.height,
                 if active {
-                    i32::from(self.workspaces.config().focus_ring.width)
+                    i32::from(focus_ring.width)
                 } else {
                     1
                 },
                 if active {
-                    self.workspaces.config().focus_ring.active_color
+                    focus_ring.active_color
                 } else {
-                    self.workspaces.config().focus_ring.inactive_color
+                    focus_ring.inactive_color
                 },
             );
         }
@@ -1185,7 +1212,7 @@ impl Desktop {
                     if tab == info.active_tab {
                         self.accent()
                     } else {
-                        self.workspaces.config().focus_ring.inactive_color
+                        focus_ring.inactive_color
                     },
                 );
                 y += segment_height + indicator_gap;
