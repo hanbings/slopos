@@ -95,6 +95,7 @@ pub enum NiriAction<'a> {
     SwitchPresetWindowHeight,
     SwitchPresetWindowHeightBack,
     MaximizeColumn,
+    FullscreenWindow,
     MaximizeWindowToEdges,
     CenterColumn,
     CenterVisibleColumns,
@@ -556,6 +557,7 @@ impl<'a> ShellConfigParser<'a> {
             "switch-preset-window-height" => NiriAction::SwitchPresetWindowHeight,
             "switch-preset-window-height-back" => NiriAction::SwitchPresetWindowHeightBack,
             "maximize-column" => NiriAction::MaximizeColumn,
+            "fullscreen-window" => NiriAction::FullscreenWindow,
             "maximize-window-to-edges" => NiriAction::MaximizeWindowToEdges,
             "center-column" => NiriAction::CenterColumn,
             "center-visible-columns" => NiriAction::CenterVisibleColumns,
@@ -1211,6 +1213,7 @@ pub struct WorkspaceSet<const WORKSPACES: usize, const COLUMNS: usize, const WIN
     layouts: [ScrollLayout<COLUMNS, WINDOWS>; WORKSPACES],
     floating: [FloatingLayout<WINDOWS>; WORKSPACES],
     floating_active: [bool; WORKSPACES],
+    fullscreen: [Option<u32>; WORKSPACES],
     count: usize,
     active: usize,
     previous: usize,
@@ -1237,6 +1240,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
                 FloatingLayout::new(output_width, output_height, reserved_top, config.gaps)
             }),
             floating_active: [false; WORKSPACES],
+            fullscreen: [None; WORKSPACES],
             count,
             active: 0,
             previous: 0,
@@ -1293,6 +1297,9 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn focus_window(&mut self, window: u32) -> Result<(), WorkspaceError> {
+        if self.fullscreen[self.active].is_some_and(|fullscreen| fullscreen != window) {
+            return Err(WorkspaceError::Layout(LayoutError::UnknownWindow));
+        }
         if self.floating[self.active].contains(window) {
             self.floating[self.active]
                 .focus(window)
@@ -1308,6 +1315,9 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn close_window(&mut self, window: u32) -> Result<(), WorkspaceError> {
+        if self.fullscreen[self.active] == Some(window) {
+            self.fullscreen[self.active] = None;
+        }
         if self.floating[self.active].contains(window) {
             self.floating[self.active]
                 .remove(window)
@@ -1323,6 +1333,14 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn tile_rect(&self, window: u32) -> Result<Rect, WorkspaceError> {
+        if self.fullscreen[self.active] == Some(window) {
+            return Ok(Rect {
+                x: 0,
+                y: 0,
+                width: self.floating[self.active].output_width,
+                height: self.floating[self.active].output_height,
+            });
+        }
         if let Some(rect) = self.floating[self.active].rect(window) {
             return Ok(rect);
         }
@@ -1332,11 +1350,17 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn window_is_visible(&self, window: u32) -> bool {
+        if let Some(fullscreen) = self.fullscreen[self.active] {
+            return window == fullscreen;
+        }
         self.floating[self.active].contains(window)
             || self.layouts[self.active].window_is_visible(window)
     }
 
     pub fn tabbed_column_info(&self, window: u32) -> Option<TabbedColumnInfo> {
+        if self.fullscreen[self.active] == Some(window) {
+            return None;
+        }
         if self.floating[self.active].contains(window) {
             return None;
         }
@@ -1344,6 +1368,9 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn focused_window(&self) -> Option<u32> {
+        if let Some(fullscreen) = self.fullscreen[self.active] {
+            return Some(fullscreen);
+        }
         if self.floating_layer_is_active() {
             self.floating[self.active]
                 .focused_window()
@@ -1361,6 +1388,26 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
 
     pub fn window_is_floating(&self, window: u32) -> bool {
         self.floating[self.active].contains(window)
+    }
+
+    pub fn fullscreen_window(&self) -> Option<u32> {
+        self.fullscreen[self.active]
+    }
+
+    pub fn window_is_fullscreen(&self, window: u32) -> bool {
+        self.fullscreen[self.active] == Some(window)
+    }
+
+    pub fn toggle_focused_window_fullscreen(&mut self) -> bool {
+        if self.fullscreen[self.active].is_some() {
+            self.fullscreen[self.active] = None;
+            return true;
+        }
+        let Some(window) = self.focused_window() else {
+            return false;
+        };
+        self.fullscreen[self.active] = Some(window);
+        true
     }
 
     pub fn window_is_floating_anywhere(&self, window: u32) -> bool {
@@ -1865,6 +1912,7 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
                     self.layouts.swap(index, index + 1);
                     self.floating.swap(index, index + 1);
                     self.floating_active.swap(index, index + 1);
+                    self.fullscreen.swap(index, index + 1);
                 }
                 self.count -= 1;
                 if self.active > workspace {
@@ -1946,6 +1994,7 @@ mod tests {
                 Mod+Ctrl+Alt+R { switch-preset-window-height-back; }
                 Mod+Ctrl+R { reset-window-height; }
                 Mod+F { maximize-column; }
+                Mod+Shift+F { fullscreen-window; }
                 Mod+M { maximize-window-to-edges; }
                 Mod+C { center-column; }
                 Mod+Ctrl+C { center-visible-columns; }
@@ -1971,7 +2020,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 47);
+        assert_eq!(config.bindings.len(), 48);
         assert_eq!(
             config
                 .bindings
@@ -2119,6 +2168,13 @@ mod tests {
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Character(b'F')),
             Some(NiriAction::MaximizeColumn)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::SHIFT),
+                BindingKey::Character(b'F')
+            ),
+            Some(NiriAction::FullscreenWindow)
         );
         assert_eq!(
             config
@@ -2529,5 +2585,47 @@ mod tests {
         );
         assert!(workspaces.focus_workspace_previous());
         assert!(workspaces.workspace_is_empty(0).unwrap());
+    }
+
+    #[test]
+    fn fullscreen_hides_siblings_and_restores_tiled_or_floating_geometry() {
+        let mut workspaces =
+            WorkspaceSet::<3, 3, 3>::new(2, 1000, 700, 40, LayoutConfig::default()).unwrap();
+        workspaces.open_window(0, 10).unwrap();
+        workspaces.open_window(0, 20).unwrap();
+        workspaces.focus_window(10).unwrap();
+        let tiled = workspaces.tile_rect(10).unwrap();
+
+        assert!(workspaces.toggle_focused_window_fullscreen());
+        assert_eq!(workspaces.fullscreen_window(), Some(10));
+        assert_eq!(
+            workspaces.tile_rect(10).unwrap(),
+            Rect {
+                x: 0,
+                y: 0,
+                width: 1000,
+                height: 700,
+            }
+        );
+        assert!(!workspaces.window_is_visible(20));
+        assert!(workspaces.tabbed_column_info(10).is_none());
+        assert!(workspaces.focus_workspace(1).unwrap());
+        assert_eq!(workspaces.fullscreen_window(), None);
+        assert!(workspaces.focus_workspace_previous());
+        assert_eq!(workspaces.fullscreen_window(), Some(10));
+        assert!(workspaces.toggle_focused_window_fullscreen());
+        assert_eq!(workspaces.fullscreen_window(), None);
+        assert_eq!(workspaces.tile_rect(10).unwrap(), tiled);
+        assert!(workspaces.window_is_visible(20));
+
+        assert!(workspaces.move_focused_window_to_floating());
+        let floating = workspaces.tile_rect(10).unwrap();
+        assert!(workspaces.window_is_floating(10));
+        assert!(workspaces.toggle_focused_window_fullscreen());
+        assert_eq!(workspaces.tile_rect(10).unwrap().x, 0);
+        assert_eq!(workspaces.tile_rect(10).unwrap().height, 700);
+        assert!(workspaces.toggle_focused_window_fullscreen());
+        assert!(workspaces.window_is_floating(10));
+        assert_eq!(workspaces.tile_rect(10).unwrap(), floating);
     }
 }

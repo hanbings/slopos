@@ -275,6 +275,11 @@ impl Desktop {
 
     pub fn render(&self, framebuffer: &mut Framebuffer) {
         self.render_wallpaper(framebuffer);
+        if let Some(window) = self.workspaces.fullscreen_window() {
+            self.render_window(framebuffer, window as usize);
+            framebuffer.cursor(self.pointer_x, self.pointer_y);
+            return;
+        }
         self.render_bar(framebuffer);
 
         for index in 0..WINDOW_COUNT {
@@ -843,6 +848,17 @@ impl Desktop {
         let Some(window) = self.positioned_window(index) else {
             return;
         };
+        if self.workspaces.window_is_fullscreen(index as u32) {
+            framebuffer.rect(window.x, window.y, window.width, window.height, WINDOW_ALT);
+            let mut content = window;
+            content.y -= TITLE_HEIGHT + 2;
+            match content.kind {
+                WindowKind::Terminal => self.render_terminal(framebuffer, content),
+                WindowKind::System => self.render_system(framebuffer, content),
+                WindowKind::Config => self.render_config(framebuffer, content),
+            }
+            return;
+        }
         let active = self.workspaces.focused_window() == Some(index as u32);
         framebuffer.rect(
             window.x + 7,
@@ -1127,6 +1143,9 @@ impl Desktop {
                 .positioned_window(index)
                 .expect("pointer-selected window remains positioned");
             self.focus(index);
+            if self.workspaces.window_is_fullscreen(index as u32) {
+                return false;
+            }
             if self.pointer_y < window.y + TITLE_HEIGHT {
                 if self.pointer_x >= window.x + window.width - 30 {
                     self.close_window(index);
@@ -1197,7 +1216,8 @@ impl Desktop {
     }
 
     fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {
-        if y < 0 || y >= i32::from(self.bar.height) {
+        if self.workspaces.fullscreen_window().is_some() || y < 0 || y >= i32::from(self.bar.height)
+        {
             return None;
         }
         let center_width = self.bar_modules_width(self.bar.modules_center);
@@ -1258,7 +1278,8 @@ impl Desktop {
     }
 
     fn bar_module_at(&self, x: i32, y: i32) -> Option<&'static str> {
-        if y < 0 || y >= i32::from(self.bar.height) {
+        if self.workspaces.fullscreen_window().is_some() || y < 0 || y >= i32::from(self.bar.height)
+        {
             return None;
         }
         let center_width = self.bar_modules_width(self.bar.modules_center);
@@ -1303,6 +1324,9 @@ impl Desktop {
 
     fn pointer_resize_pressed(&mut self) {
         if let Some(index) = self.window_at_pointer() {
+            if self.workspaces.window_is_fullscreen(index as u32) {
+                return;
+            }
             self.focus(index);
             self.resizing_column = true;
         }
@@ -1547,123 +1571,148 @@ impl Desktop {
     }
 
     fn execute_niri_action(&mut self, action: NiriAction<'static>) {
-        let changed = match action {
-            NiriAction::FocusColumnLeft => self.workspaces.focus_column_left(),
-            NiriAction::FocusColumnRight => self.workspaces.focus_column_right(),
-            NiriAction::FocusColumnFirst => self.workspaces.focus_column_first(),
-            NiriAction::FocusColumnLast => self.workspaces.focus_column_last(),
-            NiriAction::FocusWindowUp => self.workspaces.focus_window_up(),
-            NiriAction::FocusWindowDown => self.workspaces.focus_window_down(),
-            NiriAction::MoveColumnLeft => self.workspaces.move_column_left(),
-            NiriAction::MoveColumnRight => self.workspaces.move_column_right(),
-            NiriAction::MoveColumnToFirst => self.workspaces.move_column_to_first(),
-            NiriAction::MoveColumnToLast => self.workspaces.move_column_to_last(),
-            NiriAction::MoveWindowUp => self.workspaces.move_window_up(),
-            NiriAction::MoveWindowDown => self.workspaces.move_window_down(),
-            NiriAction::FocusWorkspaceUp => self.workspaces.focus_workspace_up(),
-            NiriAction::FocusWorkspaceDown => self.workspaces.focus_workspace_down(),
-            NiriAction::FocusWorkspacePrevious => self.workspaces.focus_workspace_previous(),
-            NiriAction::FocusWorkspace(reference) => {
-                let workspace = self.resolve_workspace_reference(reference);
-                self.workspaces
-                    .focus_workspace(workspace)
-                    .unwrap_or_else(|_| crate::fatal("niri focus-workspace failed"))
-            }
-            NiriAction::MoveColumnToWorkspaceUp => {
-                let active = self.workspaces.active();
-                active > 0
-                    && self
-                        .workspaces
-                        .move_focused_column_to_workspace(active - 1)
-                        .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-up failed"))
-            }
-            NiriAction::MoveColumnToWorkspaceDown => {
-                let active = self.workspaces.active();
-                active + 1 < self.workspaces.len()
-                    && self
-                        .workspaces
-                        .move_focused_column_to_workspace(active + 1)
-                        .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-down failed"))
-            }
-            NiriAction::MoveColumnToWorkspace(reference) => {
-                let workspace = self.resolve_workspace_reference(reference);
-                self.workspaces
-                    .move_focused_column_to_workspace(workspace)
-                    .unwrap_or_else(|_| crate::fatal("niri move-to-workspace failed"))
-            }
-            NiriAction::MoveWindowToWorkspaceUp => {
-                let active = self.workspaces.active();
-                active > 0
-                    && self
-                        .workspaces
-                        .move_focused_window_to_workspace(active - 1)
-                        .unwrap_or_else(|_| crate::fatal("niri move-window-to-workspace-up failed"))
-            }
-            NiriAction::MoveWindowToWorkspaceDown => {
-                let active = self.workspaces.active();
-                active + 1 < self.workspaces.len()
-                    && self
-                        .workspaces
-                        .move_focused_window_to_workspace(active + 1)
-                        .unwrap_or_else(|_| {
-                            crate::fatal("niri move-window-to-workspace-down failed")
-                        })
-            }
-            NiriAction::MoveWindowToWorkspace(reference) => {
-                let workspace = self.resolve_workspace_reference(reference);
-                self.workspaces
-                    .move_focused_window_to_workspace(workspace)
-                    .unwrap_or_else(|_| crate::fatal("niri move-window-to-workspace failed"))
-            }
-            NiriAction::ConsumeWindowIntoColumn => self.workspaces.consume_window_into_column(),
-            NiriAction::ExpelWindowFromColumn => self.workspaces.expel_window_from_column(),
-            NiriAction::ConsumeOrExpelWindowLeft => {
-                self.workspaces.consume_or_expel_focused_window_left()
-            }
-            NiriAction::ConsumeOrExpelWindowRight => {
-                self.workspaces.consume_or_expel_focused_window_right()
-            }
-            NiriAction::ToggleColumnTabbedDisplay => {
-                self.workspaces.toggle_focused_column_tabbed_display()
-            }
-            NiriAction::ToggleWindowFloating => self.workspaces.toggle_focused_window_floating(),
-            NiriAction::SwitchFocusBetweenFloatingAndTiling => {
-                self.workspaces.switch_focus_between_floating_and_tiling()
-            }
-            NiriAction::MoveWindowToFloating => self.workspaces.move_focused_window_to_floating(),
-            NiriAction::MoveWindowToTiling => self.workspaces.move_focused_window_to_tiling(),
-            NiriAction::FocusFloating => self.workspaces.focus_floating(),
-            NiriAction::FocusTiling => self.workspaces.focus_tiling(),
-            NiriAction::SwitchPresetColumnWidth => self.workspaces.switch_preset_column_width(),
-            NiriAction::SwitchPresetColumnWidthBack => {
-                self.workspaces.switch_preset_column_width_back()
-            }
-            NiriAction::SwitchPresetWindowHeight => self.workspaces.switch_preset_window_height(),
-            NiriAction::SwitchPresetWindowHeightBack => {
-                self.workspaces.switch_preset_window_height_back()
-            }
-            NiriAction::MaximizeColumn => self.workspaces.maximize_focused_column(),
-            NiriAction::MaximizeWindowToEdges => self.workspaces.maximize_focused_window_to_edges(),
-            NiriAction::CenterColumn => self.workspaces.center_focused_column(),
-            NiriAction::CenterVisibleColumns => self.workspaces.center_visible_columns(),
-            NiriAction::ExpandColumnToAvailableWidth => {
-                self.workspaces.expand_focused_column_to_available_width()
-            }
-            NiriAction::SetColumnWidth(change) => self
-                .workspaces
-                .change_focused_column_width(change)
-                .unwrap_or_else(|_| crate::fatal("niri set-column-width failed")),
-            NiriAction::SetWindowHeight(change) => self
-                .workspaces
-                .change_focused_window_height(change)
-                .unwrap_or_else(|_| crate::fatal("niri set-window-height failed")),
-            NiriAction::ResetWindowHeight => self.workspaces.reset_focused_window_height(),
-            NiriAction::CloseWindow => {
-                if let Some(window) = self.workspaces.focused_window() {
-                    self.close_window(window as usize);
-                    true
-                } else {
-                    false
+        let blocked_by_fullscreen = self.workspaces.fullscreen_window().is_some()
+            && !matches!(
+                action,
+                NiriAction::FullscreenWindow
+                    | NiriAction::CloseWindow
+                    | NiriAction::FocusWorkspaceUp
+                    | NiriAction::FocusWorkspaceDown
+                    | NiriAction::FocusWorkspacePrevious
+                    | NiriAction::FocusWorkspace(_)
+            );
+        let changed = if blocked_by_fullscreen {
+            false
+        } else {
+            match action {
+                NiriAction::FocusColumnLeft => self.workspaces.focus_column_left(),
+                NiriAction::FocusColumnRight => self.workspaces.focus_column_right(),
+                NiriAction::FocusColumnFirst => self.workspaces.focus_column_first(),
+                NiriAction::FocusColumnLast => self.workspaces.focus_column_last(),
+                NiriAction::FocusWindowUp => self.workspaces.focus_window_up(),
+                NiriAction::FocusWindowDown => self.workspaces.focus_window_down(),
+                NiriAction::MoveColumnLeft => self.workspaces.move_column_left(),
+                NiriAction::MoveColumnRight => self.workspaces.move_column_right(),
+                NiriAction::MoveColumnToFirst => self.workspaces.move_column_to_first(),
+                NiriAction::MoveColumnToLast => self.workspaces.move_column_to_last(),
+                NiriAction::MoveWindowUp => self.workspaces.move_window_up(),
+                NiriAction::MoveWindowDown => self.workspaces.move_window_down(),
+                NiriAction::FocusWorkspaceUp => self.workspaces.focus_workspace_up(),
+                NiriAction::FocusWorkspaceDown => self.workspaces.focus_workspace_down(),
+                NiriAction::FocusWorkspacePrevious => self.workspaces.focus_workspace_previous(),
+                NiriAction::FocusWorkspace(reference) => {
+                    let workspace = self.resolve_workspace_reference(reference);
+                    self.workspaces
+                        .focus_workspace(workspace)
+                        .unwrap_or_else(|_| crate::fatal("niri focus-workspace failed"))
+                }
+                NiriAction::MoveColumnToWorkspaceUp => {
+                    let active = self.workspaces.active();
+                    active > 0
+                        && self
+                            .workspaces
+                            .move_focused_column_to_workspace(active - 1)
+                            .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-up failed"))
+                }
+                NiriAction::MoveColumnToWorkspaceDown => {
+                    let active = self.workspaces.active();
+                    active + 1 < self.workspaces.len()
+                        && self
+                            .workspaces
+                            .move_focused_column_to_workspace(active + 1)
+                            .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-down failed"))
+                }
+                NiriAction::MoveColumnToWorkspace(reference) => {
+                    let workspace = self.resolve_workspace_reference(reference);
+                    self.workspaces
+                        .move_focused_column_to_workspace(workspace)
+                        .unwrap_or_else(|_| crate::fatal("niri move-to-workspace failed"))
+                }
+                NiriAction::MoveWindowToWorkspaceUp => {
+                    let active = self.workspaces.active();
+                    active > 0
+                        && self
+                            .workspaces
+                            .move_focused_window_to_workspace(active - 1)
+                            .unwrap_or_else(|_| {
+                                crate::fatal("niri move-window-to-workspace-up failed")
+                            })
+                }
+                NiriAction::MoveWindowToWorkspaceDown => {
+                    let active = self.workspaces.active();
+                    active + 1 < self.workspaces.len()
+                        && self
+                            .workspaces
+                            .move_focused_window_to_workspace(active + 1)
+                            .unwrap_or_else(|_| {
+                                crate::fatal("niri move-window-to-workspace-down failed")
+                            })
+                }
+                NiriAction::MoveWindowToWorkspace(reference) => {
+                    let workspace = self.resolve_workspace_reference(reference);
+                    self.workspaces
+                        .move_focused_window_to_workspace(workspace)
+                        .unwrap_or_else(|_| crate::fatal("niri move-window-to-workspace failed"))
+                }
+                NiriAction::ConsumeWindowIntoColumn => self.workspaces.consume_window_into_column(),
+                NiriAction::ExpelWindowFromColumn => self.workspaces.expel_window_from_column(),
+                NiriAction::ConsumeOrExpelWindowLeft => {
+                    self.workspaces.consume_or_expel_focused_window_left()
+                }
+                NiriAction::ConsumeOrExpelWindowRight => {
+                    self.workspaces.consume_or_expel_focused_window_right()
+                }
+                NiriAction::ToggleColumnTabbedDisplay => {
+                    self.workspaces.toggle_focused_column_tabbed_display()
+                }
+                NiriAction::ToggleWindowFloating => {
+                    self.workspaces.toggle_focused_window_floating()
+                }
+                NiriAction::SwitchFocusBetweenFloatingAndTiling => {
+                    self.workspaces.switch_focus_between_floating_and_tiling()
+                }
+                NiriAction::MoveWindowToFloating => {
+                    self.workspaces.move_focused_window_to_floating()
+                }
+                NiriAction::MoveWindowToTiling => self.workspaces.move_focused_window_to_tiling(),
+                NiriAction::FocusFloating => self.workspaces.focus_floating(),
+                NiriAction::FocusTiling => self.workspaces.focus_tiling(),
+                NiriAction::SwitchPresetColumnWidth => self.workspaces.switch_preset_column_width(),
+                NiriAction::SwitchPresetColumnWidthBack => {
+                    self.workspaces.switch_preset_column_width_back()
+                }
+                NiriAction::SwitchPresetWindowHeight => {
+                    self.workspaces.switch_preset_window_height()
+                }
+                NiriAction::SwitchPresetWindowHeightBack => {
+                    self.workspaces.switch_preset_window_height_back()
+                }
+                NiriAction::MaximizeColumn => self.workspaces.maximize_focused_column(),
+                NiriAction::FullscreenWindow => self.workspaces.toggle_focused_window_fullscreen(),
+                NiriAction::MaximizeWindowToEdges => {
+                    self.workspaces.maximize_focused_window_to_edges()
+                }
+                NiriAction::CenterColumn => self.workspaces.center_focused_column(),
+                NiriAction::CenterVisibleColumns => self.workspaces.center_visible_columns(),
+                NiriAction::ExpandColumnToAvailableWidth => {
+                    self.workspaces.expand_focused_column_to_available_width()
+                }
+                NiriAction::SetColumnWidth(change) => self
+                    .workspaces
+                    .change_focused_column_width(change)
+                    .unwrap_or_else(|_| crate::fatal("niri set-column-width failed")),
+                NiriAction::SetWindowHeight(change) => self
+                    .workspaces
+                    .change_focused_window_height(change)
+                    .unwrap_or_else(|_| crate::fatal("niri set-window-height failed")),
+                NiriAction::ResetWindowHeight => self.workspaces.reset_focused_window_height(),
+                NiriAction::CloseWindow => {
+                    if let Some(window) = self.workspaces.focused_window() {
+                        self.close_window(window as usize);
+                        true
+                    } else {
+                        false
+                    }
                 }
             }
         };
@@ -1692,6 +1741,38 @@ impl Desktop {
             );
         }
         self.sync_focused_window();
+        if changed && matches!(action, NiriAction::FullscreenWindow) {
+            self.scrolling_view = false;
+            self.resizing_column = false;
+        }
+        if changed
+            && matches!(action, NiriAction::FullscreenWindow)
+            && let Some(window) = self.positioned_window(self.active)
+        {
+            serialln(format_args!(
+                "SLOPOS-DESKTOP: fullscreen toggled state={} kind={} restore_layer={} x={} y={} width={} height={} bar={} layout=niri",
+                if self.workspaces.window_is_fullscreen(self.active as u32) {
+                    "active"
+                } else {
+                    "inactive"
+                },
+                title(window.kind),
+                if self.workspaces.focused_window_is_floating() {
+                    "floating"
+                } else {
+                    "tiling"
+                },
+                window.x,
+                window.y,
+                window.width,
+                window.height,
+                if self.workspaces.fullscreen_window().is_some() {
+                    "covered"
+                } else {
+                    "visible"
+                }
+            ));
+        }
         if changed
             && matches!(
                 action,
@@ -2223,6 +2304,7 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::SwitchPresetWindowHeight => "switch-preset-window-height",
         NiriAction::SwitchPresetWindowHeightBack => "switch-preset-window-height-back",
         NiriAction::MaximizeColumn => "maximize-column",
+        NiriAction::FullscreenWindow => "fullscreen-window",
         NiriAction::MaximizeWindowToEdges => "maximize-window-to-edges",
         NiriAction::CenterColumn => "center-column",
         NiriAction::CenterVisibleColumns => "center-visible-columns",

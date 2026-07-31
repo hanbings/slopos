@@ -118,9 +118,26 @@ monitor_type() {
     echo "sendkey meta_l-home 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-focus-column-first.ppm"
+    echo "sendkey meta_l-shift-f 50"
+    sleep 1
+    echo "mouse_move -441 -364"
+    echo "mouse_button 1"
+    echo "mouse_button 0"
+    echo "mouse_move 441 364"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-tiled-fullscreen.ppm"
+    echo "sendkey meta_l-shift-f 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-tiled-fullscreen-restored.ppm"
     echo "sendkey meta_l-alt-v 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-explicit-floating.ppm"
+    echo "sendkey meta_l-shift-f 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-floating-fullscreen.ppm"
+    echo "sendkey meta_l-shift-f 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-floating-fullscreen-restored.ppm"
     echo "sendkey meta_l-alt-t 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-explicit-focus-tiling.ppm"
@@ -456,8 +473,20 @@ grep -Fq "SLOPOS-NIRI: binding action=focus-column-last changed=true workspace=1
 grep -Fq "SLOPOS-DESKTOP: column reordered kind=SYSTEM x=16 direction=move-column-to-first layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: column reordered kind=SYSTEM x=520 direction=move-column-to-last layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-column-first changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: fullscreen toggled state=active kind=TERMINAL restore_layer=tiling x=0 y=0 width=1024 height=768 bar=covered layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=TERMINAL restore_layer=tiling x=16 y=56 width=488 height=696 bar=visible layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-window-to-floating changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window layer moved action=move-window-to-floating kind=TERMINAL layer=floating x=16 y=161 width=488 height=485 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: fullscreen toggled state=active kind=TERMINAL restore_layer=floating x=0 y=0 width=1024 height=768 bar=covered layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=TERMINAL restore_layer=floating x=16 y=161 width=488 height=485 bar=visible layout=niri" "${serial_log}"
+if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=1 name=main focused=0" "${serial_log}")" -ne 4 ]]; then
+    echo "niri tiled/floating fullscreen did not toggle and restore" >&2
+    exit 1
+fi
+if [[ "$(grep -Fc "SLOPOS-WAYBAR: workspace clicked" "${serial_log}")" -ne 2 ]]; then
+    echo "covered Waybar accepted pointer input during fullscreen" >&2
+    exit 1
+fi
 grep -Fq "SLOPOS-NIRI: binding action=focus-tiling changed=true workspace=1 name=main focused=1" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: layer focus switched layer=tiling kind=SYSTEM layout=niri action=focus-tiling" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-floating changed=true workspace=1 name=main focused=0" "${serial_log}"
@@ -587,6 +616,10 @@ test -s "${repo_dir}/evidence/niri-focus-column-last.ppm"
 test -s "${repo_dir}/evidence/niri-column-moved-first.ppm"
 test -s "${repo_dir}/evidence/niri-column-moved-last.ppm"
 test -s "${repo_dir}/evidence/niri-focus-column-first.ppm"
+test -s "${repo_dir}/evidence/niri-tiled-fullscreen.ppm"
+test -s "${repo_dir}/evidence/niri-tiled-fullscreen-restored.ppm"
+test -s "${repo_dir}/evidence/niri-floating-fullscreen.ppm"
+test -s "${repo_dir}/evidence/niri-floating-fullscreen-restored.ppm"
 test -s "${repo_dir}/evidence/niri-explicit-floating.ppm"
 test -s "${repo_dir}/evidence/niri-explicit-focus-tiling.ppm"
 test -s "${repo_dir}/evidence/niri-explicit-focus-floating.ppm"
@@ -653,6 +686,14 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-column-moved-last.png"
     pnmtopng "${repo_dir}/evidence/niri-focus-column-first.ppm" \
         >"${repo_dir}/evidence/niri-focus-column-first.png"
+    pnmtopng "${repo_dir}/evidence/niri-tiled-fullscreen.ppm" \
+        >"${repo_dir}/evidence/niri-tiled-fullscreen.png"
+    pnmtopng "${repo_dir}/evidence/niri-tiled-fullscreen-restored.ppm" \
+        >"${repo_dir}/evidence/niri-tiled-fullscreen-restored.png"
+    pnmtopng "${repo_dir}/evidence/niri-floating-fullscreen.ppm" \
+        >"${repo_dir}/evidence/niri-floating-fullscreen.png"
+    pnmtopng "${repo_dir}/evidence/niri-floating-fullscreen-restored.ppm" \
+        >"${repo_dir}/evidence/niri-floating-fullscreen-restored.png"
     pnmtopng "${repo_dir}/evidence/niri-explicit-floating.ppm" \
         >"${repo_dir}/evidence/niri-explicit-floating.png"
     pnmtopng "${repo_dir}/evidence/niri-explicit-focus-tiling.ppm" \
