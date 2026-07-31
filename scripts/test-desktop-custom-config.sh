@@ -88,6 +88,7 @@ if (( custom_niri_bytes <= default_niri_bytes || custom_niri_bytes > 4096 )); th
 fi
 sed \
     -e '1i// user override accepted by the SlopOS desktop service' \
+    -e '/"spacing": 10,/a\    "margin": "4 12",\n    "fixed-center": false,\n    "exclusive": true,' \
     -e '/"modules-left":/,/]/ s/"niri\/workspaces"/"niri\/window"/' \
     -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
     -e '/"clock": {/a\        "on-click": "status",' \
@@ -144,22 +145,22 @@ set +e
     echo "screendump ${floating_remembered_screenshot}"
     echo "sendkey meta_l-ctrl-v 50"
     sleep 1
-    echo "mouse_move -24 0"
+    echo "mouse_move -90 0"
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
-    echo "mouse_move 24 0"
+    echo "mouse_move 30 0"
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
-    echo "mouse_move -24 0"
+    echo "mouse_move -30 0"
     echo "mouse_button 1"
     echo "mouse_button 0"
     sleep 1
     echo "sendkey a"
     echo "sendkey b"
     echo "sendkey o"
-    echo "mouse_move 503 0"
+    echo "mouse_move 557 0"
     sleep 1
     echo "mouse_button 1"
     echo "mouse_button 0"
@@ -257,10 +258,13 @@ if [[ "$(grep -Fc "SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=
     exit 1
 fi
 grep -Fq \
-    "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized value=true applied=true workspace=2 x=16 y=56 width=992 height=340 mode=maximized-column source=config" \
+    "SLOPOS-WAYBAR: geometry position=top x=12 y=4 width=1000 height=40 margin=4/12/4/12 spacing=10 fixed_center=false exclusive=true reserved_top=44 source=config" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized-to-edges value=true applied=true workspace=2 x=0 y=40 width=1024 height=728 mode=maximized-to-edges source=config" \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized value=true applied=true workspace=2 x=16 y=60 width=992 height=338 mode=maximized-column source=config" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized-to-edges value=true applied=true workspace=2 x=0 y=44 width=1024 height=724 mode=maximized-to-edges source=config" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=open-fullscreen value=true applied=true workspace=2 x=0 y=0 width=1024 height=768 mode=fullscreen source=config" \
@@ -290,19 +294,19 @@ grep -Fq \
     "SLOPOS-DESKTOP: window resized kind=CONFIG width=656 layout=scrolling" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-NIRI: window rule app_id=slopos-config property=default-floating-position x=24 y=24 relative-to=bottom-right applied=true remembered=false window_x=8 window_y=404 width=992 height=340 transition=move-window-to-floating source=config" \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=default-floating-position x=24 y=24 relative-to=bottom-right applied=true remembered=false window_x=8 window_y=406 width=992 height=338 transition=move-window-to-floating source=config" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-NIRI: window rule app_id=slopos-config property=default-floating-position x=24 y=24 relative-to=bottom-right applied=false remembered=true window_x=8 window_y=428 width=992 height=340 transition=move-window-to-floating source=config" \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=default-floating-position x=24 y=24 relative-to=bottom-right applied=false remembered=true window_x=8 window_y=430 width=992 height=338 transition=move-window-to-floating source=config" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-NIRI: binding action=maximize-window-to-edges changed=true workspace=2 name=config focused=2" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-DESKTOP: window edge maximize toggled kind=CONFIG x=16 y=56 width=992 height=340 layout=scrolling" \
+    "SLOPOS-DESKTOP: window edge maximize toggled kind=CONFIG x=16 y=60 width=992 height=338 layout=scrolling" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=CONFIG restore_layer=tiling x=0 y=40 width=1024 height=728 bar=visible layout=niri" \
+    "SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=CONFIG restore_layer=tiling x=0 y=44 width=1024 height=724 bar=visible layout=niri" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-NIRI: binding action=fullscreen-window changed=true workspace=2 name=config focused=2" \
@@ -380,6 +384,13 @@ if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 182 350)" != "ffb86c" ]]; th
 fi
 if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 844 200)" != "0a0a1f" ]]; then
     echo "custom niri shadow did not apply its configured offset, spread, softness, and alpha" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 0 20)" != "111144" ]] \
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 12 20)" != "161a2a" ]] \
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 20 2)" != "111144" ]] \
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 20 4)" != "161a2a" ]]; then
+    echo "custom Waybar margins did not constrain the rendered bar surface" >&2
     exit 1
 fi
 

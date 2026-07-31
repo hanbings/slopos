@@ -153,6 +153,12 @@ pub struct WaybarConfig<'a> {
     pub position: BarPosition,
     pub height: u16,
     pub spacing: u16,
+    pub margin_top: i32,
+    pub margin_right: i32,
+    pub margin_bottom: i32,
+    pub margin_left: i32,
+    pub fixed_center: bool,
+    pub exclusive: bool,
     pub modules_left: BarModuleList<'a>,
     pub modules_center: BarModuleList<'a>,
     pub modules_right: BarModuleList<'a>,
@@ -165,11 +171,28 @@ impl Default for WaybarConfig<'_> {
             position: BarPosition::Top,
             height: 30,
             spacing: 4,
+            margin_top: 0,
+            margin_right: 0,
+            margin_bottom: 0,
+            margin_left: 0,
+            fixed_center: true,
+            exclusive: true,
             modules_left: BarModuleList::empty(),
             modules_center: BarModuleList::empty(),
             modules_right: BarModuleList::empty(),
             module_configs: BarModuleConfigList::empty(),
         }
+    }
+}
+
+impl WaybarConfig<'_> {
+    pub fn reserved_top(self) -> u16 {
+        if !self.exclusive || self.position != BarPosition::Top {
+            return 0;
+        }
+        i32::from(self.height)
+            .saturating_add(self.margin_top)
+            .clamp(0, i32::from(u16::MAX)) as u16
     }
 }
 
@@ -458,6 +481,13 @@ impl<'a> JsonParser<'a> {
     const LEFT: u16 = 1 << 3;
     const CENTER: u16 = 1 << 4;
     const RIGHT: u16 = 1 << 5;
+    const MARGIN: u16 = 1 << 6;
+    const MARGIN_TOP: u16 = 1 << 7;
+    const MARGIN_RIGHT: u16 = 1 << 8;
+    const MARGIN_BOTTOM: u16 = 1 << 9;
+    const MARGIN_LEFT: u16 = 1 << 10;
+    const FIXED_CENTER: u16 = 1 << 11;
+    const EXCLUSIVE: u16 = 1 << 12;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -470,6 +500,11 @@ impl<'a> JsonParser<'a> {
         self.expect(Token::LeftBrace)?;
         let mut config = WaybarConfig::default();
         let mut fields = 0u16;
+        let mut margin = None;
+        let mut margin_top = None;
+        let mut margin_right = None;
+        let mut margin_bottom = None;
+        let mut margin_left = None;
         loop {
             match self.next() {
                 Token::RightBrace => break,
@@ -496,6 +531,40 @@ impl<'a> JsonParser<'a> {
                         "spacing" => {
                             mark_once(&mut fields, Self::SPACING)?;
                             config.spacing = self.u16_value()?;
+                        }
+                        "margin" => {
+                            mark_once(&mut fields, Self::MARGIN)?;
+                            margin = Some(self.margin_value()?);
+                        }
+                        "margin-top" => {
+                            mark_once(&mut fields, Self::MARGIN_TOP)?;
+                            margin_top = Some(self.i32_value()?);
+                        }
+                        "margin-right" => {
+                            mark_once(&mut fields, Self::MARGIN_RIGHT)?;
+                            margin_right = Some(self.i32_value()?);
+                        }
+                        "margin-bottom" => {
+                            mark_once(&mut fields, Self::MARGIN_BOTTOM)?;
+                            margin_bottom = Some(self.i32_value()?);
+                        }
+                        "margin-left" => {
+                            mark_once(&mut fields, Self::MARGIN_LEFT)?;
+                            margin_left = Some(self.i32_value()?);
+                        }
+                        "fixed-center" => {
+                            mark_once(&mut fields, Self::FIXED_CENTER)?;
+                            config.fixed_center = match self.next() {
+                                Token::Bool(value) => value,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
+                        }
+                        "exclusive" => {
+                            mark_once(&mut fields, Self::EXCLUSIVE)?;
+                            config.exclusive = match self.next() {
+                                Token::Bool(value) => value,
+                                _ => return Err(BarConfigError::UnexpectedToken),
+                            };
                         }
                         "modules-left" => {
                             mark_once(&mut fields, Self::LEFT)?;
@@ -530,6 +599,21 @@ impl<'a> JsonParser<'a> {
         }
         if self.next() != Token::End {
             return Err(BarConfigError::UnexpectedToken);
+        }
+        if margin_top.is_some()
+            || margin_right.is_some()
+            || margin_bottom.is_some()
+            || margin_left.is_some()
+        {
+            config.margin_top = margin_top.unwrap_or(0);
+            config.margin_right = margin_right.unwrap_or(0);
+            config.margin_bottom = margin_bottom.unwrap_or(0);
+            config.margin_left = margin_left.unwrap_or(0);
+        } else if let Some([top, right, bottom, left]) = margin {
+            config.margin_top = top;
+            config.margin_right = right;
+            config.margin_bottom = bottom;
+            config.margin_left = left;
         }
         Ok(config)
     }
@@ -774,6 +858,41 @@ impl<'a> JsonParser<'a> {
         Ok(parsed)
     }
 
+    fn i32_value(&mut self) -> Result<i32, BarConfigError> {
+        let Token::Number(value) = self.next() else {
+            return Err(BarConfigError::InvalidNumber);
+        };
+        parse_i32(value).ok_or(BarConfigError::InvalidNumber)
+    }
+
+    fn margin_value(&mut self) -> Result<[i32; 4], BarConfigError> {
+        match self.next() {
+            Token::Number(value) => {
+                let value = parse_i32(value).ok_or(BarConfigError::InvalidNumber)?;
+                Ok([value; 4])
+            }
+            Token::String(value) => {
+                let mut values = [0; 4];
+                let mut count = 0usize;
+                for component in value.split_ascii_whitespace() {
+                    if count == values.len() {
+                        return Err(BarConfigError::InvalidNumber);
+                    }
+                    values[count] = parse_i32(component).ok_or(BarConfigError::InvalidNumber)?;
+                    count += 1;
+                }
+                match count {
+                    1 => Ok([values[0]; 4]),
+                    2 => Ok([values[0], values[1], values[0], values[1]]),
+                    3 => Ok([values[0], values[1], values[2], values[1]]),
+                    4 => Ok(values),
+                    _ => Err(BarConfigError::InvalidNumber),
+                }
+            }
+            _ => Err(BarConfigError::InvalidNumber),
+        }
+    }
+
     fn expect(&mut self, expected: Token<'a>) -> Result<(), BarConfigError> {
         let actual = self.next();
         if actual == expected {
@@ -818,6 +937,37 @@ fn parse_usize(value: &str) -> Option<usize> {
     Some(parsed)
 }
 
+fn parse_i32(value: &str) -> Option<i32> {
+    let bytes = value.as_bytes();
+    let (&first, rest) = bytes.split_first()?;
+    let (negative, digits) = match first {
+        b'-' => (true, rest),
+        b'+' => (false, rest),
+        _ => (false, bytes),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut magnitude = 0u32;
+    for byte in digits {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        magnitude = magnitude
+            .checked_mul(10)?
+            .checked_add(u32::from(*byte - b'0'))?;
+    }
+    if negative {
+        if magnitude == i32::MAX as u32 + 1 {
+            Some(i32::MIN)
+        } else {
+            i32::try_from(magnitude).ok()?.checked_neg()
+        }
+    } else {
+        i32::try_from(magnitude).ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -831,6 +981,9 @@ mod tests {
                 "position": "top",
                 "height": 40,
                 "spacing": 8,
+                "margin": "1 2 3 4",
+                "fixed-center": false,
+                "exclusive": false,
                 "modules-left": ["niri/workspaces", "custom/launcher"],
                 "modules-center": ["niri/window"],
                 "modules-right": ["network", "cpu", "memory", "clock",],
@@ -856,6 +1009,18 @@ mod tests {
         assert_eq!(config.position, BarPosition::Top);
         assert_eq!(config.height, 40);
         assert_eq!(config.spacing, 8);
+        assert_eq!(
+            (
+                config.margin_top,
+                config.margin_right,
+                config.margin_bottom,
+                config.margin_left
+            ),
+            (1, 2, 3, 4)
+        );
+        assert!(!config.fixed_center);
+        assert!(!config.exclusive);
+        assert_eq!(config.reserved_top(), 0);
         let mut left = config.modules_left.iter();
         assert_eq!(left.next(), Some("niri/workspaces"));
         assert_eq!(left.next(), Some("custom/launcher"));
@@ -896,6 +1061,18 @@ mod tests {
         assert_eq!(config.position, BarPosition::Top);
         assert_eq!(config.height, 30);
         assert_eq!(config.spacing, 4);
+        assert_eq!(
+            (
+                config.margin_top,
+                config.margin_right,
+                config.margin_bottom,
+                config.margin_left
+            ),
+            (0, 0, 0, 0)
+        );
+        assert!(config.fixed_center);
+        assert!(config.exclusive);
+        assert_eq!(config.reserved_top(), 30);
         assert!(config.modules_left.is_empty());
         assert_eq!(
             config.module_configs.get("clock").unwrap().format_alt_click,
@@ -913,6 +1090,51 @@ mod tests {
             parse_waybar_config(r#"{ "position": "middle" }"#),
             Err(BarConfigError::InvalidPosition)
         );
+        for input in [
+            r#"{ "margin": "" }"#,
+            r#"{ "margin": "1 2 3 4 5" }"#,
+            r#"{ "margin": "1px" }"#,
+            r#"{ "margin": 1.5 }"#,
+            r#"{ "margin-left": 2147483648 }"#,
+            r#"{ "fixed-center": "false" }"#,
+            r#"{ "exclusive": 1 }"#,
+        ] {
+            assert!(parse_waybar_config(input).is_err());
+        }
+        let individual_margin = parse_waybar_config(
+            r#"{
+                "margin": "10 20 30 40",
+                "margin-top": -2,
+                "margin-right": 5
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                individual_margin.margin_top,
+                individual_margin.margin_right,
+                individual_margin.margin_bottom,
+                individual_margin.margin_left
+            ),
+            (-2, 5, 0, 0)
+        );
+        assert_eq!(individual_margin.reserved_top(), 28);
+        for (input, expected) in [
+            (r#"{ "margin": 7 }"#, (7, 7, 7, 7)),
+            (r#"{ "margin": "1 2" }"#, (1, 2, 1, 2)),
+            (r#"{ "margin": "1 2 3" }"#, (1, 2, 3, 2)),
+        ] {
+            let config = parse_waybar_config(input).unwrap();
+            assert_eq!(
+                (
+                    config.margin_top,
+                    config.margin_right,
+                    config.margin_bottom,
+                    config.margin_left
+                ),
+                expected
+            );
+        }
         assert_eq!(
             parse_waybar_config(
                 r#"{

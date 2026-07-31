@@ -103,7 +103,7 @@ impl Desktop {
             niri.workspaces.len(),
             u16::try_from(width).unwrap_or(u16::MAX),
             u16::try_from(height).unwrap_or(u16::MAX),
-            bar.height,
+            bar.reserved_top(),
             config,
         )
         .unwrap_or_else(|_| crate::fatal("niri workspace capacity mismatch"));
@@ -399,6 +399,7 @@ impl Desktop {
             desktop.module_interval("memory"),
             desktop.module_interval("clock")
         ));
+        desktop.log_bar_geometry("embedded");
         serialln(format_args!(
             "SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry={}x{} image=awaiting-user-policy transition={} step={} fps={} policy_owner=user-service",
             width,
@@ -564,42 +565,58 @@ impl Desktop {
     }
 
     fn render_bar(&self, framebuffer: &mut Framebuffer) {
-        let bar_height = i32::from(self.bar.height);
-        let baseline = ((bar_height - 7) / 2).max(2);
+        let (bar_x, bar_y, bar_width, bar_height) = self.bar_rect();
+        let baseline = bar_y.saturating_add(((bar_height - 7) / 2).max(2));
         let bar_style = self.bar_style.resolve(
             "window#waybar",
             ResolvedWaybarStyle::new(WHITE, Some(PANEL)),
         );
         if let Some(background) = bar_style.background {
-            framebuffer.rect(0, 0, self.screen_width, bar_height, background);
+            framebuffer.rect(bar_x, bar_y, bar_width, bar_height, background);
         }
-        framebuffer.rect(10, 7, 26, 26, self.accent());
-        framebuffer.text(18, 14, "S", WHITE, 2);
+        framebuffer.rect(
+            bar_x.saturating_add(10),
+            bar_y.saturating_add(7),
+            26,
+            26,
+            self.accent(),
+        );
+        framebuffer.text(
+            bar_x.saturating_add(18),
+            bar_y.saturating_add(14),
+            "S",
+            WHITE,
+            2,
+        );
 
-        let mut left_x = BAR_LEFT_START_X;
+        let (mut left_x, mut center_x, mut right_x) = self.bar_module_origins();
         for module in self.bar.modules_left.iter() {
-            left_x += self.render_bar_module(framebuffer, module, left_x, baseline, bar_height)
-                + i32::from(self.bar.spacing);
+            left_x = left_x.saturating_add(
+                self.render_bar_module(framebuffer, module, left_x, bar_y, baseline, bar_height)
+                    .saturating_add(i32::from(self.bar.spacing)),
+            );
         }
 
-        let center_width = self.bar_modules_width(self.bar.modules_center);
-        let mut center_x = (self.screen_width - center_width) / 2;
         for module in self.bar.modules_center.iter() {
-            center_x += self.render_bar_module(framebuffer, module, center_x, baseline, bar_height)
-                + i32::from(self.bar.spacing);
+            center_x = center_x.saturating_add(
+                self.render_bar_module(framebuffer, module, center_x, bar_y, baseline, bar_height)
+                    .saturating_add(i32::from(self.bar.spacing)),
+            );
         }
 
-        let right_width = self.bar_modules_width(self.bar.modules_right);
-        let mut right_x = self.screen_width - right_width - 12;
         for module in self.bar.modules_right.iter() {
-            right_x += self.render_bar_module(framebuffer, module, right_x, baseline, bar_height)
-                + i32::from(self.bar.spacing);
+            right_x = right_x.saturating_add(
+                self.render_bar_module(framebuffer, module, right_x, bar_y, baseline, bar_height)
+                    .saturating_add(i32::from(self.bar.spacing)),
+            );
         }
         if bar_style.border_bottom_width != 0 {
             framebuffer.rect(
-                0,
-                bar_height - i32::from(bar_style.border_bottom_width),
-                self.screen_width,
+                bar_x,
+                bar_y
+                    .saturating_add(bar_height)
+                    .saturating_sub(i32::from(bar_style.border_bottom_width)),
+                bar_width,
                 i32::from(bar_style.border_bottom_width),
                 bar_style.border_bottom_color,
             );
@@ -611,35 +628,81 @@ impl Desktop {
         framebuffer: &mut Framebuffer,
         module: &str,
         x: i32,
+        bar_y: i32,
         baseline: i32,
         bar_height: i32,
     ) -> i32 {
         let text = self.bar_module_text(module);
         let style = self.bar_module_style(module);
-        let box_x = x + i32::from(style.margin_left);
+        let box_x = x.saturating_add(i32::from(style.margin_left));
         let box_width = i32::from(style.padding_left)
-            + text_width(text.as_str())
-            + i32::from(style.padding_right);
+            .saturating_add(text_width(text.as_str()))
+            .saturating_add(i32::from(style.padding_right));
         if let Some(background) = style.background {
-            framebuffer.rect(box_x, 0, box_width, bar_height, background);
+            framebuffer.rect(box_x, bar_y, box_width, bar_height, background);
         }
         if style.border_bottom_width != 0 {
             framebuffer.rect(
                 box_x,
-                bar_height - i32::from(style.border_bottom_width),
+                bar_y
+                    .saturating_add(bar_height)
+                    .saturating_sub(i32::from(style.border_bottom_width)),
                 box_width,
                 i32::from(style.border_bottom_width),
                 style.border_bottom_color,
             );
         }
         framebuffer.text(
-            box_x + i32::from(style.padding_left),
+            box_x.saturating_add(i32::from(style.padding_left)),
             baseline,
             text.as_str(),
             style.foreground,
             1,
         );
-        i32::from(style.margin_left) + box_width + i32::from(style.margin_right)
+        i32::from(style.margin_left)
+            .saturating_add(box_width)
+            .saturating_add(i32::from(style.margin_right))
+    }
+
+    fn bar_rect(&self) -> (i32, i32, i32, i32) {
+        let x = self.bar.margin_left;
+        let y = self.bar.margin_top;
+        let width = self
+            .screen_width
+            .saturating_sub(self.bar.margin_left)
+            .saturating_sub(self.bar.margin_right)
+            .max(0);
+        (x, y, width, i32::from(self.bar.height))
+    }
+
+    fn bar_module_origins(&self) -> (i32, i32, i32) {
+        let (bar_x, _, bar_width, _) = self.bar_rect();
+        let left_x = bar_x.saturating_add(BAR_LEFT_START_X);
+        let left_width = self.bar_modules_width(self.bar.modules_left);
+        let center_width = self.bar_modules_width(self.bar.modules_center);
+        let right_width = self.bar_modules_width(self.bar.modules_right);
+        let right_x = bar_x
+            .saturating_add(bar_width)
+            .saturating_sub(right_width)
+            .saturating_sub(12);
+        let available_start = left_x.saturating_add(left_width);
+        let available_end = right_x;
+        let latest_center = available_end.saturating_sub(center_width);
+        let center_x = if latest_center <= available_start {
+            available_start
+        } else if self.bar.fixed_center {
+            bar_x
+                .saturating_add((bar_width.saturating_sub(center_width)) / 2)
+                .clamp(available_start, latest_center)
+        } else {
+            available_start.saturating_add(
+                available_end
+                    .saturating_sub(available_start)
+                    .saturating_sub(center_width)
+                    / 2,
+            )
+        };
+        (left_x, center_x, right_x)
     }
 
     fn bar_module_width(&self, module: &str) -> i32 {
@@ -827,7 +890,7 @@ impl Desktop {
             niri.workspaces.len(),
             u16::try_from(self.screen_width).unwrap_or(u16::MAX),
             u16::try_from(self.screen_height).unwrap_or(u16::MAX),
-            bar.height,
+            bar.reserved_top(),
             layout,
         )
         .unwrap_or_else(|_| crate::fatal("published niri workspace capacity mismatch"));
@@ -1066,6 +1129,7 @@ impl Desktop {
         self.swww_defaults = swww_defaults;
         self.config_generation = sources.generation;
         self.sync_focused_window();
+        self.log_bar_geometry("config");
         crate::desktop_config::acknowledge(sources.generation);
         serialln(format_args!(
             "SLOPOS-CONFIG: reload applied generation={} atomic=true niri={} waybar={} style={} swww={} workspaces={} module_configs={} css_rules={}",
@@ -1086,6 +1150,21 @@ impl Desktop {
             "SLOPOS-CONFIG: reload requested generation={} accepted={}",
             crate::desktop_config::current_generation(),
             accepted
+        ));
+    }
+
+    fn log_bar_geometry(&self, source: &str) {
+        let (x, y, width, height) = self.bar_rect();
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: geometry position=top x={x} y={y} width={width} height={height} margin={}/{}/{}/{} spacing={} fixed_center={} exclusive={} reserved_top={} source={source}",
+            self.bar.margin_top,
+            self.bar.margin_right,
+            self.bar.margin_bottom,
+            self.bar.margin_left,
+            self.bar.spacing,
+            self.bar.fixed_center,
+            self.bar.exclusive,
+            self.bar.reserved_top()
         ));
     }
 
@@ -1797,27 +1876,17 @@ impl Desktop {
     }
 
     fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {
-        if self.workspaces.fullscreen_window().is_some() || y < 0 || y >= i32::from(self.bar.height)
+        let (_, bar_y, _, bar_height) = self.bar_rect();
+        if self.workspaces.fullscreen_window().is_some()
+            || y < bar_y
+            || y >= bar_y.saturating_add(bar_height)
         {
             return None;
         }
-        let center_width = self.bar_modules_width(self.bar.modules_center);
-        let right_width = self.bar_modules_width(self.bar.modules_right);
-        self.bar_workspace_in_modules(self.bar.modules_left, BAR_LEFT_START_X, x)
-            .or_else(|| {
-                self.bar_workspace_in_modules(
-                    self.bar.modules_center,
-                    (self.screen_width - center_width) / 2,
-                    x,
-                )
-            })
-            .or_else(|| {
-                self.bar_workspace_in_modules(
-                    self.bar.modules_right,
-                    self.screen_width - right_width - 12,
-                    x,
-                )
-            })
+        let (left_x, center_x, right_x) = self.bar_module_origins();
+        self.bar_workspace_in_modules(self.bar.modules_left, left_x, x)
+            .or_else(|| self.bar_workspace_in_modules(self.bar.modules_center, center_x, x))
+            .or_else(|| self.bar_workspace_in_modules(self.bar.modules_right, right_x, x))
     }
 
     fn bar_workspace_in_modules(
@@ -1834,16 +1903,19 @@ impl Desktop {
                 let workspace_label =
                     workspace_label(self.workspaces.active(), self.workspaces.len());
                 let Some(label_offset) = text.as_str().find(workspace_label) else {
-                    module_x += module_width + i32::from(self.bar.spacing);
+                    module_x = module_x
+                        .saturating_add(module_width.saturating_add(i32::from(self.bar.spacing)));
                     continue;
                 };
-                let label_x =
-                    module_x + i32::from(style.margin_left) + i32::from(style.padding_left);
-                let label_x = label_x
-                    + i32::try_from(label_offset)
+                let label_x = module_x
+                    .saturating_add(i32::from(style.margin_left))
+                    .saturating_add(i32::from(style.padding_left));
+                let label_x = label_x.saturating_add(
+                    i32::try_from(label_offset)
                         .unwrap_or(i32::MAX / 6)
-                        .saturating_mul(6);
-                let relative = x - label_x;
+                        .saturating_mul(6),
+                );
+                let relative = x.saturating_sub(label_x);
                 if relative >= 0 && relative < text_width(workspace_label) {
                     let byte_index = usize::try_from(relative / 6).ok()?;
                     let digit = *workspace_label.as_bytes().get(byte_index)?;
@@ -1853,33 +1925,24 @@ impl Desktop {
                     }
                 }
             }
-            module_x += module_width + i32::from(self.bar.spacing);
+            module_x =
+                module_x.saturating_add(module_width.saturating_add(i32::from(self.bar.spacing)));
         }
         None
     }
 
     fn bar_module_at(&self, x: i32, y: i32) -> Option<&'static str> {
-        if self.workspaces.fullscreen_window().is_some() || y < 0 || y >= i32::from(self.bar.height)
+        let (_, bar_y, _, bar_height) = self.bar_rect();
+        if self.workspaces.fullscreen_window().is_some()
+            || y < bar_y
+            || y >= bar_y.saturating_add(bar_height)
         {
             return None;
         }
-        let center_width = self.bar_modules_width(self.bar.modules_center);
-        let right_width = self.bar_modules_width(self.bar.modules_right);
-        self.bar_module_in_modules(self.bar.modules_left, BAR_LEFT_START_X, x)
-            .or_else(|| {
-                self.bar_module_in_modules(
-                    self.bar.modules_center,
-                    (self.screen_width - center_width) / 2,
-                    x,
-                )
-            })
-            .or_else(|| {
-                self.bar_module_in_modules(
-                    self.bar.modules_right,
-                    self.screen_width - right_width - 12,
-                    x,
-                )
-            })
+        let (left_x, center_x, right_x) = self.bar_module_origins();
+        self.bar_module_in_modules(self.bar.modules_left, left_x, x)
+            .or_else(|| self.bar_module_in_modules(self.bar.modules_center, center_x, x))
+            .or_else(|| self.bar_module_in_modules(self.bar.modules_right, right_x, x))
     }
 
     fn bar_module_in_modules(
@@ -1891,14 +1954,17 @@ impl Desktop {
         for module in modules.iter() {
             let text = self.bar_module_text(module);
             let style = self.bar_module_style(module);
-            let box_x = module_x + i32::from(style.margin_left);
+            let box_x = module_x.saturating_add(i32::from(style.margin_left));
             let box_width = i32::from(style.padding_left)
-                + text_width(text.as_str())
-                + i32::from(style.padding_right);
-            if x >= box_x && x < box_x + box_width {
+                .saturating_add(text_width(text.as_str()))
+                .saturating_add(i32::from(style.padding_right));
+            if x >= box_x && x < box_x.saturating_add(box_width) {
                 return Some(module);
             }
-            module_x += self.bar_module_width(module) + i32::from(self.bar.spacing);
+            module_x = module_x.saturating_add(
+                self.bar_module_width(module)
+                    .saturating_add(i32::from(self.bar.spacing)),
+            );
         }
         None
     }
