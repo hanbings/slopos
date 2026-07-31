@@ -136,7 +136,7 @@ pub struct TransitionOptions {
     pub kind: TransitionType,
     pub step: u8,
     pub fps: u8,
-    pub duration_seconds: u16,
+    pub duration_milliseconds: u32,
     pub angle_degrees: u16,
     pub position: TransitionPosition,
     pub invert_y: bool,
@@ -151,7 +151,7 @@ impl Default for TransitionOptions {
             kind: TransitionType::Simple,
             step: TransitionType::Simple.default_step(),
             fps: 30,
-            duration_seconds: 3,
+            duration_milliseconds: 3_000,
             angle_degrees: 45,
             position: TransitionPosition::center(),
             invert_y: false,
@@ -263,7 +263,7 @@ pub fn parse_swww_environment(input: &str) -> Result<SwwwDefaults, SwwwParseErro
         } else if name == "SWWW_TRANSITION_FPS" {
             defaults.transition.fps = parse_nonzero_u8(value)?;
         } else if name == "SWWW_TRANSITION_DURATION" {
-            defaults.transition.duration_seconds = parse_u16(value)?;
+            defaults.transition.duration_milliseconds = parse_duration_milliseconds(value)?;
         } else if name == "SWWW_TRANSITION_ANGLE" {
             defaults.transition.angle_degrees = parse_angle(value)?;
         } else if name == "SWWW_TRANSITION_POS" {
@@ -292,8 +292,8 @@ fn parse_img<'a>(
         } else if equal(argument, "--transition-fps") {
             transition.fps = parse_nonzero_u8(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if equal(argument, "--transition-duration") {
-            transition.duration_seconds =
-                parse_u16(args.next().ok_or(SwwwParseError::MissingValue)?)?;
+            transition.duration_milliseconds =
+                parse_duration_milliseconds(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if equal(argument, "--transition-angle") {
             transition.angle_degrees =
                 parse_angle(args.next().ok_or(SwwwParseError::MissingValue)?)?;
@@ -495,6 +495,37 @@ fn parse_decimal_fixed(value: &str) -> Result<u32, SwwwParseError> {
     whole
         .checked_mul(POSITION_SCALE)
         .and_then(|value| value.checked_add(fractional))
+        .ok_or(SwwwParseError::InvalidNumber)
+}
+
+fn parse_duration_milliseconds(value: &str) -> Result<u32, SwwwParseError> {
+    let (seconds, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if fraction.contains('.') || (seconds.is_empty() && fraction.is_empty()) {
+        return Err(SwwwParseError::InvalidNumber);
+    }
+    let seconds = if seconds.is_empty() {
+        0
+    } else {
+        parse_u32(seconds)?
+    };
+    let mut milliseconds = 0u32;
+    let mut digits = 0u8;
+    for byte in fraction.bytes() {
+        if !byte.is_ascii_digit() {
+            return Err(SwwwParseError::InvalidNumber);
+        }
+        if digits < 3 {
+            milliseconds = milliseconds * 10 + u32::from(byte - b'0');
+            digits += 1;
+        }
+    }
+    while digits < 3 {
+        milliseconds *= 10;
+        digits += 1;
+    }
+    seconds
+        .checked_mul(1_000)
+        .and_then(|value| value.checked_add(milliseconds))
         .ok_or(SwwwParseError::InvalidNumber)
 }
 
@@ -708,7 +739,7 @@ impl WallpaperDaemon {
                 kind: TransitionType::Simple,
                 step: 2,
                 fps: 30,
-                duration_seconds: 3,
+                duration_milliseconds: 3_000,
                 angle_degrees: 45,
                 position: TransitionPosition::center(),
                 invert_y: false,
@@ -1287,13 +1318,13 @@ mod tests {
     #[test]
     fn applies_environment_defaults_and_transition_specific_step() {
         let defaults = parse_swww_environment(
-            "SWWW_TRANSITION=grow\nSWWW_TRANSITION_STEP=33\nSWWW_TRANSITION_FPS=60\nSWWW_TRANSITION_DURATION=2\nSWWW_TRANSITION_ANGLE=120\nSWWW_TRANSITION_POS=top-right\nSWWW_INVERT_Y=true\n",
+            "SWWW_TRANSITION=grow\nSWWW_TRANSITION_STEP=33\nSWWW_TRANSITION_FPS=60\nSWWW_TRANSITION_DURATION=2.125\nSWWW_TRANSITION_ANGLE=120\nSWWW_TRANSITION_POS=top-right\nSWWW_INVERT_Y=true\n",
         )
         .unwrap();
         assert_eq!(defaults.transition.kind, TransitionType::Grow);
         assert_eq!(defaults.transition.step, 33);
         assert_eq!(defaults.transition.fps, 60);
-        assert_eq!(defaults.transition.duration_seconds, 2);
+        assert_eq!(defaults.transition.duration_milliseconds, 2_125);
         assert_eq!(defaults.transition.angle_degrees, 120);
         assert_eq!(
             defaults.transition.position,
@@ -1323,6 +1354,14 @@ mod tests {
             }
         );
         assert!(!request.transition.invert_y);
+        let SwwwCommand::Img(request) = parse_swww_command(
+            "img image.ppm --transition-duration .25",
+            SwwwDefaults::default(),
+        )
+        .unwrap() else {
+            panic!("expected image request");
+        };
+        assert_eq!(request.transition.duration_milliseconds, 250);
     }
 
     #[test]
@@ -1384,6 +1423,13 @@ mod tests {
                 SwwwDefaults::default()
             ),
             Err(SwwwParseError::InvalidColor)
+        );
+        assert_eq!(
+            parse_swww_command(
+                "swww img one.ppm --transition-duration 1.two",
+                SwwwDefaults::default()
+            ),
+            Err(SwwwParseError::InvalidNumber)
         );
         assert_eq!(
             parse_swww_command("swww clear #1a804a", SwwwDefaults::default()),

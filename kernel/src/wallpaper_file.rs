@@ -115,7 +115,7 @@ impl WallpaperFileRequest {
                 kind: TransitionType::Simple,
                 step: 2,
                 fps: 30,
-                duration_seconds: 3,
+                duration_milliseconds: 3_000,
                 angle_degrees: 45,
                 position: TransitionPosition::center(),
                 invert_y: false,

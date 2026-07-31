@@ -162,11 +162,13 @@ qmp_wheel_burst() {
     monitor_type "swww img sunset.ppm --transition-type none"
     sleep 2
     monitor_type "swww img aurora.ppm --transition-type grow --transition-pos top-left --transition-step 64"
-    sleep 4
+    sleep 8
     echo "screendump ${repo_dir}/evidence/wallpaper-grow-top-left.ppm"
     monitor_type "swww img sunset.ppm --transition-type wipe --transition-angle 30 --transition-step 64"
-    sleep 4
+    sleep 8
     echo "screendump ${repo_dir}/evidence/wallpaper-wipe-angle.ppm"
+    monitor_type "img aurora.ppm -t wipe --transition-duration .1"
+    sleep 4
     monitor_type "img aurora.ppm -t none --resize fit --fill-color 123456"
     sleep 3
     echo "screendump ${repo_dir}/evidence/wallpaper-fit-fill.ppm"
@@ -577,7 +579,7 @@ if grep -Fq "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=4" "${ser
     exit 1
 fi
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=30" "${serial_log}"
-grep -Fq "SLOPOS-SWWW: transition complete type=center step=64 fps=30 frames=5" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: transition complete type=center step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM" "${serial_log}"
 grep -Fq "SLOPOS-SWWW-VFS: load requested generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM output=* transition=center step=64 fps=30 async=true" "${serial_log}"
 grep -Fq "SLOPOS-SWWW-VFS: load published generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm inode=30 bytes=6144 blocks=2 format=P3 async=true" "${serial_log}"
@@ -601,9 +603,11 @@ grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30
 grep -Fq "SLOPOS-SWWW: clear color=1A2B3C output=*" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=AURORA.PPM output=* transition=grow step=64 fps=30 source=embedded" "${serial_log}"
-grep -Fq "SLOPOS-SWWW: transition complete type=grow step=64 fps=30 frames=5 angle=45 position=0,0 invert_y=false" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: transition complete type=grow step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=45 position=0,0 invert_y=false" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=wipe step=64 fps=30 source=embedded" "${serial_log}"
-grep -Fq "SLOPOS-SWWW: transition complete type=wipe step=64 fps=30 frames=5 angle=30 position=512,384 invert_y=false" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: transition complete type=wipe step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17 angle=30 position=512,384 invert_y=false" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: image=AURORA.PPM output=* transition=wipe step=90 fps=30 source=embedded" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: transition complete type=wipe step=90 fps=30 duration_ms=100 sampled_step=85 frames=4 angle=45 position=512,384 invert_y=false" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=fit x=0 y=43 width=1024 height=682 crop_gravity=center fill=123456 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=crop x=-128 y=0 width=1152 height=768 crop_gravity=right fill=000000 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded" "${serial_log}"

@@ -572,7 +572,7 @@ impl Desktop {
             return;
         }
         let transition = self.wallpaper.transition();
-        let sampled_step = transition.step.max(16);
+        let sampled_step = sampled_wallpaper_step(transition);
         let mut frames = 0u16;
         loop {
             self.render(framebuffer);
@@ -590,10 +590,12 @@ impl Desktop {
             transition.invert_y,
         );
         serialln(format_args!(
-            "SLOPOS-SWWW: transition complete type={} step={} fps={} frames={} angle={} position={},{} invert_y={}",
+            "SLOPOS-SWWW: transition complete type={} step={} fps={} duration_ms={} sampled_step={} frames={} angle={} position={},{} invert_y={}",
             transition.kind.name(),
             transition.step,
             transition.fps,
+            transition.duration_milliseconds,
+            sampled_step,
             frames,
             transition.angle_degrees,
             origin.0,
@@ -3362,6 +3364,19 @@ fn floor_mul_div(left: i32, right: i32, divisor: i32) -> i32 {
 fn ceil_mul_div(left: i32, right: i32, divisor: i32) -> i32 {
     let value = i64::from(left) * i64::from(right);
     ((value + i64::from(divisor) - 1) / i64::from(divisor)) as i32
+}
+
+fn sampled_wallpaper_step(transition: slopos_shell::TransitionOptions) -> u8 {
+    if transition.kind == TransitionType::Simple {
+        return transition.step.max(16);
+    }
+    const MAX_INTERVALS: u64 = 16;
+    let requested_intervals = (u64::from(transition.duration_milliseconds)
+        .saturating_mul(u64::from(transition.fps))
+        .saturating_add(999)
+        / 1_000)
+        .clamp(1, MAX_INTERVALS);
+    (u64::from(u8::MAX).div_ceil(requested_intervals)) as u8
 }
 
 fn swww_error(error: SwwwDaemonError) -> &'static str {
