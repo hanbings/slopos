@@ -9,10 +9,8 @@ use core::panic::PanicInfo;
 use slopos_desktop_protocol::{
     COMMIT_SIZE, CONFIG_HASH_OFFSET, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit,
     DesktopServiceEvent, EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WALLPAPER_AURORA,
-    WAYLAND_EVENT_CONFIGURE, WAYLAND_EVENT_MAX_SIZE, WAYLAND_EVENT_PRESENTED,
-    WAYLAND_EVENT_REGISTRY, WAYLAND_EVENT_WAIT_SYSCALL, WAYLAND_SURFACE_HEADER_SIZE,
-    WAYLAND_SURFACE_MAX_SIZE, WAYLAND_SURFACE_MAX_WIRE_SIZE, WAYLAND_SURFACE_SYSCALL,
-    WaylandServerEvent, WaylandSurfaceHeader, config_hash_extend,
+    WAYLAND_BACKING_STAGE_SYSCALL, WAYLAND_EVENT_MAX_WIRE_SIZE, WAYLAND_SURFACE_MAX_PIXEL_SIZE,
+    WAYLAND_SURFACE_MAX_WIRE_SIZE, config_hash_extend,
 };
 use slopos_wayland::{
     ArgumentReader, CORE_GLOBALS, DISPLAY_OBJECT_ID, Frame, MessageBuilder, WireError,
@@ -37,12 +35,16 @@ const SYS_READ: u64 = 0;
 const SYS_WRITE: u64 = 1;
 const SYS_CLOSE: u64 = 3;
 const SYS_SCHED_YIELD: u64 = 24;
+const SYS_SOCKET: u64 = 41;
+const SYS_CONNECT: u64 = 42;
 const SYS_EXIT: u64 = 60;
 const SYS_OPENAT: u64 = 257;
 const AT_FDCWD: i64 = -100;
 const O_RDONLY: u64 = 0;
 const STDOUT: u64 = 1;
-const EXPECTED_FD: i64 = 3;
+const FIRST_DYNAMIC_FD: i64 = 3;
+const AF_UNIX: u64 = 1;
+const SOCK_STREAM: u64 = 1;
 const PREEMPTION_TSC_WINDOW: u64 = 100_000_000;
 const CONFIG_READ_CAPACITY: usize = 256;
 const WAYBAR_FILE_CAPACITY: usize = 4096;
@@ -63,6 +65,7 @@ const SURFACE_PIXEL_LENGTH: usize = SURFACE_WIDTH * SURFACE_HEIGHT * 4;
 static MESSAGE: &[u8; 28] = b"SLOPOS desktop policy ready\n";
 static WAYBAR_PATH: &[u8; 25] = b"/etc/slopos/waybar.jsonc\0";
 static SWWW_PATH: &[u8; 21] = b"/etc/slopos/swww.env\0";
+static WAYLAND_SOCKET_PATH: &[u8; 21] = b"/run/slopos/wayland-0";
 static EXPECTED_ARGV: [&[u8]; 2] = [b"/sbin/slop-shell", b"--session"];
 static EXPECTED_ENVIRONMENT: [&[u8]; INITIAL_ENVC] = [
     b"SLOPOS_ROLE=desktop-shell",
@@ -94,9 +97,14 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
     let mut policy_generation = 0;
     let mut config_generation = 0;
     let mut announced = false;
-    let mut surface_submitted = false;
+    let mut wayland_socket = None;
     loop {
-        let commit = load_policy(policy_generation == 0);
+        let expected_config_fd = if wayland_socket.is_some() {
+            FIRST_DYNAMIC_FD + 1
+        } else {
+            FIRST_DYNAMIC_FD
+        };
+        let commit = load_policy(policy_generation == 0, expected_config_fd);
         if syscall2(
             DESKTOP_COMMIT_SYSCALL,
             (&raw const commit) as u64,
@@ -107,9 +115,10 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
         }
         policy_generation =
             wait_for_event(EVENT_POLICY_APPLIED, policy_generation).unwrap_or_else(|| exit(9));
-        if !surface_submitted {
-            submit_wayland_surface();
-            surface_submitted = true;
+        if wayland_socket.is_none() {
+            let fd = connect_wayland_socket();
+            submit_wayland_surface(fd);
+            wayland_socket = Some(fd);
         }
         if !announced {
             let result = syscall3(
@@ -128,7 +137,27 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
     }
 }
 
-fn submit_wayland_surface() {
+fn connect_wayland_socket() -> i64 {
+    let fd = syscall3(SYS_SOCKET, AF_UNIX, SOCK_STREAM, 0);
+    if fd != FIRST_DYNAMIC_FD {
+        exit(13);
+    }
+    let mut address = [0u8; 2 + WAYLAND_SOCKET_PATH.len() + 1];
+    address[..2].copy_from_slice(&(AF_UNIX as u16).to_ne_bytes());
+    address[2..2 + WAYLAND_SOCKET_PATH.len()].copy_from_slice(WAYLAND_SOCKET_PATH);
+    if syscall3(
+        SYS_CONNECT,
+        fd as u64,
+        address.as_ptr() as u64,
+        address.len() as u64,
+    ) != 0
+    {
+        exit(14);
+    }
+    fd
+}
+
+fn submit_wayland_surface(socket: i64) {
     let mut wire = [0; WAYLAND_SURFACE_MAX_WIRE_SIZE];
     let mut wire_length = 0;
     append_message(
@@ -138,69 +167,52 @@ fn submit_wayland_surface() {
         1,
         |message| message.object(REGISTRY),
     )
-    .unwrap_or_else(|_| exit(13));
-    submit_wire_only(&wire[..wire_length]);
-    let registry_sequence = wait_registry(0).unwrap_or_else(|| exit(14));
+    .unwrap_or_else(|_| exit(15));
+    send_wayland_wire(socket, &wire[..wire_length]);
+    wait_registry(socket).unwrap_or_else(|| exit(16));
 
-    wire_length = build_initial_surface_wire(&mut wire).unwrap_or_else(|| exit(15));
-    submit_wire_only(&wire[..wire_length]);
-    let (configure_sequence, configure_serial) =
-        wait_configure(registry_sequence).unwrap_or_else(|| exit(16));
-    submit_configured_surface(configure_serial);
-    let first_presentation = wait_presented(configure_sequence, 1).unwrap_or_else(|| exit(17));
-    submit_repeated_surface();
-    wait_presented(first_presentation, 2).unwrap_or_else(|| exit(18));
+    wire_length = build_initial_surface_wire(&mut wire).unwrap_or_else(|| exit(17));
+    send_wayland_wire(socket, &wire[..wire_length]);
+    let configure_serial = wait_configure(socket).unwrap_or_else(|| exit(18));
+    submit_configured_surface(socket, configure_serial);
+    wait_presented(socket, 1).unwrap_or_else(|| exit(19));
+    submit_repeated_surface(socket);
+    wait_presented(socket, 2).unwrap_or_else(|| exit(20));
 }
 
-fn submit_wire_only(wire: &[u8]) {
-    let mut envelope = [0u8; WAYLAND_SURFACE_MAX_SIZE];
-    let pixel_start = WAYLAND_SURFACE_HEADER_SIZE + wire.len();
-    let header = WaylandSurfaceHeader::new(wire.len() as u32, 0);
-    envelope[..WAYLAND_SURFACE_HEADER_SIZE].copy_from_slice(&header.encode());
-    envelope[WAYLAND_SURFACE_HEADER_SIZE..pixel_start].copy_from_slice(wire);
-    if syscall2(
-        WAYLAND_SURFACE_SYSCALL,
-        envelope.as_ptr() as u64,
-        pixel_start as u64,
-    ) != 0
+fn send_wayland_wire(socket: i64, wire: &[u8]) {
+    if syscall3(
+        SYS_WRITE,
+        socket as u64,
+        wire.as_ptr() as u64,
+        wire.len() as u64,
+    ) != wire.len() as i64
     {
-        exit(19);
+        exit(21);
     }
 }
 
-fn submit_configured_surface(configure_serial: u32) {
-    let mut envelope = [0u8; WAYLAND_SURFACE_MAX_SIZE];
+fn submit_configured_surface(socket: i64, configure_serial: u32) {
+    let mut wire = [0u8; WAYLAND_SURFACE_MAX_WIRE_SIZE];
     let wire_length = build_configured_surface_wire(
-        &mut envelope[WAYLAND_SURFACE_HEADER_SIZE
-            ..WAYLAND_SURFACE_HEADER_SIZE + WAYLAND_SURFACE_MAX_WIRE_SIZE],
+        &mut wire,
         configure_serial,
         SURFACE_WIDTH as i32,
         SURFACE_HEIGHT as i32,
         SURFACE_PIXEL_LENGTH as i32,
     )
-    .unwrap_or_else(|| exit(20));
-    let pixel_start = WAYLAND_SURFACE_HEADER_SIZE + wire_length;
-    submit_pixel_surface(&mut envelope, wire_length, pixel_start, false);
+    .unwrap_or_else(|| exit(22));
+    submit_pixel_surface(socket, &wire[..wire_length], false);
 }
 
-fn submit_repeated_surface() {
-    let mut envelope = [0u8; WAYLAND_SURFACE_MAX_SIZE];
-    let wire_length = build_repeated_surface_wire(
-        &mut envelope[WAYLAND_SURFACE_HEADER_SIZE
-            ..WAYLAND_SURFACE_HEADER_SIZE + WAYLAND_SURFACE_MAX_WIRE_SIZE],
-    )
-    .unwrap_or_else(|| exit(21));
-    let pixel_start = WAYLAND_SURFACE_HEADER_SIZE + wire_length;
-    submit_pixel_surface(&mut envelope, wire_length, pixel_start, true);
+fn submit_repeated_surface(socket: i64) {
+    let mut wire = [0u8; WAYLAND_SURFACE_MAX_WIRE_SIZE];
+    let wire_length = build_repeated_surface_wire(&mut wire).unwrap_or_else(|| exit(23));
+    submit_pixel_surface(socket, &wire[..wire_length], true);
 }
 
-fn submit_pixel_surface(
-    envelope: &mut [u8; WAYLAND_SURFACE_MAX_SIZE],
-    wire_length: usize,
-    pixel_start: usize,
-    second_frame: bool,
-) {
-    let pixel_end = pixel_start + SURFACE_PIXEL_LENGTH;
+fn submit_pixel_surface(socket: i64, wire: &[u8], second_frame: bool) {
+    let mut pixels = [0u8; WAYLAND_SURFACE_MAX_PIXEL_SIZE];
     for y in 0..SURFACE_HEIGHT {
         for x in 0..SURFACE_WIDTH {
             let color: u32 =
@@ -231,20 +243,19 @@ fn submit_pixel_surface(
                 } else {
                     0x00f1_fa8c
                 };
-            let offset = pixel_start + (y * SURFACE_WIDTH + x) * 4;
-            envelope[offset..offset + 4].copy_from_slice(&color.to_le_bytes());
+            let offset = (y * SURFACE_WIDTH + x) * 4;
+            pixels[offset..offset + 4].copy_from_slice(&color.to_le_bytes());
         }
     }
-    let header = WaylandSurfaceHeader::new(wire_length as u32, SURFACE_PIXEL_LENGTH as u32);
-    envelope[..WAYLAND_SURFACE_HEADER_SIZE].copy_from_slice(&header.encode());
     if syscall2(
-        WAYLAND_SURFACE_SYSCALL,
-        envelope.as_ptr() as u64,
-        pixel_end as u64,
+        WAYLAND_BACKING_STAGE_SYSCALL,
+        pixels.as_ptr() as u64,
+        SURFACE_PIXEL_LENGTH as u64,
     ) != 0
     {
-        exit(22);
+        exit(24);
     }
+    send_wayland_wire(socket, wire);
 }
 
 fn build_initial_surface_wire(wire: &mut [u8]) -> Option<usize> {
@@ -364,10 +375,9 @@ fn build_repeated_surface_wire(wire: &mut [u8]) -> Option<usize> {
     Some(cursor)
 }
 
-fn wait_registry(after_sequence: u64) -> Option<u64> {
-    let mut event_bytes = [0; WAYLAND_EVENT_MAX_SIZE];
-    let event = receive_wayland_event(&mut event_bytes, WAYLAND_EVENT_REGISTRY, after_sequence)?;
-    let mut wire = event.wire;
+fn wait_registry(socket: i64) -> Option<()> {
+    let mut event_bytes = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
+    let mut wire = receive_wayland_event(socket, &mut event_bytes)?;
     for global in CORE_GLOBALS {
         let (frame, remaining) = Frame::decode(wire).ok()?;
         if frame.header.object_id != REGISTRY || frame.header.opcode != 0 {
@@ -383,13 +393,12 @@ fn wait_registry(after_sequence: u64) -> Option<u64> {
         }
         wire = remaining;
     }
-    wire.is_empty().then_some(event.header.sequence)
+    wire.is_empty().then_some(())
 }
 
-fn wait_configure(after_sequence: u64) -> Option<(u64, u32)> {
-    let mut event_bytes = [0; WAYLAND_EVENT_MAX_SIZE];
-    let event = receive_wayland_event(&mut event_bytes, WAYLAND_EVENT_CONFIGURE, after_sequence)?;
-    let mut wire = event.wire;
+fn wait_configure(socket: i64) -> Option<u32> {
+    let mut event_bytes = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
+    let mut wire = receive_wayland_event(socket, &mut event_bytes)?;
     for format in [0, 1] {
         let (frame, remaining) = Frame::decode(wire).ok()?;
         let mut arguments = ArgumentReader::new(frame.payload);
@@ -424,13 +433,13 @@ fn wait_configure(after_sequence: u64) -> Option<(u64, u32)> {
     {
         return None;
     }
-    Some((event.header.sequence, serial))
+    Some(serial)
 }
 
-fn wait_presented(after_sequence: u64, callback_data: u32) -> Option<u64> {
-    let mut event_bytes = [0; WAYLAND_EVENT_MAX_SIZE];
-    let event = receive_wayland_event(&mut event_bytes, WAYLAND_EVENT_PRESENTED, after_sequence)?;
-    let (release, wire) = Frame::decode(event.wire).ok()?;
+fn wait_presented(socket: i64, callback_data: u32) -> Option<()> {
+    let mut event_bytes = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
+    let event = receive_wayland_event(socket, &mut event_bytes)?;
+    let (release, wire) = Frame::decode(event).ok()?;
     let (done, wire) = Frame::decode(wire).ok()?;
     let mut done_arguments = ArgumentReader::new(done.payload);
     let (delete_id, remaining) = Frame::decode(wire).ok()?;
@@ -450,25 +459,23 @@ fn wait_presented(after_sequence: u64, callback_data: u32) -> Option<u64> {
     {
         return None;
     }
-    Some(event.header.sequence)
+    Some(())
 }
 
 fn receive_wayland_event<'a>(
-    destination: &'a mut [u8; WAYLAND_EVENT_MAX_SIZE],
-    kind: u16,
-    after_sequence: u64,
-) -> Option<WaylandServerEvent<'a>> {
+    socket: i64,
+    destination: &'a mut [u8; WAYLAND_EVENT_MAX_WIRE_SIZE],
+) -> Option<&'a [u8]> {
     let length = syscall3(
-        WAYLAND_EVENT_WAIT_SYSCALL,
+        SYS_READ,
+        socket as u64,
         destination.as_mut_ptr() as u64,
-        WAYLAND_EVENT_MAX_SIZE as u64,
-        after_sequence,
+        WAYLAND_EVENT_MAX_WIRE_SIZE as u64,
     );
     if length <= 0 || length as usize > destination.len() {
         return None;
     }
-    let event = WaylandServerEvent::decode(&destination[..length as usize]).ok()?;
-    (event.header.kind == kind && event.header.sequence > after_sequence).then_some(event)
+    Some(&destination[..length as usize])
 }
 
 fn append_message(
@@ -484,9 +491,9 @@ fn append_message(
     Ok(())
 }
 
-fn load_policy(yield_after_open: bool) -> DesktopCommit {
+fn load_policy(yield_after_open: bool, expected_fd: i64) -> DesktopCommit {
     let fd = open(WAYBAR_PATH);
-    if fd != EXPECTED_FD || (yield_after_open && syscall0(SYS_SCHED_YIELD) != 0) {
+    if fd != expected_fd || (yield_after_open && syscall0(SYS_SCHED_YIELD) != 0) {
         exit(2);
     }
     let Some(waybar_hash) = read_config_hash(fd, WAYBAR_FILE_CAPACITY) else {
@@ -496,7 +503,7 @@ fn load_policy(yield_after_open: bool) -> DesktopCommit {
         exit(4);
     }
     let fd = open(SWWW_PATH);
-    if fd != EXPECTED_FD {
+    if fd != expected_fd {
         exit(5);
     }
     let Some(swww_hash) = read_config_hash(fd, SWWW_ENV_FILE_CAPACITY) else {

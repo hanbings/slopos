@@ -205,6 +205,12 @@ pub struct FileNode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DescriptorObject {
+    File(FileNode),
+    LocalSocket { index: u16, generation: u16 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccessMode {
     ReadOnly,
     WriteOnly,
@@ -223,7 +229,7 @@ impl AccessMode {
 
 #[derive(Clone, Copy)]
 struct Descriptor {
-    node: FileNode,
+    object: DescriptorObject,
     offset: u64,
     access_mode: AccessMode,
     open: bool,
@@ -231,11 +237,11 @@ struct Descriptor {
 
 impl Descriptor {
     const EMPTY: Self = Self {
-        node: FileNode {
+        object: DescriptorObject::File(FileNode {
             filesystem_id: 0,
             node_id: 0,
             size: 0,
-        },
+        }),
         offset: 0,
         access_mode: AccessMode::ReadOnly,
         open: false,
@@ -276,6 +282,21 @@ impl<const N: usize> FileDescriptorTable<N> {
         node: FileNode,
         access_mode: AccessMode,
     ) -> Result<u32, VfsError> {
+        self.open_object(DescriptorObject::File(node), access_mode)
+    }
+
+    pub fn open_local_socket(&mut self, index: u16, generation: u16) -> Result<u32, VfsError> {
+        self.open_object(
+            DescriptorObject::LocalSocket { index, generation },
+            AccessMode::ReadWrite,
+        )
+    }
+
+    fn open_object(
+        &mut self,
+        object: DescriptorObject,
+        access_mode: AccessMode,
+    ) -> Result<u32, VfsError> {
         let index = self
             .descriptors
             .iter()
@@ -286,7 +307,7 @@ impl<const N: usize> FileDescriptorTable<N> {
             .checked_add(descriptor_number)
             .ok_or(VfsError::FileTableFull)?;
         self.descriptors[index] = Descriptor {
-            node,
+            object,
             offset: 0,
             access_mode,
             open: true,
@@ -299,9 +320,12 @@ impl<const N: usize> FileDescriptorTable<N> {
         if !descriptor.access_mode.readable() {
             return Err(VfsError::NotReadable);
         }
-        let remaining = descriptor.node.size.saturating_sub(descriptor.offset);
+        let DescriptorObject::File(node) = descriptor.object else {
+            return Err(VfsError::BadFileDescriptor);
+        };
+        let remaining = node.size.saturating_sub(descriptor.offset);
         Ok(ReadWindow {
-            node: descriptor.node,
+            node,
             offset: descriptor.offset,
             length: requested.min(usize::try_from(remaining).unwrap_or(usize::MAX)),
         })
@@ -312,9 +336,12 @@ impl<const N: usize> FileDescriptorTable<N> {
         if !descriptor.access_mode.writable() {
             return Err(VfsError::NotWritable);
         }
-        let remaining = descriptor.node.size.saturating_sub(descriptor.offset);
+        let DescriptorObject::File(node) = descriptor.object else {
+            return Err(VfsError::BadFileDescriptor);
+        };
+        let remaining = node.size.saturating_sub(descriptor.offset);
         Ok(WriteWindow {
-            node: descriptor.node,
+            node,
             offset: descriptor.offset,
             length: requested.min(usize::try_from(remaining).unwrap_or(usize::MAX)),
         })
@@ -325,7 +352,10 @@ impl<const N: usize> FileDescriptorTable<N> {
         if !descriptor.access_mode.writable() {
             return Err(VfsError::NotWritable);
         }
-        if descriptor.offset != descriptor.node.size
+        let DescriptorObject::File(node) = descriptor.object else {
+            return Err(VfsError::BadFileDescriptor);
+        };
+        if descriptor.offset != node.size
             || descriptor
                 .offset
                 .checked_add(u64::try_from(requested).map_err(|_| VfsError::InvalidOffset)?)
@@ -334,7 +364,7 @@ impl<const N: usize> FileDescriptorTable<N> {
             return Err(VfsError::InvalidOffset);
         }
         Ok(WriteWindow {
-            node: descriptor.node,
+            node,
             offset: descriptor.offset,
             length: requested,
         })
@@ -348,7 +378,10 @@ impl<const N: usize> FileDescriptorTable<N> {
         if descriptor.offset > size {
             return Err(VfsError::InvalidOffset);
         }
-        descriptor.node.size = size;
+        let DescriptorObject::File(ref mut node) = descriptor.object else {
+            return Err(VfsError::BadFileDescriptor);
+        };
+        node.size = size;
         Ok(())
     }
 
@@ -359,7 +392,10 @@ impl<const N: usize> FileDescriptorTable<N> {
             .offset
             .checked_add(length)
             .ok_or(VfsError::InvalidOffset)?;
-        if new_offset > descriptor.node.size {
+        let DescriptorObject::File(node) = descriptor.object else {
+            return Err(VfsError::BadFileDescriptor);
+        };
+        if new_offset > node.size {
             return Err(VfsError::InvalidOffset);
         }
         descriptor.offset = new_offset;
@@ -368,7 +404,10 @@ impl<const N: usize> FileDescriptorTable<N> {
 
     pub fn seek(&mut self, fd: u32, offset: u64) -> Result<(), VfsError> {
         let descriptor = self.descriptor_mut(fd)?;
-        if offset > descriptor.node.size {
+        let DescriptorObject::File(node) = descriptor.object else {
+            return Err(VfsError::BadFileDescriptor);
+        };
+        if offset > node.size {
             return Err(VfsError::InvalidOffset);
         }
         descriptor.offset = offset;
@@ -378,6 +417,23 @@ impl<const N: usize> FileDescriptorTable<N> {
     pub fn close(&mut self, fd: u32) -> Result<(), VfsError> {
         *self.descriptor_mut(fd)? = Descriptor::EMPTY;
         Ok(())
+    }
+
+    pub fn object(&self, fd: u32) -> Result<DescriptorObject, VfsError> {
+        Ok(self.descriptor(fd)?.object)
+    }
+
+    pub fn snapshot_objects(&self, output: &mut [Option<DescriptorObject>]) -> usize {
+        output.fill(None);
+        let mut copied = 0;
+        for descriptor in self.descriptors.iter().filter(|descriptor| descriptor.open) {
+            let Some(slot) = output.get_mut(copied) else {
+                break;
+            };
+            *slot = Some(descriptor.object);
+            copied += 1;
+        }
+        copied
     }
 
     pub fn close_all(&mut self) -> usize {
@@ -506,6 +562,29 @@ mod tests {
             descriptors.read_window(first, 1),
             Err(VfsError::BadFileDescriptor)
         );
+    }
+
+    #[test]
+    fn stores_local_sockets_without_treating_them_as_files() {
+        let mut descriptors = FileDescriptorTable::<2>::new();
+        let fd = descriptors.open_local_socket(7, 3).unwrap();
+        assert_eq!(
+            descriptors.object(fd),
+            Ok(DescriptorObject::LocalSocket {
+                index: 7,
+                generation: 3,
+            })
+        );
+        assert_eq!(
+            descriptors.read_window(fd, 1),
+            Err(VfsError::BadFileDescriptor)
+        );
+        assert_eq!(
+            descriptors.write_window(fd, 1),
+            Err(VfsError::BadFileDescriptor)
+        );
+        descriptors.close(fd).unwrap();
+        assert_eq!(descriptors.object(fd), Err(VfsError::BadFileDescriptor));
     }
 
     #[test]

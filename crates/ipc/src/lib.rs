@@ -11,6 +11,10 @@ pub struct SocketHandle {
 }
 
 impl SocketHandle {
+    pub const fn from_parts(index: u16, generation: u16) -> Self {
+        Self { index, generation }
+    }
+
     pub const fn index(self) -> u16 {
         self.index
     }

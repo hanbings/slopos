@@ -20,6 +20,7 @@ slopos-desktop-protocol = { path = "../crates/desktop-protocol" }
 slopos-ebpf = { path = "../ebpf" }
 slopos-elf = { path = "../crates/elf" }
 slopos-ext4 = { path = "../crates/ext4" }
+slopos-ipc = { path = "../crates/ipc" }
 slopos-pci = { path = "../crates/pci" }
 slopos-process = { path = "../crates/process" }
 slopos-shell = { path = "../crates/shell" }

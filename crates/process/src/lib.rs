@@ -2,7 +2,9 @@
 
 #![no_std]
 
-use slopos_vfs::{AccessMode, FileDescriptorTable, FileNode, ReadWindow, VfsError, WriteWindow};
+use slopos_vfs::{
+    AccessMode, DescriptorObject, FileDescriptorTable, FileNode, ReadWindow, VfsError, WriteWindow,
+};
 
 pub type ProcessId = u32;
 
@@ -245,6 +247,38 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
             .descriptors
             .open_with_mode(node, access_mode)
             .map_err(ProcessError::Vfs)
+    }
+
+    pub fn open_local_socket(
+        &mut self,
+        pid: ProcessId,
+        index: u16,
+        generation: u16,
+    ) -> Result<u32, ProcessError> {
+        self.live_slot_mut(pid)?
+            .descriptors
+            .open_local_socket(index, generation)
+            .map_err(ProcessError::Vfs)
+    }
+
+    pub fn descriptor_object(
+        &self,
+        pid: ProcessId,
+        fd: u32,
+    ) -> Result<DescriptorObject, ProcessError> {
+        self.live_slot(pid)?
+            .descriptors
+            .object(fd)
+            .map_err(ProcessError::Vfs)
+    }
+
+    pub fn descriptor_objects(
+        &self,
+        pid: ProcessId,
+        output: &mut [Option<DescriptorObject>],
+    ) -> Result<usize, ProcessError> {
+        let slot = self.slot(pid).ok_or(ProcessError::NotFound)?;
+        Ok(slot.descriptors.snapshot_objects(output))
     }
 
     pub fn read_window(
@@ -762,6 +796,19 @@ mod tests {
         assert_eq!(
             table.read_window(first, first_fd, 1),
             Err(ProcessError::Vfs(VfsError::BadFileDescriptor))
+        );
+
+        let socket_fd = table.open_local_socket(first, 4, 9).unwrap();
+        assert_eq!(
+            table.descriptor_object(first, socket_fd),
+            Ok(DescriptorObject::LocalSocket {
+                index: 4,
+                generation: 9,
+            })
+        );
+        assert_eq!(
+            table.descriptor_object(second, socket_fd),
+            Ok(DescriptorObject::File(node))
         );
     }
 

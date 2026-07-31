@@ -6,21 +6,22 @@ use core::cell::UnsafeCell;
 use core::ptr;
 use slopos_desktop_protocol::{
     COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit, DesktopServiceEvent,
-    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WAYLAND_EVENT_MAX_SIZE,
-    WAYLAND_EVENT_WAIT_SYSCALL, WAYLAND_SURFACE_HEADER_SIZE, WAYLAND_SURFACE_MAX_SIZE,
-    WAYLAND_SURFACE_SYSCALL, WaylandServerEvent, WaylandSurfaceCommit, WaylandSurfaceHeader,
+    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WAYLAND_BACKING_STAGE_SYSCALL,
+    WAYLAND_EVENT_MAX_SIZE, WAYLAND_EVENT_WAIT_SYSCALL, WAYLAND_SURFACE_HEADER_SIZE,
+    WAYLAND_SURFACE_MAX_PIXEL_SIZE, WAYLAND_SURFACE_MAX_SIZE, WAYLAND_SURFACE_SYSCALL,
+    WaylandServerEvent, WaylandSurfaceCommit, WaylandSurfaceHeader,
 };
 use slopos_process::{
     ProcessError, ProcessImage, ProcessState, ProcessTable, build_linux_initial_stack,
 };
-use slopos_vfs::{AccessMode, FileNode, ReadWindow, VfsError, WriteWindow};
+use slopos_vfs::{AccessMode, DescriptorObject, FileNode, ReadWindow, VfsError, WriteWindow};
 
 const INIT_PID: u32 = 1;
 const DESKTOP_PID: u32 = 2;
 pub const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
 const INIT_EXPECTED_SYSCALLS: u64 = 18;
-const DESKTOP_EXPECTED_SYSCALLS: u64 = 24;
+const DESKTOP_EXPECTED_SYSCALLS: u64 = 28;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
 const LINUX_AT_FDCWD: u64 = (-100i64) as u64;
@@ -32,15 +33,23 @@ const LINUX_SYS_WRITE: u64 = 1;
 const LINUX_SYS_CLOSE: u64 = 3;
 const LINUX_SYS_LSEEK: u64 = 8;
 const LINUX_SYS_SCHED_YIELD: u64 = 24;
+const LINUX_SYS_SOCKET: u64 = 41;
+const LINUX_SYS_CONNECT: u64 = 42;
 const LINUX_SYS_EXIT: u64 = 60;
 const LINUX_SYS_WAIT4: u64 = 61;
 const LINUX_SYS_OPENAT: u64 = 257;
 const LINUX_SEEK_SET: u64 = 0;
+const LINUX_AF_UNIX: u64 = 1;
+const LINUX_SOCK_STREAM: u64 = 1;
+const LINUX_SOCKADDR_UN_MAX: usize = 110;
 const LINUX_EBADF: i64 = -9;
 const LINUX_ECHILD: i64 = -10;
 const LINUX_EFAULT: i64 = -14;
 const LINUX_EINVAL: i64 = -22;
+const LINUX_EMFILE: i64 = -24;
 const LINUX_ENAMETOOLONG: i64 = -36;
+const LINUX_EAFNOSUPPORT: i64 = -97;
+const LINUX_ECONNREFUSED: i64 = -111;
 const INIT_MESSAGE: &[u8] = b"SLOPOS user write\n";
 const DESKTOP_MESSAGE: &[u8] = b"SLOPOS desktop policy ready\n";
 const INIT_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-init", b"--system"];
@@ -544,6 +553,21 @@ pub fn open_file(pid: u32, node: FileNode, access_mode: AccessMode) -> Result<u3
     process_table_mut().open_file(pid, node, access_mode)
 }
 
+pub fn open_local_socket(pid: u32, handle: slopos_ipc::SocketHandle) -> Result<u32, ProcessError> {
+    process_table_mut().open_local_socket(pid, handle.index(), handle.generation())
+}
+
+pub fn descriptor_object(pid: u32, fd: u32) -> Result<DescriptorObject, ProcessError> {
+    process_table().descriptor_object(pid, fd)
+}
+
+pub fn descriptor_objects(
+    pid: u32,
+    output: &mut [Option<DescriptorObject>],
+) -> Result<usize, ProcessError> {
+    process_table().descriptor_objects(pid, output)
+}
+
 pub fn read_window(pid: u32, fd: u32, requested: usize) -> Result<ReadWindow, ProcessError> {
     process_table().read_window(pid, fd, requested)
 }
@@ -917,6 +941,71 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
         .record_syscall(pid)
         .unwrap_or_else(|_| crate::fatal("syscall process accounting failed"));
     match frame.rax {
+        LINUX_SYS_SOCKET => {
+            if frame.rdi != LINUX_AF_UNIX {
+                frame.rax = LINUX_EAFNOSUPPORT as u64;
+                return 0;
+            }
+            if frame.rsi != LINUX_SOCK_STREAM || frame.rdx != 0 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let handle = match crate::local_socket_service::socket() {
+                Ok(handle) => handle,
+                Err(_) => {
+                    frame.rax = LINUX_EMFILE as u64;
+                    return 0;
+                }
+            };
+            let fd = match open_local_socket(pid, handle) {
+                Ok(fd) => fd,
+                Err(_) => {
+                    let _ = crate::local_socket_service::close(pid, handle);
+                    frame.rax = LINUX_EMFILE as u64;
+                    return 0;
+                }
+            };
+            frame.rax = u64::from(fd);
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=41 socket domain=AF_UNIX type=SOCK_STREAM protocol=0 fd={fd} origin=cpl3"
+            ));
+            0
+        }
+        LINUX_SYS_CONNECT => {
+            let Ok(fd) = u32::try_from(frame.rdi) else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let DescriptorObject::LocalSocket { index, generation } =
+                (match descriptor_object(pid, fd) {
+                    Ok(object) => object,
+                    Err(_) => {
+                        frame.rax = LINUX_EBADF as u64;
+                        return 0;
+                    }
+                })
+            else {
+                frame.rax = LINUX_EBADF as u64;
+                return 0;
+            };
+            let (path, path_length) = match copy_user_socket_path(pid, frame.rsi, frame.rdx) {
+                Ok(path) => path,
+                Err(errno) => {
+                    frame.rax = errno as u64;
+                    return 0;
+                }
+            };
+            let handle = slopos_ipc::SocketHandle::from_parts(index, generation);
+            if crate::local_socket_service::connect(pid, handle, &path[..path_length]).is_err() {
+                frame.rax = LINUX_ECONNREFUSED as u64;
+                return 0;
+            }
+            frame.rax = 0;
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=42 connect fd={fd} family=AF_UNIX path=/run/slopos/wayland-0 origin=cpl3 result=0"
+            ));
+            0
+        }
         LINUX_SYS_OPENAT => {
             if frame.rdi != LINUX_AT_FDCWD || frame.r10 != 0 {
                 frame.rax = LINUX_EINVAL as u64;
@@ -1183,6 +1272,37 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             ));
             2
         }
+        WAYLAND_BACKING_STAGE_SYSCALL => {
+            let Ok(length) = usize::try_from(frame.rsi) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            if pid != DESKTOP_PID
+                || length == 0
+                || length > WAYLAND_SURFACE_MAX_PIXEL_SIZE
+                || length % 4 != 0
+                || !validate_user_range(pid, frame.rdi, length, false)
+            {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            // SAFETY: the IF-masked PID 2 syscall path exclusively owns this
+            // legacy-sized scratch area until stage_backing completes its copy.
+            let scratch = unsafe { crate::wayland_service::staging_buffer() };
+            if copy_from_user(pid, frame.rdi, &mut scratch[..length]).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            if crate::wayland_service::stage_backing(pid, &scratch[..length]).is_err() {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            frame.rax = 0;
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=slopos-wayland-backing-bootstrap-v1 entry=syscall return=sysretq nr={WAYLAND_BACKING_STAGE_SYSCALL} pixel_bytes={length} future_transport=SCM_RIGHTS/mmap origin=cpl3 result=0"
+            ));
+            0
+        }
         WAYLAND_SURFACE_SYSCALL => {
             if pid != DESKTOP_PID
                 || frame.rsi < WAYLAND_SURFACE_HEADER_SIZE as u64
@@ -1381,6 +1501,33 @@ fn copy_user_path(pid: u32, address: u64, access_mode: AccessMode) -> Result<Ope
         request.path_length += 1;
     }
     Err(LINUX_ENAMETOOLONG)
+}
+
+fn copy_user_socket_path(
+    pid: u32,
+    address: u64,
+    address_length: u64,
+) -> Result<([u8; slopos_ipc::LOCAL_PATH_MAX], usize), i64> {
+    let length = usize::try_from(address_length).map_err(|_| LINUX_EINVAL)?;
+    if !(3..=LINUX_SOCKADDR_UN_MAX).contains(&length) {
+        return Err(LINUX_EINVAL);
+    }
+    let mut address_bytes = [0u8; LINUX_SOCKADDR_UN_MAX];
+    copy_from_user(pid, address, &mut address_bytes[..length]).ok_or(LINUX_EFAULT)?;
+    if u16::from_ne_bytes([address_bytes[0], address_bytes[1]]) != LINUX_AF_UNIX as u16 {
+        return Err(LINUX_EAFNOSUPPORT);
+    }
+    let source = &address_bytes[2..length];
+    let path_length = source
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or(LINUX_EINVAL)?;
+    if path_length == 0 || path_length > slopos_ipc::LOCAL_PATH_MAX {
+        return Err(LINUX_EINVAL);
+    }
+    let mut path = [0u8; slopos_ipc::LOCAL_PATH_MAX];
+    path[..path_length].copy_from_slice(&source[..path_length]);
+    Ok((path, path_length))
 }
 
 fn copy_from_user(pid: u32, address: u64, output: &mut [u8]) -> Option<()> {

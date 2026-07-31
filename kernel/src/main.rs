@@ -14,6 +14,7 @@ mod framebuffer;
 mod fs;
 mod heap;
 mod interrupts;
+mod local_socket_service;
 mod memory;
 mod paging;
 mod pci;
@@ -278,6 +279,7 @@ pub unsafe extern "sysv64" fn _start(boot_info_pointer: *const BootInfo) -> ! {
     serialln(format_args!(
         "SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready"
     ));
+    local_socket_service::initialize();
 
     executor::run(
         desktop.run(&mut framebuffer, input),

@@ -21,8 +21,8 @@ use slopos_ext4::{
     set_superblock_recovery, validate_path_component,
 };
 use slopos_vfs::{
-    AbsolutePath, AccessMode, FIRST_FILE_DESCRIPTOR, FileDescriptorTable, FileNode, MountTable,
-    ReadWindow, WriteWindow,
+    AbsolutePath, AccessMode, DescriptorObject, FIRST_FILE_DESCRIPTOR, FileDescriptorTable,
+    FileNode, MountTable, ReadWindow, WriteWindow,
 };
 
 use crate::virtio::BlockDevice;
@@ -34,7 +34,7 @@ const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
 const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
 const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
-const ALLOCATION_PROBE_BLOCK: u64 = 120;
+const ALLOCATION_PROBE_BLOCK: u64 = 119;
 const CREATE_TRANSACTION_BLOCKS: usize = 5;
 const CREATE_PROBE_INODE: u32 = 32;
 const CREATE_PROBE_NAME: &[u8] = b"create-probe";
@@ -949,6 +949,31 @@ async fn complete_process_read(
     request: crate::process::ReadRequest,
 ) -> crate::process::ProcessEvent {
     let pid = request.pid;
+    match crate::process::descriptor_object(pid, request.fd) {
+        Ok(DescriptorObject::LocalSocket { index, generation }) => {
+            let handle = slopos_ipc::SocketHandle::from_parts(index, generation);
+            let mut output = [0u8; crate::process::PROCESS_SYSCALL_IO_CAPACITY];
+            let bytes = match crate::local_socket_service::recv(
+                pid,
+                handle,
+                &mut output[..request.requested],
+            )
+            .await
+            {
+                Ok(bytes) => bytes,
+                Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
+            };
+            crate::serial::serialln(format_args!(
+                "SLOPOS-IPC: process read complete pid={pid} fd={} family=AF_UNIX type=SOCK_STREAM requested={} bytes={bytes} user_pages={} async=true",
+                request.fd,
+                request.requested,
+                request.user_pages()
+            ));
+            return crate::process::resume_probe(pid, bytes as i64, Some(&output[..bytes]));
+        }
+        Ok(DescriptorObject::File(_)) => {}
+        Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
+    }
     let process_index = process_index(pid)
         .unwrap_or_else(|| device.fail("process PID is outside the VFS backing table"));
     let window = match crate::process::read_window(pid, request.fd, request.requested) {
@@ -996,6 +1021,24 @@ async fn complete_process_write(
     request: crate::process::WriteRequest,
 ) -> crate::process::ProcessEvent {
     let pid = request.pid;
+    match crate::process::descriptor_object(pid, request.fd) {
+        Ok(DescriptorObject::LocalSocket { index, generation }) => {
+            let handle = slopos_ipc::SocketHandle::from_parts(index, generation);
+            let bytes = match crate::local_socket_service::send(pid, handle, request.input()) {
+                Ok(bytes) => bytes,
+                Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
+            };
+            crate::serial::serialln(format_args!(
+                "SLOPOS-IPC: process write complete pid={pid} fd={} family=AF_UNIX type=SOCK_STREAM requested={} bytes={bytes} user_pages={} async=true",
+                request.fd,
+                request.input().len(),
+                request.user_pages()
+            ));
+            return crate::process::resume_probe(pid, bytes as i64, None);
+        }
+        Ok(DescriptorObject::File(_)) => {}
+        Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
+    }
     let process_index = process_index(pid)
         .unwrap_or_else(|| device.fail("process PID is outside the VFS backing table"));
     let input = request.input();
@@ -1034,6 +1077,23 @@ fn complete_process_close(
     request: crate::process::CloseRequest,
 ) -> crate::process::ProcessEvent {
     let pid = request.pid;
+    match crate::process::descriptor_object(pid, request.fd) {
+        Ok(DescriptorObject::LocalSocket { index, generation }) => {
+            let handle = slopos_ipc::SocketHandle::from_parts(index, generation);
+            if crate::local_socket_service::close(pid, handle).is_err()
+                || crate::process::close_fd(pid, request.fd).is_err()
+            {
+                return crate::process::resume_probe(pid, LINUX_EBADF, None);
+            }
+            crate::serial::serialln(format_args!(
+                "SLOPOS-IPC: process close complete pid={pid} fd={} family=AF_UNIX type=SOCK_STREAM async=false",
+                request.fd
+            ));
+            return crate::process::resume_probe(pid, 0, None);
+        }
+        Ok(DescriptorObject::File(_)) => {}
+        Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
+    }
     let Some(process_index) = process_index(pid) else {
         return crate::process::resume_probe(pid, LINUX_EBADF, None);
     };
@@ -1058,6 +1118,18 @@ fn complete_process_close(
 fn release_exited_process_files(device: &BlockDevice, open_files: &mut ProcessOpenFiles, pid: u32) {
     let process_index = process_index(pid)
         .unwrap_or_else(|| device.fail("exited PID is outside the VFS backing table"));
+    let mut objects = [None; PROCESS_FILE_CAPACITY];
+    let object_count = crate::process::descriptor_objects(pid, &mut objects)
+        .unwrap_or_else(|_| device.fail("exited process descriptor snapshot failed"));
+    let mut socket_objects = 0usize;
+    for object in objects[..object_count].iter().flatten() {
+        if let DescriptorObject::LocalSocket { index, generation } = object {
+            let handle = slopos_ipc::SocketHandle::from_parts(*index, *generation);
+            crate::local_socket_service::close(pid, handle)
+                .unwrap_or_else(|_| device.fail("exited process socket cleanup failed"));
+            socket_objects += 1;
+        }
+    }
     let descriptors = crate::process::close_all_files(pid)
         .unwrap_or_else(|_| device.fail("exited process descriptor cleanup failed"));
     let mut backing_objects = 0usize;
@@ -1066,11 +1138,11 @@ fn release_exited_process_files(device: &BlockDevice, open_files: &mut ProcessOp
             backing_objects += 1;
         }
     }
-    if descriptors != backing_objects {
+    if descriptors != backing_objects + socket_objects {
         device.fail("exited process descriptor/backing cleanup diverged");
     }
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={pid} exit resources released descriptors={descriptors} backing_objects={backing_objects} address_space_release=pending-reap"
+        "SLOPOS-PROCESS: pid={pid} exit resources released descriptors={descriptors} backing_objects={backing_objects} socket_objects={socket_objects} address_space_release=pending-reap"
     ));
 }
 

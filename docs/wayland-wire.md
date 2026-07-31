@@ -30,4 +30,4 @@ make test-wayland
 cargo clippy --locked -p slopos-wayland --all-targets -- -D warnings
 ```
 
-这只是协议核心，不代表 SlopOS 已经具备可连接的 Wayland compositor。尚未接入 Unix-domain socket/SCM_RIGHTS 等 transport、用户进程地址空间中的共享内存映射、kernel desktop renderer、surface pending/current 双缓冲状态、damage/frame scheduler、input/output event fan-out、xdg role exclusivity/configure state machine、多 client 隔离或 layer-shell。错误返回后的 connection 视为 fatal 并应由未来 transport 丢弃；dispatch 不保证错误后的状态可继续使用。
+该协议核心现已接入 kernel 的固定容量 AF_UNIX `SOCK_STREAM`：PID 2 通过 `/run/slopos/wayland-0` 的普通 `socket/connect/write/read` 完成 registry、bufferless initial commit、xdg configure/ack、两轮 buffer commit 与 presentation event。服务端以持久 `SingleSurfaceSession` 强制 object ownership、role exclusivity、configure serial、pending/current commit 边界及 callback retirement，并把 generation 1/2 交给现有 kernel renderer。当前 transport 仍限单一受信 PID 2，像素 backing 暂经 `0x534c0005` staging syscall；尚无用户态 `bind/listen/accept`、`SCM_RIGHTS`、共享 mmap、多 client 隔离、通用 input/output fan-out、layer-shell 或持续 frame loop。协议错误仍视为 fatal connection error；dispatch 不保证错误后的状态可继续使用。

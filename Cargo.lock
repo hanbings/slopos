@@ -66,6 +66,7 @@ dependencies = [
  "slopos-ebpf",
  "slopos-elf",
  "slopos-ext4",
+ "slopos-ipc",
  "slopos-pci",
  "slopos-process",
  "slopos-shell",
