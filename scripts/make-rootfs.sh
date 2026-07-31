@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: 0BSD
 
 set -euo pipefail
+export LC_ALL=C
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${repo_dir}/target/slopos-root.ext4"
@@ -42,15 +43,20 @@ cp "${repo_dir}/assets/waybar-style.css" "${staging_dir}/etc/slopos/waybar.css"
 cp "${repo_dir}/assets/swww.env" "${staging_dir}/etc/slopos/swww.env"
 mkdir -p "${staging_dir}/usr/share/slopos"
 wallpaper_probe="${staging_dir}/usr/share/slopos/vfs-wallpaper.ppm"
-cp "${repo_dir}/assets/wallpapers/aurora.ppm" "${wallpaper_probe}"
-printf '\n#' >>"${wallpaper_probe}"
-wallpaper_bytes="$(stat -c '%s' "${wallpaper_probe}")"
-if (( wallpaper_bytes >= 6144 )); then
-    echo "VFS wallpaper probe leaves no room for a trailing PNM comment" >&2
+# Keep the 12x8 Aurora geometry while forcing both the P6 header and binary
+# raster through the second ext4 block. The long comment makes the complete
+# file exactly 6144 bytes; the final 288 bytes are the RGB payload.
+{
+    printf 'P6\n#'
+    dd if=/dev/zero bs=1 count=5842 status=none | tr '\000' 'P'
+    printf '\n12 8\n255\n'
+    tail -n +5 "${repo_dir}/assets/wallpapers/aurora.ppm" \
+        | awk '{ for (field = 1; field <= NF; field++) printf "%c", $field * 17 }'
+} >"${wallpaper_probe}"
+if [[ "$(stat -c '%s' "${wallpaper_probe}")" -ne 6144 ]]; then
+    echo "VFS P6 wallpaper probe has an unexpected size" >&2
     exit 1
 fi
-dd if=/dev/zero bs=1 count="$((6144 - wallpaper_bytes))" status=none \
-    | tr '\000' 'P' >>"${wallpaper_probe}"
 dd if=/dev/zero bs=4096 count=9 status=none \
     | tr '\000' 'D' >"${staging_dir}/usr/share/slopos/deep-extent.bin"
 dd if=/dev/zero bs=4096 count=1 status=none \

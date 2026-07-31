@@ -14,12 +14,12 @@ pub use niri::{
     WorkspaceSet, parse_niri_shell_config,
 };
 pub use wallpaper::{
-    ClearRequest, CropGravity, ImgRequest, MAX_WALLPAPER_PATH, PpmError, PpmImage, ResizeFilter,
-    ResizeMode, SwwwCommand, SwwwDaemonError, SwwwDefaults, SwwwParseError, TransitionBezier,
-    TransitionCoordinate, TransitionOptions, TransitionPosition, TransitionType, TransitionWave,
-    WallpaperDaemon, WallpaperQuery, parse_ppm, parse_swww_command, parse_swww_environment,
-    resize_filter_sample, transition_eased_progress, transition_pixel,
-    transition_pixel_with_options,
+    ClearRequest, CropGravity, ImgRequest, MAX_WALLPAPER_PATH, PpmError, PpmFormat, PpmImage,
+    ResizeFilter, ResizeMode, SwwwCommand, SwwwDaemonError, SwwwDefaults, SwwwParseError,
+    TransitionBezier, TransitionCoordinate, TransitionOptions, TransitionPosition, TransitionType,
+    TransitionWave, WallpaperDaemon, WallpaperQuery, parse_ppm, parse_ppm_bytes,
+    parse_swww_command, parse_swww_environment, resize_filter_sample, transition_eased_progress,
+    transition_pixel, transition_pixel_with_options,
 };
 pub use waybar::{
     BarButton, BarConfigError, BarFormatError, BarFormatValue, BarLayer, BarMode, BarModuleConfig,

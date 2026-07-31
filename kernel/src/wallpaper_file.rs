@@ -3,8 +3,9 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use slopos_shell::{
-    CropGravity, ImgRequest, MAX_WALLPAPER_PATH, ResizeFilter, ResizeMode, TransitionBezier,
-    TransitionOptions, TransitionPosition, TransitionType, TransitionWave, parse_ppm,
+    CropGravity, ImgRequest, MAX_WALLPAPER_PATH, PpmFormat, ResizeFilter, ResizeMode,
+    TransitionBezier, TransitionOptions, TransitionPosition, TransitionType, TransitionWave,
+    parse_ppm_bytes,
 };
 
 pub const WALLPAPER_FILE_CAPACITY: usize = 8 * 1024;
@@ -24,7 +25,6 @@ pub enum WallpaperFileError {
     InvalidPath,
     NotFound,
     FileTooLarge,
-    InvalidUtf8,
     InvalidPpm,
 }
 
@@ -198,6 +198,7 @@ struct WallpaperFileBank {
     request: WallpaperFileRequest,
     image: [u8; WALLPAPER_FILE_CAPACITY],
     image_length: usize,
+    format: PpmFormat,
     result: Result<(), WallpaperFileError>,
 }
 
@@ -207,6 +208,7 @@ impl WallpaperFileBank {
             request: WallpaperFileRequest::empty(),
             image: [0; WALLPAPER_FILE_CAPACITY],
             image_length: 0,
+            format: PpmFormat::Plain,
             result: Ok(()),
         }
     }
@@ -261,18 +263,16 @@ impl WallpaperFileWriter {
         true
     }
 
-    pub fn publish(self) -> Result<u64, WallpaperFileError> {
+    pub fn publish(self) -> Result<WallpaperFilePublication, WallpaperFileError> {
         let validation = {
             // SAFETY: this writer has exclusive access to its unpublished bank.
             let bank = unsafe { &mut (*BANKS.0.get())[self.bank] };
             bank.image_length = self.length;
-            core::str::from_utf8(&bank.image[..self.length])
-                .map_err(|_| WallpaperFileError::InvalidUtf8)
-                .and_then(|image| {
-                    parse_ppm(image)
-                        .map(|_| ())
-                        .map_err(|_| WallpaperFileError::InvalidPpm)
+            parse_ppm_bytes(&bank.image[..self.length])
+                .map(|image| {
+                    bank.format = image.format();
                 })
+                .map_err(|_| WallpaperFileError::InvalidPpm)
         };
         if let Err(error) = validation {
             self.publish_error(error);
@@ -282,8 +282,9 @@ impl WallpaperFileWriter {
         let bank = unsafe { &mut (*BANKS.0.get())[self.bank] };
         bank.result = Ok(());
         let generation = bank.request.generation;
+        let format = bank.format;
         publish_bank(self.bank, generation);
-        Ok(generation)
+        Ok(WallpaperFilePublication { generation, format })
     }
 
     pub fn publish_error(self, error: WallpaperFileError) {
@@ -292,6 +293,22 @@ impl WallpaperFileWriter {
         bank.image_length = 0;
         bank.result = Err(error);
         publish_bank(self.bank, bank.request.generation);
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct WallpaperFilePublication {
+    generation: u64,
+    format: PpmFormat,
+}
+
+impl WallpaperFilePublication {
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub const fn format(self) -> PpmFormat {
+        self.format
     }
 }
 
@@ -312,7 +329,8 @@ pub struct WallpaperFileSource {
     pub resolved_path: &'static str,
     pub output: Option<&'static str>,
     pub transition: TransitionOptions,
-    pub image: &'static str,
+    pub format: PpmFormat,
+    pub image: &'static [u8],
 }
 
 #[derive(Clone, Copy)]
@@ -351,8 +369,7 @@ pub fn latest_after(generation: u64) -> Option<WallpaperFileUpdate> {
     let resolved_path = bank.request.resolved_path.as_str();
     Some(match bank.result {
         Ok(()) => {
-            // SAFETY: publish validates UTF-8 for the exact stored range.
-            let image = unsafe { core::str::from_utf8_unchecked(&bank.image[..bank.image_length]) };
+            let image = &bank.image[..bank.image_length];
             WallpaperFileUpdate::Ready(WallpaperFileSource {
                 generation: current,
                 request_path,
@@ -362,6 +379,7 @@ pub fn latest_after(generation: u64) -> Option<WallpaperFileUpdate> {
                     .has_output
                     .then(|| bank.request.output.as_str()),
                 transition: bank.request.transition,
+                format: bank.format,
                 image,
             })
         }

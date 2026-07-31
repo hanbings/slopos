@@ -310,15 +310,23 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
         .prefetch_file_pair(&mut device, &multiblock, 0, 1)
         .await;
     let first_wallpaper_block = mount.read_file_block(&mut device, &multiblock, 0).await;
-    if first_wallpaper_block.len() != BLOCK_SIZE || !first_wallpaper_block.starts_with(b"P3") {
-        device.fail("ext4 multiblock P3 wallpaper header mismatch");
+    if first_wallpaper_block.len() != BLOCK_SIZE
+        || !first_wallpaper_block.starts_with(b"P6\n#")
+        || first_wallpaper_block[4..].iter().any(|byte| *byte != b'P')
+    {
+        device.fail("ext4 multiblock P6 wallpaper first block mismatch");
     }
     let first_wallpaper_block_length = first_wallpaper_block.len();
     let second_wallpaper_block = mount.read_file_block(&mut device, &multiblock, 1).await;
     if second_wallpaper_block.len() != 2048
-        || second_wallpaper_block.iter().any(|byte| *byte != b'P')
+        || second_wallpaper_block[..1750]
+            .iter()
+            .any(|byte| *byte != b'P')
+        || &second_wallpaper_block[1750..1760] != b"\n12 8\n255\n"
+        || &second_wallpaper_block[1760..1763] != b"\x11\x11\x44"
+        || &second_wallpaper_block[2045..2048] != b"\x11\x11\x33"
     {
-        device.fail("ext4 multiblock P3 wallpaper comment padding mismatch");
+        device.fail("ext4 multiblock P6 wallpaper second block mismatch");
     }
     let multiblock_bytes = first_wallpaper_block_length + second_wallpaper_block.len();
     let multiblock_group = mount
@@ -326,7 +334,7 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
         .inode_group(multiblock.inode.number)
         .unwrap_or_else(|_| device.fail("ext4 multiblock inode group is invalid"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: multiblock file valid inode={} inode_group={multiblock_group} bytes={multiblock_bytes} logical_blocks=2 format=P3 comment_padding=valid path=/usr/share/slopos/vfs-wallpaper.ppm",
+        "SLOPOS-EXT4: multiblock file valid inode={} inode_group={multiblock_group} bytes={multiblock_bytes} logical_blocks=2 format=P6 binary_payload=valid path=/usr/share/slopos/vfs-wallpaper.ppm",
         multiblock.inode.number,
     ));
 
@@ -1325,9 +1333,11 @@ async fn load_and_publish_wallpaper(
         logical_block += 1;
     }
     match writer.publish() {
-        Ok(published) => crate::serial::serialln(format_args!(
-            "SLOPOS-SWWW-VFS: load published generation={published} request={requested} resolved={resolved} inode={} bytes={copied} blocks={logical_block} format=P3 async=true",
-            file.inode.number
+        Ok(publication) => crate::serial::serialln(format_args!(
+            "SLOPOS-SWWW-VFS: load published generation={} request={requested} resolved={resolved} inode={} bytes={copied} blocks={logical_block} format={} async=true",
+            publication.generation(),
+            file.inode.number,
+            publication.format().name(),
         )),
         Err(error) => wallpaper_file_rejected(
             generation,
@@ -1351,7 +1361,6 @@ const fn wallpaper_file_error_name(
         crate::wallpaper_file::WallpaperFileError::InvalidPath => "invalid-path",
         crate::wallpaper_file::WallpaperFileError::NotFound => "not-found",
         crate::wallpaper_file::WallpaperFileError::FileTooLarge => "file-size",
-        crate::wallpaper_file::WallpaperFileError::InvalidUtf8 => "invalid-utf8",
         crate::wallpaper_file::WallpaperFileError::InvalidPpm => "invalid-ppm",
     }
 }

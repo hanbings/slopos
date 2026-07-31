@@ -606,7 +606,7 @@ grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=3
 grep -Fq "SLOPOS-SWWW: transition complete type=center step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM" "${serial_log}"
 grep -Fq "SLOPOS-SWWW-VFS: load requested generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM output=* transition=center step=64 fps=30 async=true" "${serial_log}"
-grep -Fq "SLOPOS-SWWW-VFS: load published generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm inode=30 bytes=6144 blocks=2 format=P3 async=true" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: load published generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm inode=30 bytes=6144 blocks=2 format=P6 async=true" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm source=vfs output=* transition=center step=64 fps=30" "${serial_log}"
 grep -Fq "SLOPOS-SWWW-VFS: result acknowledged generation=1 renderer=desktop active_image=true" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM" "${serial_log}"

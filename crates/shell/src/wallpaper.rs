@@ -1747,11 +1747,32 @@ pub enum PpmError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PpmFormat {
+    Plain,
+    Binary,
+}
+
+impl PpmFormat {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Plain => "P3",
+            Self::Binary => "P6",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PpmPixelData<'a> {
+    Plain(&'a [u8]),
+    Binary(&'a [u8]),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PpmImage<'a> {
     width: u16,
     height: u16,
     maximum: u16,
-    pixels: &'a str,
+    data: PpmPixelData<'a>,
 }
 
 impl<'a> PpmImage<'a> {
@@ -1763,19 +1784,35 @@ impl<'a> PpmImage<'a> {
         self.height
     }
 
+    pub const fn format(self) -> PpmFormat {
+        match self.data {
+            PpmPixelData::Plain(_) => PpmFormat::Plain,
+            PpmPixelData::Binary(_) => PpmFormat::Binary,
+        }
+    }
+
     pub fn pixels(self) -> PpmPixels<'a> {
         PpmPixels {
-            tokens: PpmTokens::new(self.pixels),
+            source: match self.data {
+                PpmPixelData::Plain(bytes) => PpmPixelSource::Plain(PpmTokens::new(bytes)),
+                PpmPixelData::Binary(bytes) => PpmPixelSource::Binary { bytes, offset: 0 },
+            },
             maximum: self.maximum,
         }
     }
 }
 
 pub fn parse_ppm(input: &str) -> Result<PpmImage<'_>, PpmError> {
+    parse_ppm_bytes(input.as_bytes())
+}
+
+pub fn parse_ppm_bytes(input: &[u8]) -> Result<PpmImage<'_>, PpmError> {
     let mut tokens = PpmTokens::new(input);
-    if tokens.next() != Some("P3") {
-        return Err(PpmError::InvalidMagic);
-    }
+    let format = match tokens.next() {
+        Some(b"P3") => PpmFormat::Plain,
+        Some(b"P6") => PpmFormat::Binary,
+        _ => return Err(PpmError::InvalidMagic),
+    };
     let width = parse_ppm_number(tokens.next().ok_or(PpmError::MissingHeader)?)?;
     let height = parse_ppm_number(tokens.next().ok_or(PpmError::MissingHeader)?)?;
     let maximum = parse_ppm_number(tokens.next().ok_or(PpmError::MissingHeader)?)?;
@@ -1787,25 +1824,66 @@ pub fn parse_ppm(input: &str) -> Result<PpmImage<'_>, PpmError> {
         .checked_mul(usize::from(height))
         .and_then(|pixels| pixels.checked_mul(3))
         .ok_or(PpmError::InvalidDimensions)?;
-    for _ in 0..expected_components {
-        let value = parse_ppm_number(tokens.next().ok_or(PpmError::TruncatedPixels)?)?;
-        if value > maximum {
-            return Err(PpmError::InvalidColor);
+    let data = match format {
+        PpmFormat::Plain => {
+            for _ in 0..expected_components {
+                let value = parse_ppm_number(tokens.next().ok_or(PpmError::TruncatedPixels)?)?;
+                if value > maximum {
+                    return Err(PpmError::InvalidColor);
+                }
+            }
+            if tokens.next().is_some() {
+                return Err(PpmError::ExtraPixels);
+            }
+            PpmPixelData::Plain(&input[pixel_start..])
         }
-    }
-    if tokens.next().is_some() {
-        return Err(PpmError::ExtraPixels);
-    }
+        PpmFormat::Binary => {
+            let pixel_start = binary_pixel_start(input, tokens.offset)?;
+            let pixel_end = pixel_start
+                .checked_add(expected_components)
+                .ok_or(PpmError::InvalidDimensions)?;
+            if pixel_end > input.len() {
+                return Err(PpmError::TruncatedPixels);
+            }
+            if pixel_end < input.len() {
+                return Err(PpmError::ExtraPixels);
+            }
+            let pixels = &input[pixel_start..pixel_end];
+            if pixels.iter().any(|value| u16::from(*value) > maximum) {
+                return Err(PpmError::InvalidColor);
+            }
+            PpmPixelData::Binary(pixels)
+        }
+    };
     Ok(PpmImage {
         width,
         height,
         maximum,
-        pixels: &input[pixel_start..],
+        data,
     })
 }
 
+fn binary_pixel_start(input: &[u8], delimiter: usize) -> Result<usize, PpmError> {
+    let Some(byte) = input.get(delimiter) else {
+        return Err(PpmError::TruncatedPixels);
+    };
+    if !byte.is_ascii_whitespace() {
+        return Err(PpmError::MissingHeader);
+    }
+    if *byte == b'\r' && input.get(delimiter + 1) == Some(&b'\n') {
+        Ok(delimiter + 2)
+    } else {
+        Ok(delimiter + 1)
+    }
+}
+
+enum PpmPixelSource<'a> {
+    Plain(PpmTokens<'a>),
+    Binary { bytes: &'a [u8], offset: usize },
+}
+
 pub struct PpmPixels<'a> {
-    tokens: PpmTokens<'a>,
+    source: PpmPixelSource<'a>,
     maximum: u16,
 }
 
@@ -1813,26 +1891,40 @@ impl Iterator for PpmPixels<'_> {
     type Item = u32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let red = parse_ppm_number(self.tokens.next()?).ok()?;
-        let green = parse_ppm_number(self.tokens.next()?).ok()?;
-        let blue = parse_ppm_number(self.tokens.next()?).ok()?;
+        let (red, green, blue) = match &mut self.source {
+            PpmPixelSource::Plain(tokens) => (
+                parse_ppm_number(tokens.next()?).ok()?,
+                parse_ppm_number(tokens.next()?).ok()?,
+                parse_ppm_number(tokens.next()?).ok()?,
+            ),
+            PpmPixelSource::Binary { bytes, offset } => {
+                let end = offset.checked_add(3)?;
+                let pixel = bytes.get(*offset..end)?;
+                *offset = end;
+                (
+                    u16::from(pixel[0]),
+                    u16::from(pixel[1]),
+                    u16::from(pixel[2]),
+                )
+            }
+        };
         let scale = |value: u16| u32::from(value) * 255 / u32::from(self.maximum);
         Some(scale(red) << 16 | scale(green) << 8 | scale(blue))
     }
 }
 
 struct PpmTokens<'a> {
-    input: &'a str,
+    input: &'a [u8],
     offset: usize,
 }
 
 impl<'a> PpmTokens<'a> {
-    const fn new(input: &'a str) -> Self {
+    const fn new(input: &'a [u8]) -> Self {
         Self { input, offset: 0 }
     }
 
-    fn next(&mut self) -> Option<&'a str> {
-        let bytes = self.input.as_bytes();
+    fn next(&mut self) -> Option<&'a [u8]> {
+        let bytes = self.input;
         loop {
             while self.offset < bytes.len() && bytes[self.offset].is_ascii_whitespace() {
                 self.offset += 1;
@@ -1859,12 +1951,12 @@ impl<'a> PpmTokens<'a> {
     }
 }
 
-fn parse_ppm_number(value: &str) -> Result<u16, PpmError> {
+fn parse_ppm_number(value: &[u8]) -> Result<u16, PpmError> {
     if value.is_empty() {
         return Err(PpmError::InvalidNumber);
     }
     let mut parsed = 0u16;
-    for byte in value.bytes() {
+    for &byte in value {
         if !byte.is_ascii_digit() {
             return Err(PpmError::InvalidNumber);
         }
@@ -2427,8 +2519,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_bounded_ascii_ppm_pixels() {
+    fn parses_bounded_plain_and_binary_ppm_pixels() {
         let image = parse_ppm("P3\n# tiny\n2 1\n15\n15 0 0  0 8 15\n").unwrap();
+        assert_eq!(image.format(), PpmFormat::Plain);
         assert_eq!(image.width(), 2);
         assert_eq!(image.height(), 1);
         let mut pixels = image.pixels();
@@ -2438,6 +2531,40 @@ mod tests {
         assert_eq!(parse_ppm("P3 1 1 15 16 0 0"), Err(PpmError::InvalidColor));
         assert_eq!(parse_ppm("P3 1 1 15 1 2"), Err(PpmError::TruncatedPixels));
         assert_eq!(parse_ppm("P3 1 1 15 1 2 3 4"), Err(PpmError::ExtraPixels));
+
+        let image = parse_ppm_bytes(b"P6\n# tiny\n2 1\n15\n\x0f\x00\x00\x00\x08\x0f").unwrap();
+        assert_eq!(image.format(), PpmFormat::Binary);
+        assert_eq!((image.width(), image.height()), (2, 1));
+        let mut pixels = image.pixels();
+        assert_eq!(pixels.next(), Some(0xff_00_00));
+        assert_eq!(pixels.next(), Some(0x00_88_ff));
+        assert_eq!(pixels.next(), None);
+        assert_eq!(
+            parse_ppm_bytes(b"P6\r\n1 1\r\n255\r\n\x11\x22\x33")
+                .unwrap()
+                .pixels()
+                .next(),
+            Some(0x11_22_33)
+        );
+        assert_eq!(
+            parse_ppm_bytes(b"P6\n1 1\n255\n#\n ")
+                .unwrap()
+                .pixels()
+                .next(),
+            Some(0x23_0a_20)
+        );
+        assert_eq!(
+            parse_ppm_bytes(b"P6\n1 1\n15\n\x10\x00\x00"),
+            Err(PpmError::InvalidColor)
+        );
+        assert_eq!(
+            parse_ppm_bytes(b"P6\n1 1\n255\n\x11\x22"),
+            Err(PpmError::TruncatedPixels)
+        );
+        assert_eq!(
+            parse_ppm_bytes(b"P6\n1 1\n255\n\x11\x22\x33\x44"),
+            Err(PpmError::ExtraPixels)
+        );
     }
 
     #[test]

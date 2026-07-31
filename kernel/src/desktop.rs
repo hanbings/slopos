@@ -12,9 +12,9 @@ use slopos_shell::{
     NiriShellConfig, PpmImage, ResizeFilter, ResizeMode, ResolvedWaybarStyle, Shadow, ShadowColor,
     SwwwCommand, SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig,
     WaybarStyle, WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout,
-    parse_niri_shell_config, parse_ppm, parse_swww_command, parse_swww_environment,
-    parse_waybar_config, parse_waybar_style, resize_filter_sample, transition_eased_progress,
-    transition_pixel_with_options,
+    parse_niri_shell_config, parse_ppm, parse_ppm_bytes, parse_swww_command,
+    parse_swww_environment, parse_waybar_config, parse_waybar_style, resize_filter_sample,
+    transition_eased_progress, transition_pixel_with_options,
 };
 
 const WINDOW_COUNT: usize = 3;
@@ -951,7 +951,7 @@ impl Desktop {
     ) -> (bool, bool) {
         match update {
             crate::wallpaper_file::WallpaperFileUpdate::Ready(source) => {
-                let image = parse_ppm(source.image)
+                let image = parse_ppm_bytes(source.image)
                     .unwrap_or_else(|_| crate::fatal("published swww VFS PPM became invalid"));
                 let request = ImgRequest {
                     path: source.request_path,
@@ -962,13 +962,14 @@ impl Desktop {
                     Ok(()) => {
                         self.set_response("SWWW VFS IMAGE APPLIED");
                         serialln(format_args!(
-                            "SLOPOS-SWWW: image={} resolved={} source=vfs output={} transition={} step={} fps={}",
+                            "SLOPOS-SWWW: image={} resolved={} source=vfs output={} transition={} step={} fps={} format={}",
                             source.request_path,
                             source.resolved_path,
                             source.output.unwrap_or("*"),
                             self.wallpaper.transition().kind.name(),
                             self.wallpaper.transition().step,
-                            self.wallpaper.transition().fps
+                            self.wallpaper.transition().fps,
+                            source.format.name()
                         ));
                         self.log_wallpaper_geometry("vfs");
                         (self.wallpaper.transition_active(), true)
@@ -3497,8 +3498,7 @@ const fn wallpaper_file_error_response(
         crate::wallpaper_file::WallpaperFileError::InvalidPath => "SWWW VFS IMAGE PATH IS INVALID",
         crate::wallpaper_file::WallpaperFileError::NotFound => "SWWW VFS IMAGE NOT FOUND",
         crate::wallpaper_file::WallpaperFileError::FileTooLarge => "SWWW VFS IMAGE EXCEEDS 8K",
-        crate::wallpaper_file::WallpaperFileError::InvalidUtf8 => "SWWW VFS IMAGE IS NOT ASCII P3",
-        crate::wallpaper_file::WallpaperFileError::InvalidPpm => "SWWW VFS IMAGE P3 IS INVALID",
+        crate::wallpaper_file::WallpaperFileError::InvalidPpm => "SWWW VFS IMAGE PNM IS INVALID",
     }
 }
 
@@ -3509,7 +3509,6 @@ const fn wallpaper_file_error_name(
         crate::wallpaper_file::WallpaperFileError::InvalidPath => "invalid-path",
         crate::wallpaper_file::WallpaperFileError::NotFound => "not-found",
         crate::wallpaper_file::WallpaperFileError::FileTooLarge => "file-size",
-        crate::wallpaper_file::WallpaperFileError::InvalidUtf8 => "invalid-utf8",
         crate::wallpaper_file::WallpaperFileError::InvalidPpm => "invalid-ppm",
     }
 }
