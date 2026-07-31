@@ -562,6 +562,24 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         true
     }
 
+    pub fn focus_column_first(&mut self) -> bool {
+        if self.column_count == 0 || self.focused_column == 0 {
+            return false;
+        }
+        self.focused_column = 0;
+        self.ensure_focused_visible();
+        true
+    }
+
+    pub fn focus_column_last(&mut self) -> bool {
+        if self.column_count == 0 || self.focused_column + 1 == self.column_count {
+            return false;
+        }
+        self.focused_column = self.column_count - 1;
+        self.ensure_focused_visible();
+        true
+    }
+
     pub fn move_column_left(&mut self) -> bool {
         if self.focused_column == 0 || self.column_count == 0 {
             return false;
@@ -580,6 +598,36 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         self.columns
             .swap(self.focused_column, self.focused_column + 1);
         self.focused_column += 1;
+        self.ensure_focused_visible();
+        true
+    }
+
+    pub fn move_column_to_first(&mut self) -> bool {
+        if self.column_count == 0 || self.focused_column == 0 {
+            return false;
+        }
+        let source = self.focused_column;
+        let column = self.columns[source];
+        for index in (1..=source).rev() {
+            self.columns[index] = self.columns[index - 1];
+        }
+        self.columns[0] = column;
+        self.focused_column = 0;
+        self.ensure_focused_visible();
+        true
+    }
+
+    pub fn move_column_to_last(&mut self) -> bool {
+        if self.column_count == 0 || self.focused_column + 1 == self.column_count {
+            return false;
+        }
+        let source = self.focused_column;
+        let column = self.columns[source];
+        for index in source..self.column_count - 1 {
+            self.columns[index] = self.columns[index + 1];
+        }
+        self.columns[self.column_count - 1] = column;
+        self.focused_column = self.column_count - 1;
         self.ensure_focused_visible();
         true
     }
@@ -1862,6 +1910,39 @@ mod tests {
         assert_eq!(first_strip_x, first_after.x + layout.view_offset());
         assert!(second.x > first.x);
         assert_eq!(layout.focused_window(), Some(20));
+    }
+
+    #[test]
+    fn focuses_and_moves_columns_to_strip_boundaries() {
+        let mut layout = ScrollLayout::<4, 2>::new(1000, 700, 30, LayoutConfig::default());
+        layout.open_window(10).unwrap();
+        layout.open_window(20).unwrap();
+        layout.open_window(30).unwrap();
+        layout.consume_window(40).unwrap();
+
+        assert!(layout.focus_column_first());
+        assert_eq!(layout.focused_window(), Some(10));
+        assert!(!layout.focus_column_first());
+        assert!(layout.focus_column_last());
+        assert_eq!(layout.focused_window(), Some(40));
+        assert!(!layout.focus_column_last());
+
+        assert!(layout.move_column_to_first());
+        assert_eq!(layout.focused_window(), Some(40));
+        assert_eq!(layout.tile_rect(30).unwrap().x + layout.view_offset(), 16);
+        assert_eq!(
+            layout.tile_rect(40).unwrap().x,
+            layout.tile_rect(30).unwrap().x
+        );
+        assert_eq!(layout.tile_rect(10).unwrap().x + layout.view_offset(), 508);
+        assert!(layout.move_column_to_last());
+        assert_eq!(layout.focused_window(), Some(40));
+        assert!(layout.tile_rect(30).unwrap().x > layout.tile_rect(20).unwrap().x);
+        assert_eq!(
+            layout.tile_rect(40).unwrap().x,
+            layout.tile_rect(30).unwrap().x
+        );
+        assert!(!layout.move_column_to_last());
     }
 
     #[test]

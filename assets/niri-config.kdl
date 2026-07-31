@@ -7,8 +7,12 @@ workspace "config" {
 binds {
     Mod+Left { focus-column-left; }
     Mod+Right { focus-column-right; }
+    Mod+Home { focus-column-first; }
+    Mod+End { focus-column-last; }
     Mod+Shift+Left { move-column-left; }
     Mod+Shift+Right { move-column-right; }
+    Mod+Ctrl+Home { move-column-to-first; }
+    Mod+Ctrl+End { move-column-to-last; }
     Mod+Up { focus-workspace-up; }
     Mod+Down { focus-workspace-down; }
     Mod+Shift+Up { move-column-to-workspace-up; }

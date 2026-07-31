@@ -39,6 +39,8 @@ pub enum BindingKey {
     Down,
     PageUp,
     PageDown,
+    Home,
+    End,
     Return,
     Tab,
     Escape,
@@ -57,10 +59,14 @@ pub enum WorkspaceReference<'a> {
 pub enum NiriAction<'a> {
     FocusColumnLeft,
     FocusColumnRight,
+    FocusColumnFirst,
+    FocusColumnLast,
     FocusWindowUp,
     FocusWindowDown,
     MoveColumnLeft,
     MoveColumnRight,
+    MoveColumnToFirst,
+    MoveColumnToLast,
     MoveWindowUp,
     MoveWindowDown,
     FocusWorkspaceUp,
@@ -508,10 +514,14 @@ impl<'a> ShellConfigParser<'a> {
         Ok(match value {
             "focus-column-left" => NiriAction::FocusColumnLeft,
             "focus-column-right" => NiriAction::FocusColumnRight,
+            "focus-column-first" => NiriAction::FocusColumnFirst,
+            "focus-column-last" => NiriAction::FocusColumnLast,
             "focus-window-up" => NiriAction::FocusWindowUp,
             "focus-window-down" => NiriAction::FocusWindowDown,
             "move-column-left" => NiriAction::MoveColumnLeft,
             "move-column-right" => NiriAction::MoveColumnRight,
+            "move-column-to-first" => NiriAction::MoveColumnToFirst,
+            "move-column-to-last" => NiriAction::MoveColumnToLast,
             "move-window-up" => NiriAction::MoveWindowUp,
             "move-window-down" => NiriAction::MoveWindowDown,
             "focus-workspace-up" => NiriAction::FocusWorkspaceUp,
@@ -688,6 +698,8 @@ fn parse_binding_key(value: &str) -> Result<BindingKey, NiriConfigError> {
         "Down" => Ok(BindingKey::Down),
         "PageUp" | "Page_Up" => Ok(BindingKey::PageUp),
         "PageDown" | "Page_Down" => Ok(BindingKey::PageDown),
+        "Home" => Ok(BindingKey::Home),
+        "End" => Ok(BindingKey::End),
         "Return" => Ok(BindingKey::Return),
         "Tab" => Ok(BindingKey::Tab),
         "Escape" => Ok(BindingKey::Escape),
@@ -1380,6 +1392,20 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         self.layouts[self.active].focus_column_right()
     }
 
+    pub fn focus_column_first(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
+        self.layouts[self.active].focus_column_first()
+    }
+
+    pub fn focus_column_last(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
+        self.layouts[self.active].focus_column_last()
+    }
+
     pub fn focus_window_up(&mut self) -> bool {
         if self.focused_window_is_floating() {
             return self.floating[self.active].focus_direction(FloatingDirection::Up);
@@ -1406,6 +1432,20 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             return self.floating[self.active].move_focused(FLOATING_MOVE_STEP, 0);
         }
         self.layouts[self.active].move_column_right()
+    }
+
+    pub fn move_column_to_first(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
+        self.layouts[self.active].move_column_to_first()
+    }
+
+    pub fn move_column_to_last(&mut self) -> bool {
+        if self.focused_window_is_floating() {
+            return false;
+        }
+        self.layouts[self.active].move_column_to_last()
     }
 
     pub fn move_window_up(&mut self) -> bool {
@@ -1865,8 +1905,12 @@ mod tests {
             workspace "config" { open-on-output "SLOPOS-1"; }
             binds {
                 Mod+Left { focus-column-left; }
+                Mod+Home { focus-column-first; }
+                Mod+End { focus-column-last; }
                 Mod+Shift+Left { move-column-left; }
                 Mod+Shift+Right { move-column-right; }
+                Mod+Ctrl+Home { move-column-to-first; }
+                Mod+Ctrl+End { move-column-to-last; }
                 Mod+Shift+Down repeat=false { move-column-to-workspace-down; }
                 Mod+1 { focus-workspace 1; }
                 Mod+Ctrl+2 { move-column-to-workspace 2; }
@@ -1927,12 +1971,24 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 43);
+        assert_eq!(config.bindings.len(), 47);
         assert_eq!(
             config
                 .bindings
                 .action(BindingModifiers::MOD, BindingKey::Left),
             Some(NiriAction::FocusColumnLeft)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::Home),
+            Some(NiriAction::FocusColumnFirst)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::End),
+            Some(NiriAction::FocusColumnLast)
         );
         assert_eq!(
             config.bindings.action(
@@ -1947,6 +2003,20 @@ mod tests {
                 BindingKey::Right
             ),
             Some(NiriAction::MoveColumnRight)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::Home
+            ),
+            Some(NiriAction::MoveColumnToFirst)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::End
+            ),
+            Some(NiriAction::MoveColumnToLast)
         );
         assert_eq!(
             config.bindings.action(

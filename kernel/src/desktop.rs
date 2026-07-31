@@ -1550,10 +1550,14 @@ impl Desktop {
         let changed = match action {
             NiriAction::FocusColumnLeft => self.workspaces.focus_column_left(),
             NiriAction::FocusColumnRight => self.workspaces.focus_column_right(),
+            NiriAction::FocusColumnFirst => self.workspaces.focus_column_first(),
+            NiriAction::FocusColumnLast => self.workspaces.focus_column_last(),
             NiriAction::FocusWindowUp => self.workspaces.focus_window_up(),
             NiriAction::FocusWindowDown => self.workspaces.focus_window_down(),
             NiriAction::MoveColumnLeft => self.workspaces.move_column_left(),
             NiriAction::MoveColumnRight => self.workspaces.move_column_right(),
+            NiriAction::MoveColumnToFirst => self.workspaces.move_column_to_first(),
+            NiriAction::MoveColumnToLast => self.workspaces.move_column_to_last(),
             NiriAction::MoveWindowUp => self.workspaces.move_window_up(),
             NiriAction::MoveWindowDown => self.workspaces.move_window_down(),
             NiriAction::FocusWorkspaceUp => self.workspaces.focus_workspace_up(),
@@ -1812,7 +1816,10 @@ impl Desktop {
         if changed
             && matches!(
                 action,
-                NiriAction::MoveColumnLeft | NiriAction::MoveColumnRight
+                NiriAction::MoveColumnLeft
+                    | NiriAction::MoveColumnRight
+                    | NiriAction::MoveColumnToFirst
+                    | NiriAction::MoveColumnToLast
             )
             && !self.workspaces.focused_window_is_floating()
             && let Some(window) = self.positioned_window(self.active)
@@ -2152,6 +2159,8 @@ const fn binding_key(key: Key) -> Option<BindingKey> {
         Key::Down => BindingKey::Down,
         Key::PageUp => BindingKey::PageUp,
         Key::PageDown => BindingKey::PageDown,
+        Key::Home => BindingKey::Home,
+        Key::End => BindingKey::End,
         Key::Enter => BindingKey::Return,
         Key::Tab => BindingKey::Tab,
         Key::Escape => BindingKey::Escape,
@@ -2176,10 +2185,14 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
     match action {
         NiriAction::FocusColumnLeft => "focus-column-left",
         NiriAction::FocusColumnRight => "focus-column-right",
+        NiriAction::FocusColumnFirst => "focus-column-first",
+        NiriAction::FocusColumnLast => "focus-column-last",
         NiriAction::FocusWindowUp => "focus-window-up",
         NiriAction::FocusWindowDown => "focus-window-down",
         NiriAction::MoveColumnLeft => "move-column-left",
         NiriAction::MoveColumnRight => "move-column-right",
+        NiriAction::MoveColumnToFirst => "move-column-to-first",
+        NiriAction::MoveColumnToLast => "move-column-to-last",
         NiriAction::MoveWindowUp => "move-window-up",
         NiriAction::MoveWindowDown => "move-window-down",
         NiriAction::FocusWorkspaceUp => "focus-workspace-up",

@@ -106,6 +106,18 @@ monitor_type() {
     sleep 1
     echo "sendkey meta_l-left 50"
     sleep 1
+    echo "sendkey meta_l-end 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-focus-column-last.ppm"
+    echo "sendkey meta_l-ctrl-home 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-column-moved-first.ppm"
+    echo "sendkey meta_l-ctrl-end 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-column-moved-last.ppm"
+    echo "sendkey meta_l-home 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-focus-column-first.ppm"
     echo "sendkey meta_l-alt-v 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-explicit-floating.ppm"
@@ -440,6 +452,10 @@ grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=1 name=main x=268 y=56 width=488 height=340 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=1 name=main x=268 y=412 width=488 height=340 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-column-last changed=true workspace=1 name=main focused=1" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: column reordered kind=SYSTEM x=16 direction=move-column-to-first layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: column reordered kind=SYSTEM x=520 direction=move-column-to-last layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-column-first changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-window-to-floating changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window layer moved action=move-window-to-floating kind=TERMINAL layer=floating x=16 y=161 width=488 height=485 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-tiling changed=true workspace=1 name=main focused=1" "${serial_log}"
@@ -567,6 +583,10 @@ test -s "${repo_dir}/evidence/niri-window-workspace-target.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-returned.ppm"
 test -s "${repo_dir}/evidence/niri-column-workspace-target.ppm"
 test -s "${repo_dir}/evidence/niri-column-workspace-returned.ppm"
+test -s "${repo_dir}/evidence/niri-focus-column-last.ppm"
+test -s "${repo_dir}/evidence/niri-column-moved-first.ppm"
+test -s "${repo_dir}/evidence/niri-column-moved-last.ppm"
+test -s "${repo_dir}/evidence/niri-focus-column-first.ppm"
 test -s "${repo_dir}/evidence/niri-explicit-floating.ppm"
 test -s "${repo_dir}/evidence/niri-explicit-focus-tiling.ppm"
 test -s "${repo_dir}/evidence/niri-explicit-focus-floating.ppm"
@@ -625,6 +645,14 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-column-workspace-target.png"
     pnmtopng "${repo_dir}/evidence/niri-column-workspace-returned.ppm" \
         >"${repo_dir}/evidence/niri-column-workspace-returned.png"
+    pnmtopng "${repo_dir}/evidence/niri-focus-column-last.ppm" \
+        >"${repo_dir}/evidence/niri-focus-column-last.png"
+    pnmtopng "${repo_dir}/evidence/niri-column-moved-first.ppm" \
+        >"${repo_dir}/evidence/niri-column-moved-first.png"
+    pnmtopng "${repo_dir}/evidence/niri-column-moved-last.ppm" \
+        >"${repo_dir}/evidence/niri-column-moved-last.png"
+    pnmtopng "${repo_dir}/evidence/niri-focus-column-first.ppm" \
+        >"${repo_dir}/evidence/niri-focus-column-first.png"
     pnmtopng "${repo_dir}/evidence/niri-explicit-floating.ppm" \
         >"${repo_dir}/evidence/niri-explicit-floating.png"
     pnmtopng "${repo_dir}/evidence/niri-explicit-focus-tiling.ppm" \
