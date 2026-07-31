@@ -70,6 +70,9 @@ pub enum NiriAction<'a> {
     MoveColumnToWorkspaceUp,
     MoveColumnToWorkspaceDown,
     MoveColumnToWorkspace(WorkspaceReference<'a>),
+    MoveWindowToWorkspaceUp,
+    MoveWindowToWorkspaceDown,
+    MoveWindowToWorkspace(WorkspaceReference<'a>),
     ConsumeWindowIntoColumn,
     ExpelWindowFromColumn,
     ConsumeOrExpelWindowLeft,
@@ -293,7 +296,8 @@ impl NiriShellConfig<'_> {
         {
             let reference = match binding.action {
                 NiriAction::FocusWorkspace(reference)
-                | NiriAction::MoveColumnToWorkspace(reference) => reference,
+                | NiriAction::MoveColumnToWorkspace(reference)
+                | NiriAction::MoveWindowToWorkspace(reference) => reference,
                 _ => continue,
             };
             if let WorkspaceReference::Name(name) = reference
@@ -518,6 +522,11 @@ impl<'a> ShellConfigParser<'a> {
             "move-column-to-workspace-down" => NiriAction::MoveColumnToWorkspaceDown,
             "move-column-to-workspace" => {
                 NiriAction::MoveColumnToWorkspace(self.parse_workspace_reference()?)
+            }
+            "move-window-to-workspace-up" => NiriAction::MoveWindowToWorkspaceUp,
+            "move-window-to-workspace-down" => NiriAction::MoveWindowToWorkspaceDown,
+            "move-window-to-workspace" => {
+                NiriAction::MoveWindowToWorkspace(self.parse_workspace_reference()?)
             }
             "consume-window-into-column" => NiriAction::ConsumeWindowIntoColumn,
             "expel-window-from-column" => NiriAction::ExpelWindowFromColumn,
@@ -1171,6 +1180,21 @@ fn resolve_size_change(change: ColumnWidthChange, current: u16, available: u16, 
     }
 }
 
+fn distinct_pair_mut<T, const N: usize>(
+    values: &mut [T; N],
+    first: usize,
+    second: usize,
+) -> (&mut T, &mut T) {
+    debug_assert!(first != second);
+    if first < second {
+        let (left, right) = values.split_at_mut(second);
+        (&mut left[first], &mut right[0])
+    } else {
+        let (left, right) = values.split_at_mut(first);
+        (&mut right[0], &mut left[second])
+    }
+}
+
 pub struct WorkspaceSet<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize> {
     layouts: [ScrollLayout<COLUMNS, WINDOWS>; WORKSPACES],
     floating: [FloatingLayout<WINDOWS>; WORKSPACES],
@@ -1725,7 +1749,25 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
         Ok(changed)
     }
 
-    pub fn move_focused_to_workspace(&mut self, workspace: usize) -> Result<bool, WorkspaceError> {
+    pub fn move_focused_column_to_workspace(
+        &mut self,
+        workspace: usize,
+    ) -> Result<bool, WorkspaceError> {
+        self.move_focused_to_workspace(workspace, true)
+    }
+
+    pub fn move_focused_window_to_workspace(
+        &mut self,
+        workspace: usize,
+    ) -> Result<bool, WorkspaceError> {
+        self.move_focused_to_workspace(workspace, false)
+    }
+
+    fn move_focused_to_workspace(
+        &mut self,
+        workspace: usize,
+        whole_column: bool,
+    ) -> Result<bool, WorkspaceError> {
         if workspace >= self.count {
             return Err(WorkspaceError::InvalidWorkspace);
         }
@@ -1750,15 +1792,17 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             }
             self.floating_active[workspace] = true;
         } else {
-            let Some(window) = self.layouts[self.active].focused_window() else {
+            let (source, destination) =
+                distinct_pair_mut(&mut self.layouts, self.active, workspace);
+            let moved = if whole_column {
+                source.move_focused_column_to(destination)
+            } else {
+                source.move_focused_window_to(destination)
+            }
+            .map_err(WorkspaceError::Layout)?;
+            if !moved {
                 return Ok(false);
-            };
-            self.layouts[workspace]
-                .open_window(window)
-                .map_err(WorkspaceError::Layout)?;
-            self.layouts[self.active]
-                .close_window(window)
-                .map_err(WorkspaceError::Layout)?;
+            }
             self.floating_active[workspace] = false;
         }
         self.previous = self.active;
@@ -1828,6 +1872,10 @@ mod tests {
                 Mod+Ctrl+2 { move-column-to-workspace 2; }
                 Mod+Alt+C { focus-workspace "config"; }
                 Mod+Ctrl+Alt+M { move-column-to-workspace "main"; }
+                Mod+Alt+Up { move-window-to-workspace-up; }
+                Mod+Alt+Down { move-window-to-workspace-down; }
+                Mod+Ctrl+Shift+2 { move-window-to-workspace 2; }
+                Mod+Shift+Alt+M { move-window-to-workspace "main"; }
                 Mod+Tab { focus-workspace-previous; }
                 Mod+K { focus-window-up; }
                 Mod+J { focus-window-down; }
@@ -1879,7 +1927,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 39);
+        assert_eq!(config.bindings.len(), 43);
         assert_eq!(
             config
                 .bindings
@@ -1906,6 +1954,42 @@ mod tests {
                 BindingKey::Down
             ),
             Some(NiriAction::MoveColumnToWorkspaceDown)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::ALT),
+                BindingKey::Up
+            ),
+            Some(NiriAction::MoveWindowToWorkspaceUp)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::ALT),
+                BindingKey::Down
+            ),
+            Some(NiriAction::MoveWindowToWorkspaceDown)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD
+                    .with(BindingModifiers::CTRL)
+                    .with(BindingModifiers::SHIFT),
+                BindingKey::Character(b'2')
+            ),
+            Some(NiriAction::MoveWindowToWorkspace(
+                WorkspaceReference::Index(2)
+            ))
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD
+                    .with(BindingModifiers::SHIFT)
+                    .with(BindingModifiers::ALT),
+                BindingKey::Character(b'M')
+            ),
+            Some(NiriAction::MoveWindowToWorkspace(WorkspaceReference::Name(
+                "main"
+            )))
         );
         assert_eq!(
             config
@@ -2207,6 +2291,7 @@ mod tests {
             r#"binds { Mod+1 { focus-workspace ""; } }"#,
             r#"binds { Mod+1 { focus-workspace "missing"; } } workspace "main""#,
             r#"binds { Mod+1 { move-column-to-workspace; } }"#,
+            r#"binds { Mod+1 { move-window-to-workspace "missing"; } } workspace "main""#,
         ] {
             assert_eq!(
                 parse_niri_shell_config(input),
@@ -2265,7 +2350,7 @@ mod tests {
         assert!(workspaces.reset_focused_window_height());
         assert_eq!(workspaces.tile_rect(1).unwrap().height, 440);
 
-        assert!(workspaces.move_focused_to_workspace(1).unwrap());
+        assert!(workspaces.move_focused_column_to_workspace(1).unwrap());
         assert_eq!(workspaces.active(), 1);
         assert!(workspaces.focused_window_is_floating());
         assert!(workspaces.window_is_floating(1));
@@ -2309,7 +2394,7 @@ mod tests {
         );
         assert_eq!(workspaces.tile_rect(10).unwrap().width, 574);
         assert_eq!(workspaces.focused_window(), Some(10));
-        assert!(workspaces.move_focused_to_workspace(1).unwrap());
+        assert!(workspaces.move_focused_column_to_workspace(1).unwrap());
         assert_eq!(workspaces.active(), 1);
         assert_eq!(workspaces.previous(), 0);
         assert_eq!(workspaces.focused_window(), Some(10));
@@ -2329,15 +2414,50 @@ mod tests {
         assert_eq!(workspaces.focused_window(), None);
 
         workspaces.focus_workspace(1).unwrap();
-        assert!(workspaces.move_focused_to_workspace(2).unwrap());
+        assert!(workspaces.move_focused_column_to_workspace(2).unwrap());
         assert!(workspaces.normalize_dynamic(2).unwrap());
         assert_eq!(workspaces.len(), 4);
         assert_eq!(workspaces.active(), 2);
         assert!(workspaces.workspace_is_empty(3).unwrap());
-        assert!(workspaces.move_focused_to_workspace(1).unwrap());
+        assert!(workspaces.move_focused_column_to_workspace(1).unwrap());
         assert!(workspaces.normalize_dynamic(2).unwrap());
         assert_eq!(workspaces.len(), 3);
         assert_eq!(workspaces.active(), 1);
         assert!(workspaces.workspace_is_empty(2).unwrap());
+    }
+
+    #[test]
+    fn distinguishes_window_and_column_workspace_transfers() {
+        let mut workspaces =
+            WorkspaceSet::<3, 3, 3>::new(2, 1000, 700, 40, LayoutConfig::default()).unwrap();
+        workspaces.open_window(0, 10).unwrap();
+        workspaces.open_window(0, 20).unwrap();
+        workspaces.focus_window(10).unwrap();
+        assert!(workspaces.consume_window_into_column());
+        assert_eq!(workspaces.focused_window(), Some(20));
+
+        assert!(workspaces.move_focused_window_to_workspace(1).unwrap());
+        assert_eq!(workspaces.active(), 1);
+        assert_eq!(workspaces.focused_window(), Some(20));
+        assert!(workspaces.focus_workspace_previous());
+        assert_eq!(workspaces.focused_window(), Some(10));
+        assert!(workspaces.tile_rect(20).is_err());
+
+        assert!(workspaces.focus_workspace_previous());
+        assert!(workspaces.move_focused_window_to_workspace(0).unwrap());
+        assert_eq!(workspaces.active(), 0);
+        assert!(workspaces.focus_column_left());
+        assert!(workspaces.consume_window_into_column());
+        assert_eq!(workspaces.focused_window(), Some(20));
+
+        assert!(workspaces.move_focused_column_to_workspace(1).unwrap());
+        assert_eq!(workspaces.active(), 1);
+        assert_eq!(workspaces.focused_window(), Some(20));
+        assert_eq!(
+            workspaces.tile_rect(10).unwrap().x,
+            workspaces.tile_rect(20).unwrap().x
+        );
+        assert!(workspaces.focus_workspace_previous());
+        assert!(workspaces.workspace_is_empty(0).unwrap());
     }
 }

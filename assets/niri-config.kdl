@@ -24,6 +24,10 @@ binds {
     Mod+Tab { focus-workspace-previous; }
     Mod+Ctrl+Alt+M { move-column-to-workspace "main"; }
     Mod+Ctrl+Alt+C { move-column-to-workspace "config"; }
+    Mod+Alt+Up { move-window-to-workspace-up; }
+    Mod+Alt+Down { move-window-to-workspace-down; }
+    Mod+Ctrl+Shift+2 { move-window-to-workspace 2; }
+    Mod+Shift+Alt+M { move-window-to-workspace "main"; }
     Mod+K { focus-window-up; }
     Mod+J { focus-window-down; }
     Mod+Ctrl+K { move-window-up; }

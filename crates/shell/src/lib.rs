@@ -584,6 +584,78 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         true
     }
 
+    pub fn move_focused_column_to(&mut self, destination: &mut Self) -> Result<bool, LayoutError> {
+        if self.column_count == 0 {
+            return Ok(false);
+        }
+        if destination.column_count == COLUMNS {
+            return Err(LayoutError::ColumnCapacity);
+        }
+        let source_index = self.focused_column;
+        let column = self.columns[source_index];
+        for window in &column.windows[..column.window_count] {
+            destination.reject_duplicate(*window)?;
+        }
+
+        let destination_index = if destination.column_count == 0 {
+            0
+        } else {
+            destination.focused_column + 1
+        };
+        for index in (destination_index..destination.column_count).rev() {
+            destination.columns[index + 1] = destination.columns[index];
+        }
+        destination.columns[destination_index] = column;
+        destination.column_count += 1;
+        destination.focused_column = destination_index;
+        destination.ensure_focused_visible();
+
+        for index in source_index..self.column_count - 1 {
+            self.columns[index] = self.columns[index + 1];
+        }
+        self.column_count -= 1;
+        self.columns[self.column_count] = Column::empty();
+        self.focused_column = source_index.min(self.column_count.saturating_sub(1));
+        self.ensure_focused_visible();
+        Ok(true)
+    }
+
+    pub fn move_focused_window_to(&mut self, destination: &mut Self) -> Result<bool, LayoutError> {
+        if self.column_count == 0 {
+            return Ok(false);
+        }
+        if destination.column_count == COLUMNS {
+            return Err(LayoutError::ColumnCapacity);
+        }
+        let source = self.columns[self.focused_column];
+        let window = source.windows[source.focused_window];
+        destination.reject_duplicate(window)?;
+
+        let mut column = Column::empty();
+        column.windows[0] = window;
+        column.window_count = 1;
+        column.width = source.width;
+        column.maximized = source.maximized;
+        column.maximized_to_edges = source.maximized_to_edges;
+        column.display = destination.config.default_column_display;
+        let destination_index = if destination.column_count == 0 {
+            0
+        } else {
+            destination.focused_column + 1
+        };
+        for index in (destination_index..destination.column_count).rev() {
+            destination.columns[index + 1] = destination.columns[index];
+        }
+        destination.columns[destination_index] = column;
+        destination.column_count += 1;
+        destination.focused_column = destination_index;
+        destination.ensure_focused_visible();
+
+        self.close_window(window)
+            .expect("focused source window remains present until transfer");
+        Ok(true)
+    }
+
     pub fn focus_window_up(&mut self) -> bool {
         let column = &mut self.columns[self.focused_column];
         if column.window_count == 0 || column.focused_window == 0 {
@@ -2200,5 +2272,53 @@ mod tests {
         assert_eq!(layout.focused_window(), Some(10));
         assert_eq!(layout.tile_rect(10).unwrap().x, 16);
         assert_eq!(layout.tile_rect(20).unwrap().x, 508);
+    }
+
+    #[test]
+    fn transfers_a_whole_column_or_only_its_focused_window() {
+        let mut source = ScrollLayout::<3, 3>::new(1000, 700, 30, LayoutConfig::default());
+        let mut destination = ScrollLayout::<3, 3>::new(1000, 700, 30, LayoutConfig::default());
+        source.open_window(10).unwrap();
+        source.consume_window(11).unwrap();
+        assert!(
+            source
+                .change_focused_column_width(ColumnWidthChange::AdjustFixed(80))
+                .unwrap()
+        );
+        destination.open_window(20).unwrap();
+
+        assert!(source.move_focused_column_to(&mut destination).unwrap());
+        assert!(source.is_empty());
+        assert_eq!(destination.focused_window(), Some(11));
+        assert_eq!(
+            destination.tile_rect(10).unwrap().x + destination.view_offset(),
+            508
+        );
+        assert_eq!(
+            destination.tile_rect(11).unwrap().x + destination.view_offset(),
+            508
+        );
+        assert_eq!(destination.tile_rect(10).unwrap().width, 556);
+
+        assert!(destination.move_focused_window_to(&mut source).unwrap());
+        assert_eq!(source.focused_window(), Some(11));
+        assert_eq!(source.tile_rect(11).unwrap().width, 556);
+        assert_eq!(destination.focused_window(), Some(10));
+        assert!(destination.tile_rect(11).is_err());
+        assert_eq!(
+            destination.tile_rect(10).unwrap().x + destination.view_offset(),
+            508
+        );
+
+        let mut full = ScrollLayout::<3, 3>::new(1000, 700, 30, LayoutConfig::default());
+        full.open_window(30).unwrap();
+        full.open_window(31).unwrap();
+        full.open_window(32).unwrap();
+        assert_eq!(
+            destination.move_focused_column_to(&mut full),
+            Err(LayoutError::ColumnCapacity)
+        );
+        assert_eq!(destination.focused_window(), Some(10));
+        assert_eq!(full.focused_window(), Some(32));
     }
 }

@@ -1570,7 +1570,7 @@ impl Desktop {
                 active > 0
                     && self
                         .workspaces
-                        .move_focused_to_workspace(active - 1)
+                        .move_focused_column_to_workspace(active - 1)
                         .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-up failed"))
             }
             NiriAction::MoveColumnToWorkspaceDown => {
@@ -1578,14 +1578,38 @@ impl Desktop {
                 active + 1 < self.workspaces.len()
                     && self
                         .workspaces
-                        .move_focused_to_workspace(active + 1)
+                        .move_focused_column_to_workspace(active + 1)
                         .unwrap_or_else(|_| crate::fatal("niri move-to-workspace-down failed"))
             }
             NiriAction::MoveColumnToWorkspace(reference) => {
                 let workspace = self.resolve_workspace_reference(reference);
                 self.workspaces
-                    .move_focused_to_workspace(workspace)
+                    .move_focused_column_to_workspace(workspace)
                     .unwrap_or_else(|_| crate::fatal("niri move-to-workspace failed"))
+            }
+            NiriAction::MoveWindowToWorkspaceUp => {
+                let active = self.workspaces.active();
+                active > 0
+                    && self
+                        .workspaces
+                        .move_focused_window_to_workspace(active - 1)
+                        .unwrap_or_else(|_| crate::fatal("niri move-window-to-workspace-up failed"))
+            }
+            NiriAction::MoveWindowToWorkspaceDown => {
+                let active = self.workspaces.active();
+                active + 1 < self.workspaces.len()
+                    && self
+                        .workspaces
+                        .move_focused_window_to_workspace(active + 1)
+                        .unwrap_or_else(|_| {
+                            crate::fatal("niri move-window-to-workspace-down failed")
+                        })
+            }
+            NiriAction::MoveWindowToWorkspace(reference) => {
+                let workspace = self.resolve_workspace_reference(reference);
+                self.workspaces
+                    .move_focused_window_to_workspace(workspace)
+                    .unwrap_or_else(|_| crate::fatal("niri move-window-to-workspace failed"))
             }
             NiriAction::ConsumeWindowIntoColumn => self.workspaces.consume_window_into_column(),
             NiriAction::ExpelWindowFromColumn => self.workspaces.expel_window_from_column(),
@@ -1645,11 +1669,63 @@ impl Desktop {
                 NiriAction::MoveColumnToWorkspaceUp
                     | NiriAction::MoveColumnToWorkspaceDown
                     | NiriAction::MoveColumnToWorkspace(_)
+                    | NiriAction::MoveWindowToWorkspaceUp
+                    | NiriAction::MoveWindowToWorkspaceDown
+                    | NiriAction::MoveWindowToWorkspace(_)
             )
         {
-            self.normalize_dynamic_workspaces("move-column");
+            self.normalize_dynamic_workspaces(
+                if matches!(
+                    action,
+                    NiriAction::MoveWindowToWorkspaceUp
+                        | NiriAction::MoveWindowToWorkspaceDown
+                        | NiriAction::MoveWindowToWorkspace(_)
+                ) {
+                    "move-window"
+                } else {
+                    "move-column"
+                },
+            );
         }
         self.sync_focused_window();
+        if changed
+            && matches!(
+                action,
+                NiriAction::MoveColumnToWorkspaceUp
+                    | NiriAction::MoveColumnToWorkspaceDown
+                    | NiriAction::MoveColumnToWorkspace(_)
+                    | NiriAction::MoveWindowToWorkspaceUp
+                    | NiriAction::MoveWindowToWorkspaceDown
+                    | NiriAction::MoveWindowToWorkspace(_)
+            )
+        {
+            let scope = if matches!(
+                action,
+                NiriAction::MoveWindowToWorkspaceUp
+                    | NiriAction::MoveWindowToWorkspaceDown
+                    | NiriAction::MoveWindowToWorkspace(_)
+            ) {
+                "window"
+            } else {
+                "column"
+            };
+            for index in 0..self.windows.len() {
+                if let Some(window) = self.positioned_window(index) {
+                    serialln(format_args!(
+                        "SLOPOS-DESKTOP: workspace transfer scope={} action={} member={} workspace={} name={} x={} y={} width={} height={} layout=niri",
+                        scope,
+                        action_name(action),
+                        title(window.kind),
+                        self.workspaces.active() + 1,
+                        self.active_workspace_name(),
+                        window.x,
+                        window.y,
+                        window.width,
+                        window.height
+                    ));
+                }
+            }
+        }
         if changed
             && matches!(
                 action,
@@ -1905,7 +1981,8 @@ impl Desktop {
         ));
         match action {
             NiriAction::FocusWorkspace(reference)
-            | NiriAction::MoveColumnToWorkspace(reference) => match reference {
+            | NiriAction::MoveColumnToWorkspace(reference)
+            | NiriAction::MoveWindowToWorkspace(reference) => match reference {
                 WorkspaceReference::Index(index) => serialln(format_args!(
                     "SLOPOS-NIRI: workspace target action={} kind=index value={}",
                     action_name(action),
@@ -2080,6 +2157,16 @@ const fn binding_key(key: Key) -> Option<BindingKey> {
         Key::Escape => BindingKey::Escape,
         Key::Character(b'-' | b'_') => BindingKey::Minus,
         Key::Character(b'=' | b'+') => BindingKey::Equal,
+        Key::Character(b'!') => BindingKey::Character(b'1'),
+        Key::Character(b'@') => BindingKey::Character(b'2'),
+        Key::Character(b'#') => BindingKey::Character(b'3'),
+        Key::Character(b'$') => BindingKey::Character(b'4'),
+        Key::Character(b'%') => BindingKey::Character(b'5'),
+        Key::Character(b'^') => BindingKey::Character(b'6'),
+        Key::Character(b'&') => BindingKey::Character(b'7'),
+        Key::Character(b'*') => BindingKey::Character(b'8'),
+        Key::Character(b'(') => BindingKey::Character(b'9'),
+        Key::Character(b')') => BindingKey::Character(b'0'),
         Key::Character(character) => BindingKey::Character(character.to_ascii_uppercase()),
         Key::Backspace => return None,
     })
@@ -2102,6 +2189,9 @@ const fn action_name(action: NiriAction<'_>) -> &'static str {
         NiriAction::MoveColumnToWorkspaceUp => "move-column-to-workspace-up",
         NiriAction::MoveColumnToWorkspaceDown => "move-column-to-workspace-down",
         NiriAction::MoveColumnToWorkspace(_) => "move-column-to-workspace",
+        NiriAction::MoveWindowToWorkspaceUp => "move-window-to-workspace-up",
+        NiriAction::MoveWindowToWorkspaceDown => "move-window-to-workspace-down",
+        NiriAction::MoveWindowToWorkspace(_) => "move-window-to-workspace",
         NiriAction::ConsumeWindowIntoColumn => "consume-window-into-column",
         NiriAction::ExpelWindowFromColumn => "expel-window-from-column",
         NiriAction::ConsumeOrExpelWindowLeft => "consume-or-expel-window-left",

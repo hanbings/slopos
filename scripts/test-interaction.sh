@@ -82,6 +82,30 @@ monitor_type() {
     sleep 2
     monitor_type "swww img sunset.ppm --transition-type none"
     sleep 2
+    echo "sendkey meta_l-comma 50"
+    sleep 1
+    echo "sendkey meta_l-ctrl-shift-2 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-window-workspace-target.ppm"
+    echo "sendkey meta_l-alt-shift-m 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-window-workspace-returned.ppm"
+    echo "sendkey meta_l-left 50"
+    echo "sendkey meta_l-comma 50"
+    sleep 1
+    echo "sendkey meta_l-ctrl-2 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-column-workspace-target.ppm"
+    echo "sendkey meta_l-ctrl-alt-m 50"
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-column-workspace-returned.ppm"
+    sleep 1
+    echo "sendkey meta_l-ctrl-shift-2 50"
+    sleep 1
+    echo "sendkey meta_l-alt-shift-m 50"
+    sleep 1
+    echo "sendkey meta_l-left 50"
+    sleep 1
     echo "sendkey meta_l-alt-v 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-explicit-floating.ppm"
@@ -407,6 +431,15 @@ grep -Fq "SLOPOS-SWWW: daemon started" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: clear color=1A2B3C output=*" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=2 name=config x=520 y=56 width=488 height=340 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=2 name=config x=520 y=412 width=488 height=340 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=1 name=main x=268 y=56 width=488 height=340 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=1 name=main x=268 y=412 width=488 height=340 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-window-to-floating changed=true workspace=1 name=main focused=0" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: window layer moved action=move-window-to-floating kind=TERMINAL layer=floating x=16 y=161 width=488 height=485 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=focus-tiling changed=true workspace=1 name=main focused=1" "${serial_log}"
@@ -530,6 +563,10 @@ test -s "${repo_dir}/evidence/terminal-status.ppm"
 test -s "${repo_dir}/evidence/wallpaper-switched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-vfs-loaded.ppm"
 test -s "${repo_dir}/evidence/wallpaper-cleared.ppm"
+test -s "${repo_dir}/evidence/niri-window-workspace-target.ppm"
+test -s "${repo_dir}/evidence/niri-window-workspace-returned.ppm"
+test -s "${repo_dir}/evidence/niri-column-workspace-target.ppm"
+test -s "${repo_dir}/evidence/niri-column-workspace-returned.ppm"
 test -s "${repo_dir}/evidence/niri-explicit-floating.ppm"
 test -s "${repo_dir}/evidence/niri-explicit-focus-tiling.ppm"
 test -s "${repo_dir}/evidence/niri-explicit-focus-floating.ppm"
@@ -580,6 +617,14 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-vfs-loaded.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-cleared.ppm" \
         >"${repo_dir}/evidence/wallpaper-cleared.png"
+    pnmtopng "${repo_dir}/evidence/niri-window-workspace-target.ppm" \
+        >"${repo_dir}/evidence/niri-window-workspace-target.png"
+    pnmtopng "${repo_dir}/evidence/niri-window-workspace-returned.ppm" \
+        >"${repo_dir}/evidence/niri-window-workspace-returned.png"
+    pnmtopng "${repo_dir}/evidence/niri-column-workspace-target.ppm" \
+        >"${repo_dir}/evidence/niri-column-workspace-target.png"
+    pnmtopng "${repo_dir}/evidence/niri-column-workspace-returned.ppm" \
+        >"${repo_dir}/evidence/niri-column-workspace-returned.png"
     pnmtopng "${repo_dir}/evidence/niri-explicit-floating.ppm" \
         >"${repo_dir}/evidence/niri-explicit-floating.png"
     pnmtopng "${repo_dir}/evidence/niri-explicit-focus-tiling.ppm" \
