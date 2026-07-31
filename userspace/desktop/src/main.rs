@@ -9,12 +9,14 @@ use core::panic::PanicInfo;
 use slopos_desktop_protocol::{
     COMMIT_SIZE, CONFIG_HASH_OFFSET, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit,
     DesktopServiceEvent, EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WALLPAPER_AURORA,
-    config_hash_extend,
+    WAYLAND_SURFACE_HEADER_SIZE, WAYLAND_SURFACE_MAX_SIZE, WAYLAND_SURFACE_MAX_WIRE_SIZE,
+    WAYLAND_SURFACE_SYSCALL, WaylandSurfaceHeader, config_hash_extend,
 };
+use slopos_wayland::{CORE_GLOBALS, DISPLAY_OBJECT_ID, MessageBuilder, WireError};
 
 const USER_ENTRY: u64 = 0x4000_0000;
-const INITIAL_STACK_BASE: u64 = 0x4000_2000;
-const USER_STACK_TOP: u64 = 0x4000_3000;
+const INITIAL_STACK_BASE: u64 = 0x4000_3000;
+const USER_STACK_TOP: u64 = 0x4000_4000;
 const INITIAL_STACK_WORDS: usize = 27;
 const INITIAL_ARGC: u64 = 2;
 const INITIAL_ENVC: usize = 4;
@@ -75,6 +77,7 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
     let mut policy_generation = 0;
     let mut config_generation = 0;
     let mut announced = false;
+    let mut surface_submitted = false;
     loop {
         let commit = load_policy(policy_generation == 0);
         if syscall2(
@@ -87,6 +90,10 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
         }
         policy_generation =
             wait_for_event(EVENT_POLICY_APPLIED, policy_generation).unwrap_or_else(|| exit(9));
+        if !surface_submitted {
+            submit_wayland_surface();
+            surface_submitted = true;
+        }
         if !announced {
             let result = syscall3(
                 SYS_WRITE,
@@ -102,6 +109,156 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
         config_generation =
             wait_for_event(EVENT_CONFIG_APPLIED, config_generation).unwrap_or_else(|| exit(11));
     }
+}
+
+fn submit_wayland_surface() {
+    const WIDTH: usize = 32;
+    const HEIGHT: usize = 24;
+    const PIXEL_LENGTH: usize = WIDTH * HEIGHT * 4;
+    let mut envelope = [0u8; WAYLAND_SURFACE_MAX_SIZE];
+    let wire_length = build_surface_wire(
+        &mut envelope[WAYLAND_SURFACE_HEADER_SIZE
+            ..WAYLAND_SURFACE_HEADER_SIZE + WAYLAND_SURFACE_MAX_WIRE_SIZE],
+        WIDTH as i32,
+        HEIGHT as i32,
+        PIXEL_LENGTH as i32,
+    )
+    .unwrap_or_else(|| exit(13));
+    let pixel_start = WAYLAND_SURFACE_HEADER_SIZE + wire_length;
+    let pixel_end = pixel_start + PIXEL_LENGTH;
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let color: u32 = if x == 0 || y == 0 || x + 1 == WIDTH || y + 1 == HEIGHT {
+                0x0010_131f
+            } else if x == 15 || x == 16 || y == 11 || y == 12 {
+                0x00f8_f8f2
+            } else if y < HEIGHT / 2 && x < WIDTH / 2 {
+                0x0000_d4ff
+            } else if y < HEIGHT / 2 {
+                0x00ff_79c6
+            } else if x < WIDTH / 2 {
+                0x0050_fa7b
+            } else {
+                0x00f1_fa8c
+            };
+            let offset = pixel_start + (y * WIDTH + x) * 4;
+            envelope[offset..offset + 4].copy_from_slice(&color.to_le_bytes());
+        }
+    }
+    let header = WaylandSurfaceHeader::new(wire_length as u32, PIXEL_LENGTH as u32);
+    envelope[..WAYLAND_SURFACE_HEADER_SIZE].copy_from_slice(&header.encode());
+    if syscall2(
+        WAYLAND_SURFACE_SYSCALL,
+        envelope.as_ptr() as u64,
+        pixel_end as u64,
+    ) != 0
+    {
+        exit(14);
+    }
+}
+
+fn build_surface_wire(
+    wire: &mut [u8],
+    width: i32,
+    height: i32,
+    pixel_length: i32,
+) -> Option<usize> {
+    const REGISTRY: u32 = 2;
+    const COMPOSITOR: u32 = 3;
+    const SHM: u32 = 4;
+    const WM_BASE: u32 = 5;
+    const SURFACE: u32 = 6;
+    const POOL: u32 = 7;
+    const BUFFER: u32 = 8;
+    const XDG_SURFACE: u32 = 9;
+    const TOPLEVEL: u32 = 10;
+    const FRAME_CALLBACK: u32 = 11;
+
+    let mut cursor = 0;
+    append_message(wire, &mut cursor, DISPLAY_OBJECT_ID, 1, |message| {
+        message.object(REGISTRY)
+    })
+    .ok()?;
+    for (global, object) in [
+        (CORE_GLOBALS[0], COMPOSITOR),
+        (CORE_GLOBALS[1], SHM),
+        (CORE_GLOBALS[4], WM_BASE),
+    ] {
+        append_message(wire, &mut cursor, REGISTRY, 0, |message| {
+            message.uint(global.name)?;
+            message.string(global.interface.name())?;
+            message.uint(global.version)?;
+            message.object(object)
+        })
+        .ok()?;
+    }
+    append_message(wire, &mut cursor, COMPOSITOR, 0, |message| {
+        message.object(SURFACE)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, SHM, 0, |message| {
+        message.object(POOL)?;
+        message.int(pixel_length)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, POOL, 0, |message| {
+        message.object(BUFFER)?;
+        message.int(0)?;
+        message.int(width)?;
+        message.int(height)?;
+        message.int(width * 4)?;
+        message.uint(1)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, WM_BASE, 2, |message| {
+        message.object(XDG_SURFACE)?;
+        message.object(SURFACE)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, XDG_SURFACE, 1, |message| {
+        message.object(TOPLEVEL)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, TOPLEVEL, 2, |message| {
+        message.string("SlopOS Userspace")
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, TOPLEVEL, 3, |message| {
+        message.string("slopos-system")
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, SURFACE, 1, |message| {
+        message.object(BUFFER)?;
+        message.int(0)?;
+        message.int(0)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, SURFACE, 9, |message| {
+        message.int(0)?;
+        message.int(0)?;
+        message.int(width)?;
+        message.int(height)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, SURFACE, 3, |message| {
+        message.object(FRAME_CALLBACK)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, SURFACE, 6, |_| Ok(())).ok()?;
+    Some(cursor)
+}
+
+fn append_message(
+    bytes: &mut [u8],
+    cursor: &mut usize,
+    object_id: u32,
+    opcode: u16,
+    build: impl FnOnce(&mut MessageBuilder<'_>) -> Result<(), WireError>,
+) -> Result<(), WireError> {
+    let mut message = MessageBuilder::new(&mut bytes[*cursor..], object_id, opcode)?;
+    build(&mut message)?;
+    *cursor += message.finish()?.len();
+    Ok(())
 }
 
 fn load_policy(yield_after_open: bool) -> DesktopCommit {

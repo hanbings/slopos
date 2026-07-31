@@ -5,8 +5,8 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::{Context, Poll};
 use slopos_desktop_protocol::{
-    CAPABILITY_SWWW_POLICY, CAPABILITY_WAYBAR_PROVIDER, DesktopCommit, DesktopServiceEvent,
-    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, WALLPAPER_AURORA,
+    DesktopCommit, DesktopServiceEvent, EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED,
+    REQUIRED_CAPABILITIES, WALLPAPER_AURORA,
 };
 
 const DESKTOP_SERVICE_PID: u32 = 2;
@@ -56,7 +56,7 @@ pub fn submit(pid: u32, commit: DesktopCommit) -> Result<u64, DesktopServiceErro
     GENERATION.store(next_generation, Ordering::Release);
     crate::executor::wake_task(crate::executor::INPUT_TASK);
     crate::serial::serialln(format_args!(
-        "SLOPOS-DESKTOP-SERVICE: policy submitted pid={pid} generation={next_generation} protocol={} capabilities=waybar-provider/swww-policy cpu={} memory={} wallpaper=aurora config_hashes={:#x}/{:#x}",
+        "SLOPOS-DESKTOP-SERVICE: policy submitted pid={pid} generation={next_generation} protocol={} capabilities=waybar-provider/swww-policy/wayland-surface cpu={} memory={} wallpaper=aurora config_hashes={:#x}/{:#x}",
         commit.version,
         commit.cpu_usage,
         commit.memory_percentage,
@@ -84,7 +84,7 @@ pub fn latest_after(generation: u64) -> Option<DesktopServiceSnapshot> {
 
 pub fn snapshot_is_valid(snapshot: DesktopServiceSnapshot) -> bool {
     snapshot.owner_pid == DESKTOP_SERVICE_PID
-        && snapshot.capabilities == CAPABILITY_WAYBAR_PROVIDER | CAPABILITY_SWWW_POLICY
+        && snapshot.capabilities == REQUIRED_CAPABILITIES
         && snapshot.cpu_usage <= 100
         && snapshot.memory_percentage <= 100
         && snapshot.wallpaper == WALLPAPER_AURORA

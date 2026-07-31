@@ -79,6 +79,8 @@ pub struct Desktop {
     wallpaper_current_image: Option<RasterImage<'static>>,
     wallpaper_previous_image: Option<RasterImage<'static>>,
     wallpaper_generation: u64,
+    wayland_surface: Option<crate::wayland_service::WaylandSurfaceSnapshot>,
+    wayland_generation: u64,
     active: usize,
     pointer_x: i32,
     pointer_y: i32,
@@ -386,6 +388,8 @@ impl Desktop {
             wallpaper_current_image: None,
             wallpaper_previous_image: None,
             wallpaper_generation: 0,
+            wayland_surface: None,
+            wayland_generation: 0,
             active: 0,
             pointer_x: width / 2,
             pointer_y: height / 2,
@@ -442,6 +446,7 @@ impl Desktop {
                 self.config_generation,
                 self.service_generation,
                 self.wallpaper_generation,
+                self.wayland_generation,
             )
             .await
             {
@@ -465,6 +470,33 @@ impl Desktop {
                     crate::wallpaper_file::acknowledge(generation, applied);
                     serialln(format_args!(
                         "SLOPOS-SWWW-VFS: result acknowledged generation={generation} renderer=desktop active_image={applied}"
+                    ));
+                }
+                DesktopEvent::WaylandUpdate(snapshot) => {
+                    let expected_length = usize::try_from(snapshot.metadata.stride)
+                        .ok()
+                        .and_then(|stride| stride.checked_mul(snapshot.metadata.height as usize));
+                    if snapshot.owner_pid != 2
+                        || expected_length != Some(snapshot.pixels.len())
+                        || snapshot.metadata.format != 1
+                    {
+                        crate::fatal("published Wayland surface became invalid");
+                    }
+                    self.wayland_surface = Some(snapshot);
+                    self.wayland_generation = snapshot.generation;
+                    if let Some(window) = self.positioned_window(1) {
+                        self.render_wayland_surface(framebuffer, window);
+                    }
+                    crate::wayland_service::acknowledge(snapshot.generation);
+                    serialln(format_args!(
+                        "SLOPOS-WAYLAND-COMPOSITOR: surface rendered generation={} owner_pid={} app_id={} title=\"{}\" geometry={}x{} destination=system-window scale=3 buffer_format=xrgb8888 frame_callback={}",
+                        snapshot.generation,
+                        snapshot.owner_pid,
+                        snapshot.metadata.app_id.as_str(),
+                        snapshot.metadata.title.as_str(),
+                        snapshot.metadata.width,
+                        snapshot.metadata.height,
+                        snapshot.metadata.frame_callback
                     ));
                 }
                 DesktopEvent::Input(byte) => {
@@ -946,7 +978,7 @@ impl Desktop {
         }
         self.service_generation = snapshot.generation;
         serialln(format_args!(
-            "SLOPOS-DESKTOP-SERVICE: policy applied generation={} owner_pid={} capabilities=waybar-provider/swww-policy cpu={} memory={} wallpaper={} renderer=kernel-mechanism",
+            "SLOPOS-DESKTOP-SERVICE: policy applied generation={} owner_pid={} capabilities=waybar-provider/swww-policy/wayland-surface cpu={} memory={} wallpaper={} renderer=kernel-mechanism",
             snapshot.generation,
             snapshot.owner_pid,
             snapshot.cpu_usage,
@@ -1804,6 +1836,50 @@ impl Desktop {
         framebuffer.text(x, y + 132, "36% RESERVED DURING BOOT", MUTED, 1);
         framebuffer.text(x, y + 164, "TASKS", WHITE, 1);
         framebuffer.text(x + 84, y + 164, "PID 1/2 SERVICES", GREEN, 1);
+        self.render_wayland_surface(framebuffer, window);
+    }
+
+    fn render_wayland_surface(&self, framebuffer: &mut Framebuffer, window: Window) {
+        let Some(snapshot) = self.wayland_surface else {
+            return;
+        };
+        const SCALE: i32 = 3;
+        let width = snapshot.metadata.width as i32;
+        let height = snapshot.metadata.height as i32;
+        let destination_x = window.x + window.width - 16 - width * SCALE;
+        let destination_y = window.y + 63;
+        framebuffer.text(destination_x, window.y + 47, "PID 2 XDG", CYAN, 1);
+        framebuffer.rect(
+            destination_x - 2,
+            destination_y - 2,
+            width * SCALE + 4,
+            height * SCALE + 4,
+            CYAN,
+        );
+        for source_y in 0..height {
+            for source_x in 0..width {
+                let offset = usize::try_from(source_y)
+                    .ok()
+                    .and_then(|row| row.checked_mul(snapshot.metadata.stride as usize))
+                    .and_then(|row| {
+                        usize::try_from(source_x)
+                            .ok()
+                            .and_then(|column| column.checked_mul(4))
+                            .and_then(|column| row.checked_add(column))
+                    })
+                    .unwrap_or_else(|| crate::fatal("Wayland surface pixel offset overflowed"));
+                let pixel: [u8; 4] = snapshot.pixels[offset..offset + 4]
+                    .try_into()
+                    .unwrap_or_else(|_| crate::fatal("Wayland surface pixel was truncated"));
+                framebuffer.rect(
+                    destination_x + source_x * SCALE,
+                    destination_y + source_y * SCALE,
+                    SCALE,
+                    SCALE,
+                    u32::from_le_bytes(pixel) & 0x00ff_ffff,
+                );
+            }
+        }
     }
 
     fn render_config(&self, framebuffer: &mut Framebuffer, window: Window) {

@@ -47,6 +47,24 @@ sed -i 's/\r$//' \
     "${repo_dir}/evidence/capture-uefi-debugcon.log"
 
 test -s "${repo_dir}/evidence/desktop.ppm"
+
+ppm_pixel_hex() {
+    local x="$1"
+    local y="$2"
+    local offset=$((16 + 3 * (y * 1024 + x)))
+    dd if="${repo_dir}/evidence/desktop.ppm" bs=1 skip="${offset}" count=3 status=none \
+        | od -An -tx1 \
+        | tr -d ' \n'
+}
+
+if [[ "$(ppm_pixel_hex 900 123)" != "00d4ff" ]] \
+    || [[ "$(ppm_pixel_hex 948 123)" != "ff79c6" ]] \
+    || [[ "$(ppm_pixel_hex 900 159)" != "50fa7b" ]] \
+    || [[ "$(ppm_pixel_hex 948 159)" != "f1fa8c" ]]; then
+    echo "PID 2 Wayland surface pixels were not composited into the System window" >&2
+    exit 1
+fi
+
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${repo_dir}/evidence/desktop.ppm" >"${repo_dir}/evidence/desktop.png"
 fi

@@ -23,6 +23,7 @@ mod serial;
 mod timer;
 mod virtio;
 mod wallpaper_file;
+mod wayland_service;
 
 use core::arch::asm;
 use core::panic::PanicInfo;

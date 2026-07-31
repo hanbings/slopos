@@ -4,14 +4,29 @@
 
 pub const DESKTOP_COMMIT_SYSCALL: u64 = 0x534c_0001;
 pub const DESKTOP_WAIT_SYSCALL: u64 = 0x534c_0002;
+pub const WAYLAND_SURFACE_SYSCALL: u64 = 0x534c_0003;
 pub const DESKTOP_PROTOCOL_MAGIC: u64 = 0x534c_4f50_4445_534b;
 pub const DESKTOP_PROTOCOL_VERSION: u16 = 1;
+pub const WAYLAND_SURFACE_MAGIC: u64 = 0x534c_4f50_574c_5355;
+pub const WAYLAND_SURFACE_VERSION: u16 = 1;
 pub const CAPABILITY_WAYBAR_PROVIDER: u32 = 1 << 0;
 pub const CAPABILITY_SWWW_POLICY: u32 = 1 << 1;
-pub const REQUIRED_CAPABILITIES: u32 = CAPABILITY_WAYBAR_PROVIDER | CAPABILITY_SWWW_POLICY;
+pub const CAPABILITY_WAYLAND_SURFACE: u32 = 1 << 2;
+pub const REQUIRED_CAPABILITIES: u32 =
+    CAPABILITY_WAYBAR_PROVIDER | CAPABILITY_SWWW_POLICY | CAPABILITY_WAYLAND_SURFACE;
 pub const WALLPAPER_AURORA: u8 = 1;
 pub const COMMIT_SIZE: usize = 40;
 pub const EVENT_SIZE: usize = 32;
+pub const WAYLAND_SURFACE_HEADER_SIZE: usize = 32;
+pub const WAYLAND_SURFACE_MAX_WIRE_SIZE: usize = 768;
+pub const WAYLAND_SURFACE_MAX_PIXEL_SIZE: usize = 3_072;
+pub const WAYLAND_SURFACE_MAX_SIZE: usize =
+    WAYLAND_SURFACE_HEADER_SIZE + WAYLAND_SURFACE_MAX_WIRE_SIZE + WAYLAND_SURFACE_MAX_PIXEL_SIZE;
+/// Private bootstrap descriptor paired with the inline pixel snapshot.
+///
+/// The request stream itself uses normal Wayland framing. This value is not an
+/// operating-system file descriptor and must not be exposed as one to clients.
+pub const WAYLAND_INLINE_SHM_FD: i32 = 0x534c;
 pub const EVENT_POLICY_APPLIED: u16 = 1;
 pub const EVENT_CONFIG_APPLIED: u16 = 2;
 pub const CONFIG_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -251,6 +266,172 @@ impl DesktopServiceEvent {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WaylandSurfaceHeader {
+    pub magic: u64,
+    pub version: u16,
+    pub size: u16,
+    pub wire_length: u32,
+    pub pixel_length: u32,
+    pub file_descriptor: i32,
+    pub reserved: u64,
+}
+
+impl WaylandSurfaceHeader {
+    pub const fn new(wire_length: u32, pixel_length: u32) -> Self {
+        Self {
+            magic: WAYLAND_SURFACE_MAGIC,
+            version: WAYLAND_SURFACE_VERSION,
+            size: WAYLAND_SURFACE_HEADER_SIZE as u16,
+            wire_length,
+            pixel_length,
+            file_descriptor: WAYLAND_INLINE_SHM_FD,
+            reserved: 0,
+        }
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProtocolError> {
+        if bytes.len() != WAYLAND_SURFACE_HEADER_SIZE {
+            return Err(ProtocolError::InvalidSize);
+        }
+        let header = Self {
+            magic: read_u64(bytes, 0)?,
+            version: read_u16(bytes, 8)?,
+            size: read_u16(bytes, 10)?,
+            wire_length: read_u32(bytes, 12)?,
+            pixel_length: read_u32(bytes, 16)?,
+            file_descriptor: read_u32(bytes, 20)? as i32,
+            reserved: read_u64(bytes, 24)?,
+        };
+        header.validate()?;
+        Ok(header)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.magic != WAYLAND_SURFACE_MAGIC {
+            return Err(ProtocolError::InvalidMagic);
+        }
+        if self.version != WAYLAND_SURFACE_VERSION {
+            return Err(ProtocolError::InvalidVersion);
+        }
+        if usize::from(self.size) != WAYLAND_SURFACE_HEADER_SIZE {
+            return Err(ProtocolError::InvalidSize);
+        }
+        let wire_length =
+            usize::try_from(self.wire_length).map_err(|_| ProtocolError::InvalidSize)?;
+        let pixel_length =
+            usize::try_from(self.pixel_length).map_err(|_| ProtocolError::InvalidSize)?;
+        if wire_length == 0
+            || wire_length > WAYLAND_SURFACE_MAX_WIRE_SIZE
+            || wire_length % 4 != 0
+            || pixel_length == 0
+            || pixel_length > WAYLAND_SURFACE_MAX_PIXEL_SIZE
+            || pixel_length % 4 != 0
+        {
+            return Err(ProtocolError::InvalidSize);
+        }
+        if self.file_descriptor != WAYLAND_INLINE_SHM_FD {
+            return Err(ProtocolError::InvalidFileDescriptor);
+        }
+        if self.reserved != 0 {
+            return Err(ProtocolError::ReservedBits);
+        }
+        self.total_size()?;
+        Ok(())
+    }
+
+    pub fn total_size(&self) -> Result<usize, ProtocolError> {
+        let wire_length =
+            usize::try_from(self.wire_length).map_err(|_| ProtocolError::InvalidSize)?;
+        let pixel_length =
+            usize::try_from(self.pixel_length).map_err(|_| ProtocolError::InvalidSize)?;
+        WAYLAND_SURFACE_HEADER_SIZE
+            .checked_add(wire_length)
+            .and_then(|size| size.checked_add(pixel_length))
+            .filter(|size| *size <= WAYLAND_SURFACE_MAX_SIZE)
+            .ok_or(ProtocolError::InvalidSize)
+    }
+
+    pub fn encode(self) -> [u8; WAYLAND_SURFACE_HEADER_SIZE] {
+        let mut bytes = [0; WAYLAND_SURFACE_HEADER_SIZE];
+        bytes[0..8].copy_from_slice(&self.magic.to_le_bytes());
+        bytes[8..10].copy_from_slice(&self.version.to_le_bytes());
+        bytes[10..12].copy_from_slice(&self.size.to_le_bytes());
+        bytes[12..16].copy_from_slice(&self.wire_length.to_le_bytes());
+        bytes[16..20].copy_from_slice(&self.pixel_length.to_le_bytes());
+        bytes[20..24].copy_from_slice(&self.file_descriptor.to_le_bytes());
+        bytes[24..32].copy_from_slice(&self.reserved.to_le_bytes());
+        bytes
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WaylandSurfaceCommit<'a> {
+    pub header: WaylandSurfaceHeader,
+    pub wire: &'a [u8],
+    pub pixels: &'a [u8],
+}
+
+impl<'a> WaylandSurfaceCommit<'a> {
+    pub fn new(wire: &'a [u8], pixels: &'a [u8]) -> Result<Self, ProtocolError> {
+        let wire_length = u32::try_from(wire.len()).map_err(|_| ProtocolError::InvalidSize)?;
+        let pixel_length = u32::try_from(pixels.len()).map_err(|_| ProtocolError::InvalidSize)?;
+        let commit = Self {
+            header: WaylandSurfaceHeader::new(wire_length, pixel_length),
+            wire,
+            pixels,
+        };
+        commit.validate()?;
+        Ok(commit)
+    }
+
+    pub fn decode(bytes: &'a [u8]) -> Result<Self, ProtocolError> {
+        let header_bytes = bytes
+            .get(..WAYLAND_SURFACE_HEADER_SIZE)
+            .ok_or(ProtocolError::InvalidSize)?;
+        let header = WaylandSurfaceHeader::decode(header_bytes)?;
+        if bytes.len() != header.total_size()? {
+            return Err(ProtocolError::InvalidSize);
+        }
+        let wire_end = WAYLAND_SURFACE_HEADER_SIZE
+            .checked_add(header.wire_length as usize)
+            .ok_or(ProtocolError::InvalidSize)?;
+        let commit = Self {
+            header,
+            wire: bytes
+                .get(WAYLAND_SURFACE_HEADER_SIZE..wire_end)
+                .ok_or(ProtocolError::InvalidSize)?,
+            pixels: bytes.get(wire_end..).ok_or(ProtocolError::InvalidSize)?,
+        };
+        commit.validate()?;
+        Ok(commit)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.header.validate()?;
+        if self.wire.len() != self.header.wire_length as usize
+            || self.pixels.len() != self.header.pixel_length as usize
+        {
+            return Err(ProtocolError::InvalidSize);
+        }
+        Ok(())
+    }
+
+    pub fn encode(&self, destination: &mut [u8]) -> Result<usize, ProtocolError> {
+        self.validate()?;
+        let total_size = self.header.total_size()?;
+        if destination.len() < total_size {
+            return Err(ProtocolError::InvalidSize);
+        }
+        destination[..WAYLAND_SURFACE_HEADER_SIZE].copy_from_slice(&self.header.encode());
+        let wire_end = WAYLAND_SURFACE_HEADER_SIZE + self.wire.len();
+        destination[WAYLAND_SURFACE_HEADER_SIZE..wire_end].copy_from_slice(self.wire);
+        destination[wire_end..total_size].copy_from_slice(self.pixels);
+        Ok(total_size)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolError {
     InvalidMagic,
@@ -262,7 +443,38 @@ pub enum ProtocolError {
     InvalidWallpaper,
     InvalidEvent,
     InvalidGeneration,
+    InvalidFileDescriptor,
     ReservedBits,
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, ProtocolError> {
+    Ok(u16::from_le_bytes(
+        bytes
+            .get(offset..offset + 2)
+            .ok_or(ProtocolError::InvalidSize)?
+            .try_into()
+            .map_err(|_| ProtocolError::InvalidSize)?,
+    ))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, ProtocolError> {
+    Ok(u32::from_le_bytes(
+        bytes
+            .get(offset..offset + 4)
+            .ok_or(ProtocolError::InvalidSize)?
+            .try_into()
+            .map_err(|_| ProtocolError::InvalidSize)?,
+    ))
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, ProtocolError> {
+    Ok(u64::from_le_bytes(
+        bytes
+            .get(offset..offset + 8)
+            .ok_or(ProtocolError::InvalidSize)?
+            .try_into()
+            .map_err(|_| ProtocolError::InvalidSize)?,
+    ))
 }
 
 pub const fn config_hash(bytes: &[u8]) -> u64 {
@@ -281,6 +493,7 @@ pub const fn config_hash_extend(mut hash: u64, bytes: &[u8]) -> u64 {
 
 const _: () = assert!(core::mem::size_of::<DesktopCommit>() == COMMIT_SIZE);
 const _: () = assert!(core::mem::size_of::<DesktopServiceEvent>() == EVENT_SIZE);
+const _: () = assert!(core::mem::size_of::<WaylandSurfaceHeader>() == WAYLAND_SURFACE_HEADER_SIZE);
 
 #[cfg(test)]
 mod tests {
@@ -373,6 +586,58 @@ mod tests {
         assert_eq!(
             DesktopServiceEvent::decode(&event.encode()),
             Err(ProtocolError::InvalidEvent)
+        );
+    }
+
+    #[test]
+    fn round_trips_a_bounded_wayland_surface_envelope() {
+        let wire = [0x57; 64];
+        let pixels = [0x9a; 128];
+        let commit = WaylandSurfaceCommit::new(&wire, &pixels).unwrap();
+        let mut encoded = [0; WAYLAND_SURFACE_MAX_SIZE];
+        let length = commit.encode(&mut encoded).unwrap();
+        assert_eq!(
+            length,
+            WAYLAND_SURFACE_HEADER_SIZE + wire.len() + pixels.len()
+        );
+        assert_eq!(WaylandSurfaceCommit::decode(&encoded[..length]), Ok(commit));
+    }
+
+    #[test]
+    fn rejects_wayland_envelope_length_descriptor_and_reserved_drift() {
+        let wire = [0x57; 8];
+        let pixels = [0x9a; 4];
+        let commit = WaylandSurfaceCommit::new(&wire, &pixels).unwrap();
+        let mut encoded = [0; 64];
+        let length = commit.encode(&mut encoded).unwrap();
+        assert_eq!(
+            WaylandSurfaceCommit::decode(&encoded[..length - 1]),
+            Err(ProtocolError::InvalidSize)
+        );
+
+        let mut header = commit.header;
+        header.file_descriptor += 1;
+        assert_eq!(
+            WaylandSurfaceHeader::decode(&header.encode()),
+            Err(ProtocolError::InvalidFileDescriptor)
+        );
+        header.file_descriptor = WAYLAND_INLINE_SHM_FD;
+        header.reserved = 1;
+        assert_eq!(
+            WaylandSurfaceHeader::decode(&header.encode()),
+            Err(ProtocolError::ReservedBits)
+        );
+    }
+
+    #[test]
+    fn rejects_unaligned_or_oversized_wayland_sections() {
+        assert_eq!(
+            WaylandSurfaceCommit::new(&[0; 6], &[0; 4]),
+            Err(ProtocolError::InvalidSize)
+        );
+        assert_eq!(
+            WaylandSurfaceCommit::new(&[0; 8], &[0; WAYLAND_SURFACE_MAX_PIXEL_SIZE + 4]),
+            Err(ProtocolError::InvalidSize)
         );
     }
 }

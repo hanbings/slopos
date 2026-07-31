@@ -8,8 +8,8 @@ use core::mem::size_of;
 use core::panic::PanicInfo;
 
 const USER_ENTRY: u64 = 0x4000_0000;
-const INITIAL_STACK_BASE: u64 = 0x4000_2000;
-const USER_STACK_TOP: u64 = 0x4000_3000;
+const INITIAL_STACK_BASE: u64 = 0x4000_3000;
+const USER_STACK_TOP: u64 = 0x4000_4000;
 const CROSS_PAGE_BUFFER_ADDRESS: u64 = INITIAL_STACK_BASE - 32;
 const CROSS_PAGE_TRANSFER_BYTES: usize = 64;
 const INITIAL_STACK_WORDS: usize = 26;

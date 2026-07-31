@@ -12,3 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 slopos-desktop-protocol = { path = "../../crates/desktop-protocol" }
+slopos-wayland = { path = "../../crates/wayland" }

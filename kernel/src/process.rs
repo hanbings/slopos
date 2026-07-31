@@ -6,7 +6,8 @@ use core::cell::UnsafeCell;
 use core::ptr;
 use slopos_desktop_protocol::{
     COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit, DesktopServiceEvent,
-    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE,
+    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WAYLAND_SURFACE_HEADER_SIZE,
+    WAYLAND_SURFACE_MAX_SIZE, WAYLAND_SURFACE_SYSCALL, WaylandSurfaceCommit, WaylandSurfaceHeader,
 };
 use slopos_process::{
     ProcessError, ProcessImage, ProcessState, ProcessTable, build_linux_initial_stack,
@@ -86,7 +87,7 @@ static PROCESS_TABLE: ProcessTableStorage =
 #[derive(Clone, Copy)]
 struct UserMapping {
     table_frames: [u64; 4],
-    code_frame: u64,
+    code_frames: [u64; crate::paging::USER_CODE_PAGES],
     stack_frames: [u64; crate::paging::USER_STACK_PAGES],
     code_start: u64,
     code_end: u64,
@@ -396,7 +397,7 @@ fn spawn_user_process(
         .unwrap_or_else(|| crate::fatal("boot user ELF has no PT_LOAD segment"));
     if segment.virtual_address() != crate::paging::USER_CODE_BASE
         || segment.memory_size() == 0
-        || segment.memory_size() > 4096
+        || segment.memory_size() > crate::paging::USER_CODE_PAGES as u64 * PAGE_SIZE
         || !segment.readable()
         || segment.writable()
         || !segment.executable()
@@ -439,7 +440,7 @@ fn spawn_user_process(
         pid,
         UserMapping {
             table_frames: address_space.table_frames,
-            code_frame: address_space.code_frame,
+            code_frames: address_space.code_frames,
             stack_frames: address_space.stack_frames,
             code_start: crate::paging::USER_CODE_BASE,
             code_end: crate::paging::USER_CODE_BASE + segment.memory_size(),
@@ -450,7 +451,7 @@ fn spawn_user_process(
     let argv0 = core::str::from_utf8(arguments[0]).unwrap_or("<non-utf8>");
     let argv1 = core::str::from_utf8(arguments[1]).unwrap_or("<non-utf8>");
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={pid} parent={} source={source} path={path} argv1={argv1} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frame={:#x} stack_frames={:#x}/{:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        "SLOPOS-PROCESS: pid={pid} parent={} source={source} path={path} argv1={argv1} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frames={:#x}/{:#x} stack_frames={:#x}/{:#x} code=user-readonly stack=user-writable kernel=supervisor",
         parent.unwrap_or(0),
         elf.entry(),
         elf.load_segment_count(),
@@ -460,7 +461,8 @@ fn spawn_user_process(
         address_space.root,
         crate::paging::USER_CODE_BASE,
         crate::paging::USER_STACK_TOP,
-        address_space.code_frame,
+        address_space.code_frames[0],
+        address_space.code_frames[1],
         address_space.stack_frames[0],
         address_space.stack_frames[1]
     ));
@@ -661,7 +663,7 @@ fn release_exited_process(pid: u32) -> i32 {
         .unwrap_or_else(|| crate::fatal("reaped process has no user mapping"));
     let frames = crate::paging::release_user_address_space(crate::paging::UserAddressSpace {
         root: process.image.address_space_root,
-        code_frame: mapping.code_frame,
+        code_frames: mapping.code_frames,
         stack_frames: mapping.stack_frames,
         table_frames: mapping.table_frames,
     });
@@ -1115,6 +1117,55 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             ));
             2
         }
+        WAYLAND_SURFACE_SYSCALL => {
+            if pid != DESKTOP_PID
+                || frame.rsi < WAYLAND_SURFACE_HEADER_SIZE as u64
+                || frame.rsi > WAYLAND_SURFACE_MAX_SIZE as u64
+            {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            let mut header_bytes = [0; WAYLAND_SURFACE_HEADER_SIZE];
+            if copy_from_user(pid, frame.rdi, &mut header_bytes).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let Ok(header) = WaylandSurfaceHeader::decode(&header_bytes) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let Ok(total_size) = header.total_size() else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            if frame.rsi != total_size as u64 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            // SAFETY: syscall entry is IF-masked, PID 2 was checked above,
+            // and submission consumes the borrowed bytes before returning.
+            let staging = unsafe { crate::wayland_service::staging_buffer() };
+            if copy_from_user(pid, frame.rdi, &mut staging[..total_size]).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let Ok(commit) = WaylandSurfaceCommit::decode(&staging[..total_size]) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let wire_length = commit.wire.len();
+            let pixel_length = commit.pixels.len();
+            match crate::wayland_service::submit(pid, commit) {
+                Ok((generation, _)) => {
+                    frame.rax = 0;
+                    crate::serial::serialln(format_args!(
+                        "SLOPOS-SYSCALL: pid={pid} abi=slopos-wayland-bootstrap-v1 entry=syscall return=sysretq nr={WAYLAND_SURFACE_SYSCALL} envelope_bytes={total_size} wire_bytes={wire_length} pixel_bytes={pixel_length} generation={generation} origin=cpl3 result=0"
+                    ));
+                }
+                Err(_) => frame.rax = LINUX_EINVAL as u64,
+            }
+            0
+        }
         LINUX_SYS_EXIT => {
             if frame.rdi > u64::from(u8::MAX) {
                 crate::fatal("user exit syscall status is invalid");
@@ -1312,9 +1363,18 @@ fn user_physical_chunk(
     }
     if !writable && address >= mapping.code_start && address < mapping.code_end {
         let offset = address.checked_sub(mapping.code_start)?;
-        let physical = mapping.code_frame.checked_add(offset)?;
-        let remaining = usize::try_from(mapping.code_end - address).ok()?;
-        return Some((physical as *mut u8, maximum_length.min(remaining)));
+        let page_index = usize::try_from(offset / PAGE_SIZE).ok()?;
+        let page_offset = offset % PAGE_SIZE;
+        let physical = mapping
+            .code_frames
+            .get(page_index)?
+            .checked_add(page_offset)?;
+        let segment_remaining = usize::try_from(mapping.code_end - address).ok()?;
+        let page_remaining = usize::try_from(PAGE_SIZE - page_offset).ok()?;
+        return Some((
+            physical as *mut u8,
+            maximum_length.min(segment_remaining).min(page_remaining),
+        ));
     }
     if address < mapping.stack_start || address >= mapping.stack_end {
         return None;

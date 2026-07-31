@@ -25,3 +25,4 @@ slopos-process = { path = "../crates/process" }
 slopos-shell = { path = "../crates/shell" }
 slopos-vfs = { path = "../crates/vfs" }
 slopos-virtio = { path = "../crates/virtio" }
+slopos-wayland = { path = "../crates/wayland" }

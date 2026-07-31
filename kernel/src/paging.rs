@@ -14,8 +14,9 @@ const CACHE_DISABLE: u64 = 1 << 4;
 const USER_ACCESSIBLE: u64 = 1 << 2;
 const HUGE: u64 = 1 << 7;
 pub const USER_CODE_BASE: u64 = 0x4000_0000;
+pub const USER_CODE_PAGES: usize = 2;
 pub const USER_STACK_PAGES: usize = 2;
-pub const USER_STACK_BASE: u64 = USER_CODE_BASE + PAGE_SIZE;
+pub const USER_STACK_BASE: u64 = USER_CODE_BASE + USER_CODE_PAGES as u64 * PAGE_SIZE;
 pub const USER_STACK_TOP: u64 = USER_STACK_BASE + USER_STACK_PAGES as u64 * PAGE_SIZE;
 
 pub struct PagingStats {
@@ -33,7 +34,7 @@ pub struct MmioRange {
 #[derive(Clone, Copy)]
 pub struct UserAddressSpace {
     pub root: u64,
-    pub code_frame: u64,
+    pub code_frames: [u64; USER_CODE_PAGES],
     pub stack_frames: [u64; USER_STACK_PAGES],
     pub table_frames: [u64; 4],
 }
@@ -104,10 +105,10 @@ pub fn install(framebuffer: FramebufferInfo, mmio_ranges: &[MmioRange]) -> Pagin
 pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressSpace {
     if image.is_empty()
         || memory_size == 0
-        || memory_size > PAGE_SIZE
+        || memory_size > USER_CODE_PAGES as u64 * PAGE_SIZE
         || image.len() > usize::try_from(memory_size).unwrap_or(0)
     {
-        crate::fatal("user ELF segment does not fit one page");
+        crate::fatal("user ELF segment does not fit the code mapping");
     }
     let active_root = current_root();
     let root = table_frame();
@@ -132,17 +133,28 @@ pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressS
 
     let user_directory = table_frame();
     let user_table = table_frame();
-    let code_frame = data_frame();
+    let code_frames = [data_frame(), data_frame()];
     let stack_frames = [data_frame(), data_frame()];
-    // SAFETY: code_frame is exclusive, writable through the kernel identity map,
-    // and the source is bounded to one page.
-    unsafe {
-        ptr::copy_nonoverlapping(image.as_ptr(), code_frame as *mut u8, image.len());
+    for (index, frame) in code_frames.iter().copied().enumerate() {
+        let source_start = index * PAGE_SIZE as usize;
+        let source_end = core::cmp::min(source_start + PAGE_SIZE as usize, image.len());
+        if source_start >= source_end {
+            break;
+        }
+        // SAFETY: each code frame is exclusive and zeroed, and this chunk is
+        // bounded to one page of the validated ELF segment.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                image[source_start..source_end].as_ptr(),
+                frame as *mut u8,
+                source_end - source_start,
+            );
+        }
     }
     let pdpt_index = ((USER_CODE_BASE >> 30) & 0x1ff) as usize;
     let directory_index = ((USER_CODE_BASE >> 21) & 0x1ff) as usize;
     let code_index = ((USER_CODE_BASE >> 12) & 0x1ff) as usize;
-    let first_stack_index = code_index + 1;
+    let first_stack_index = code_index + USER_CODE_PAGES;
     let last_stack_index = first_stack_index + USER_STACK_PAGES - 1;
     if get_entry(process_low_pdpt, pdpt_index) & PRESENT != 0 || last_stack_index >= ENTRY_COUNT {
         crate::fatal("user virtual address range overlaps a kernel mapping");
@@ -157,11 +169,13 @@ pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressS
         directory_index,
         user_table | PRESENT | WRITABLE | USER_ACCESSIBLE,
     );
-    set_entry(
-        user_table,
-        code_index,
-        code_frame | PRESENT | USER_ACCESSIBLE,
-    );
+    for (index, frame) in code_frames.iter().copied().enumerate() {
+        set_entry(
+            user_table,
+            code_index + index,
+            frame | PRESENT | USER_ACCESSIBLE,
+        );
+    }
     for (index, frame) in stack_frames.iter().copied().enumerate() {
         set_entry(
             user_table,
@@ -172,7 +186,7 @@ pub fn create_user_address_space(image: &[u8], memory_size: u64) -> UserAddressS
 
     UserAddressSpace {
         root,
-        code_frame,
+        code_frames,
         stack_frames,
         table_frames: [root, process_low_pdpt, user_directory, user_table],
     }
@@ -183,7 +197,7 @@ pub fn release_user_address_space(address_space: UserAddressSpace) -> usize {
     for frame in address_space
         .table_frames
         .into_iter()
-        .chain([address_space.code_frame])
+        .chain(address_space.code_frames)
         .chain(address_space.stack_frames)
     {
         crate::memory::deallocate_frame(frame)

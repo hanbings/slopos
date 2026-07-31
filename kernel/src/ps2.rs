@@ -9,6 +9,7 @@ use core::task::{Context, Poll};
 use crate::desktop_config::DesktopConfigSources;
 use crate::desktop_service::DesktopServiceSnapshot;
 use crate::wallpaper_file::WallpaperFileUpdate;
+use crate::wayland_service::WaylandSurfaceSnapshot;
 
 const DATA: u16 = 0x60;
 const STATUS: u16 = 0x64;
@@ -94,6 +95,7 @@ pub enum DesktopEvent {
     ConfigUpdate(DesktopConfigSources),
     ServiceUpdate(DesktopServiceSnapshot),
     WallpaperUpdate(WallpaperFileUpdate),
+    WaylandUpdate(WaylandSurfaceSnapshot),
 }
 
 pub struct Controller {
@@ -296,11 +298,13 @@ pub async fn next_desktop_event(
     config_generation: u64,
     service_generation: u64,
     wallpaper_generation: u64,
+    wayland_generation: u64,
 ) -> DesktopEvent {
     NextDesktopEvent {
         config_generation,
         service_generation,
         wallpaper_generation,
+        wayland_generation,
     }
     .await
 }
@@ -313,6 +317,7 @@ struct NextDesktopEvent {
     config_generation: u64,
     service_generation: u64,
     wallpaper_generation: u64,
+    wayland_generation: u64,
 }
 
 impl Future for NextDesktopEvent {
@@ -327,6 +332,9 @@ impl Future for NextDesktopEvent {
         }
         if let Some(update) = crate::wallpaper_file::latest_after(self.wallpaper_generation) {
             return Poll::Ready(DesktopEvent::WallpaperUpdate(update));
+        }
+        if let Some(snapshot) = crate::wayland_service::latest_after(self.wayland_generation) {
+            return Poll::Ready(DesktopEvent::WaylandUpdate(snapshot));
         }
         let tail = QUEUE_TAIL.load(Ordering::Relaxed);
         if tail == QUEUE_HEAD.load(Ordering::Acquire) {

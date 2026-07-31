@@ -1322,6 +1322,332 @@ impl<const OBJECTS: usize> Connection<OBJECTS> {
     }
 }
 
+pub const MAX_SURFACE_METADATA_LENGTH: usize = 31;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurfaceText {
+    bytes: [u8; MAX_SURFACE_METADATA_LENGTH],
+    length: u8,
+}
+
+impl SurfaceText {
+    const EMPTY: Self = Self {
+        bytes: [0; MAX_SURFACE_METADATA_LENGTH],
+        length: 0,
+    };
+
+    fn parse(value: &str) -> Result<Self, SurfaceError> {
+        if value.is_empty() || value.len() > MAX_SURFACE_METADATA_LENGTH {
+            return Err(SurfaceError::InvalidMetadata);
+        }
+        let mut text = Self::EMPTY;
+        text.bytes[..value.len()].copy_from_slice(value.as_bytes());
+        text.length = value.len() as u8;
+        Ok(text)
+    }
+
+    pub fn as_str(&self) -> &str {
+        // SAFETY: values enter this type only through `str`, and copying
+        // preserves the validated UTF-8 byte sequence.
+        unsafe { str::from_utf8_unchecked(&self.bytes[..usize::from(self.length)]) }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommittedSurface {
+    pub surface: u32,
+    pub buffer: u32,
+    pub xdg_surface: u32,
+    pub toplevel: u32,
+    pub frame_callback: u32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub format: u32,
+    pub title: SurfaceText,
+    pub app_id: SurfaceText,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceError {
+    Wire(WireError),
+    UnexpectedRequest,
+    DuplicateLifecycle,
+    IncompleteLifecycle,
+    InvalidBuffer,
+    InvalidMetadata,
+}
+
+impl From<WireError> for SurfaceError {
+    fn from(error: WireError) -> Self {
+        Self::Wire(error)
+    }
+}
+
+/// A strict bootstrap server for one `xdg_toplevel` backed by one `wl_shm`
+/// buffer.
+///
+/// This validates standard Wayland request framing and object relationships.
+/// Transport of the one file descriptor and its storage is deliberately left
+/// to the caller; SlopOS currently supplies those through its versioned
+/// bootstrap syscall rather than a Unix-domain socket with `SCM_RIGHTS`.
+pub struct SingleSurfaceSession<const OBJECTS: usize> {
+    connection: Connection<OBJECTS>,
+    registry: Option<u32>,
+    compositor: Option<u32>,
+    shm: Option<u32>,
+    wm_base: Option<u32>,
+    surface: Option<u32>,
+    pool: Option<u32>,
+    buffer: Option<BufferState>,
+    xdg_surface: Option<u32>,
+    toplevel: Option<u32>,
+    attached: bool,
+    damaged: bool,
+    frame_callback: Option<u32>,
+    title: SurfaceText,
+    app_id: SurfaceText,
+    committed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BufferState {
+    id: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
+    format: u32,
+}
+
+impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
+    pub fn new() -> Result<Self, SurfaceError> {
+        Ok(Self {
+            connection: Connection::new()?,
+            registry: None,
+            compositor: None,
+            shm: None,
+            wm_base: None,
+            surface: None,
+            pool: None,
+            buffer: None,
+            xdg_surface: None,
+            toplevel: None,
+            attached: false,
+            damaged: false,
+            frame_callback: None,
+            title: SurfaceText::EMPTY,
+            app_id: SurfaceText::EMPTY,
+            committed: false,
+        })
+    }
+
+    pub fn accept(
+        &mut self,
+        mut wire: &[u8],
+        inline_file_descriptor: i32,
+        pixel_length: usize,
+    ) -> Result<CommittedSurface, SurfaceError> {
+        if wire.is_empty() || pixel_length == 0 || self.committed {
+            return Err(SurfaceError::UnexpectedRequest);
+        }
+        while !wire.is_empty() {
+            if self.committed {
+                return Err(SurfaceError::UnexpectedRequest);
+            }
+            let (frame, _) = Frame::decode(wire)?;
+            let object = self.connection.objects().get(frame.header.object_id)?;
+            let supplies_fd = object.interface == Interface::Shm && frame.header.opcode == 0;
+            let descriptors = if supplies_fd {
+                core::slice::from_ref(&inline_file_descriptor)
+            } else {
+                &[]
+            };
+            let (request, remaining) = self.connection.dispatch(wire, descriptors)?;
+            self.apply(request, inline_file_descriptor, pixel_length)?;
+            wire = remaining;
+        }
+        if !self.committed {
+            return Err(SurfaceError::IncompleteLifecycle);
+        }
+        self.snapshot()
+    }
+
+    fn apply(
+        &mut self,
+        request: Request<'_>,
+        inline_file_descriptor: i32,
+        pixel_length: usize,
+    ) -> Result<(), SurfaceError> {
+        match request {
+            Request::GetRegistry { registry } => {
+                set_once(&mut self.registry, registry)?;
+            }
+            Request::Bind {
+                registry,
+                interface,
+                new_id,
+                ..
+            } if self.registry == Some(registry) => match interface {
+                Interface::Compositor => set_once(&mut self.compositor, new_id)?,
+                Interface::Shm => set_once(&mut self.shm, new_id)?,
+                Interface::XdgWmBase => set_once(&mut self.wm_base, new_id)?,
+                _ => return Err(SurfaceError::UnexpectedRequest),
+            },
+            Request::CreateSurface {
+                compositor,
+                surface,
+            } if self.compositor == Some(compositor) => {
+                set_once(&mut self.surface, surface)?;
+            }
+            Request::ShmCreatePool {
+                shm,
+                pool,
+                fd,
+                size,
+            } if self.shm == Some(shm)
+                && fd == inline_file_descriptor
+                && usize::try_from(size).ok() == Some(pixel_length) =>
+            {
+                set_once(&mut self.pool, pool)?;
+            }
+            Request::ShmPoolCreateBuffer {
+                pool,
+                buffer,
+                offset,
+                width,
+                height,
+                stride,
+                format,
+            } if self.pool == Some(pool) && self.buffer.is_none() => {
+                if offset != 0 || format != 1 {
+                    return Err(SurfaceError::InvalidBuffer);
+                }
+                let width = u32::try_from(width).map_err(|_| SurfaceError::InvalidBuffer)?;
+                let height = u32::try_from(height).map_err(|_| SurfaceError::InvalidBuffer)?;
+                let stride = u32::try_from(stride).map_err(|_| SurfaceError::InvalidBuffer)?;
+                let row_bytes = width.checked_mul(4).ok_or(SurfaceError::InvalidBuffer)?;
+                let buffer_bytes = usize::try_from(
+                    stride
+                        .checked_mul(height)
+                        .ok_or(SurfaceError::InvalidBuffer)?,
+                )
+                .map_err(|_| SurfaceError::InvalidBuffer)?;
+                if stride != row_bytes || buffer_bytes != pixel_length {
+                    return Err(SurfaceError::InvalidBuffer);
+                }
+                self.buffer = Some(BufferState {
+                    id: buffer,
+                    width,
+                    height,
+                    stride,
+                    format,
+                });
+            }
+            Request::XdgGetSurface {
+                wm_base,
+                xdg_surface,
+                surface,
+            } if self.wm_base == Some(wm_base) && self.surface == Some(surface) => {
+                set_once(&mut self.xdg_surface, xdg_surface)?;
+            }
+            Request::XdgGetToplevel {
+                xdg_surface,
+                toplevel,
+            } if self.xdg_surface == Some(xdg_surface) => {
+                set_once(&mut self.toplevel, toplevel)?;
+            }
+            Request::ToplevelSetTitle { toplevel, title }
+                if self.toplevel == Some(toplevel) && self.title.length == 0 =>
+            {
+                self.title = SurfaceText::parse(title)?;
+            }
+            Request::ToplevelSetAppId { toplevel, app_id }
+                if self.toplevel == Some(toplevel) && self.app_id.length == 0 =>
+            {
+                self.app_id = SurfaceText::parse(app_id)?;
+            }
+            Request::SurfaceAttach {
+                surface,
+                buffer: Some(buffer),
+                x: 0,
+                y: 0,
+            } if self.surface == Some(surface)
+                && self.buffer.map(|state| state.id) == Some(buffer)
+                && !self.attached =>
+            {
+                self.attached = true;
+            }
+            Request::SurfaceDamage {
+                surface,
+                buffer_coordinates: true,
+                x: 0,
+                y: 0,
+                width,
+                height,
+            } if self.surface == Some(surface) && !self.damaged => {
+                let buffer = self.buffer.ok_or(SurfaceError::IncompleteLifecycle)?;
+                if u32::try_from(width).ok() != Some(buffer.width)
+                    || u32::try_from(height).ok() != Some(buffer.height)
+                {
+                    return Err(SurfaceError::InvalidBuffer);
+                }
+                self.damaged = true;
+            }
+            Request::SurfaceFrame { surface, callback }
+                if self.surface == Some(surface) && self.frame_callback.is_none() =>
+            {
+                self.frame_callback = Some(callback);
+            }
+            Request::SurfaceCommit { surface } if self.surface == Some(surface) => {
+                if self.compositor.is_none()
+                    || self.shm.is_none()
+                    || self.wm_base.is_none()
+                    || self.buffer.is_none()
+                    || self.xdg_surface.is_none()
+                    || self.toplevel.is_none()
+                    || !self.attached
+                    || !self.damaged
+                    || self.frame_callback.is_none()
+                    || self.title.length == 0
+                    || self.app_id.length == 0
+                {
+                    return Err(SurfaceError::IncompleteLifecycle);
+                }
+                self.committed = true;
+            }
+            _ => return Err(SurfaceError::UnexpectedRequest),
+        }
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Result<CommittedSurface, SurfaceError> {
+        let buffer = self.buffer.ok_or(SurfaceError::IncompleteLifecycle)?;
+        Ok(CommittedSurface {
+            surface: self.surface.ok_or(SurfaceError::IncompleteLifecycle)?,
+            buffer: buffer.id,
+            xdg_surface: self.xdg_surface.ok_or(SurfaceError::IncompleteLifecycle)?,
+            toplevel: self.toplevel.ok_or(SurfaceError::IncompleteLifecycle)?,
+            frame_callback: self
+                .frame_callback
+                .ok_or(SurfaceError::IncompleteLifecycle)?,
+            width: buffer.width,
+            height: buffer.height,
+            stride: buffer.stride,
+            format: buffer.format,
+            title: self.title,
+            app_id: self.app_id,
+        })
+    }
+}
+
+fn set_once(slot: &mut Option<u32>, value: u32) -> Result<(), SurfaceError> {
+    if slot.replace(value).is_some() {
+        Err(SurfaceError::DuplicateLifecycle)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1622,6 +1948,149 @@ mod tests {
         assert_eq!(
             dispatch(&mut connection, &wrong_opcode, &[]),
             Err(WireError::UnknownOpcode)
+        );
+    }
+
+    fn append_message(
+        bytes: &mut [u8],
+        cursor: &mut usize,
+        object_id: u32,
+        opcode: u16,
+        build: impl FnOnce(&mut MessageBuilder<'_>),
+    ) {
+        let mut builder = MessageBuilder::new(&mut bytes[*cursor..], object_id, opcode).unwrap();
+        build(&mut builder);
+        *cursor += builder.finish().unwrap().len();
+    }
+
+    fn single_surface_batch(stride: i32, include_commit: bool, title: &str) -> ([u8; 768], usize) {
+        const REGISTRY: u32 = 2;
+        const COMPOSITOR: u32 = 3;
+        const SHM: u32 = 4;
+        const WM_BASE: u32 = 5;
+        const SURFACE: u32 = 6;
+        const POOL: u32 = 7;
+        const BUFFER: u32 = 8;
+        const XDG_SURFACE: u32 = 9;
+        const TOPLEVEL: u32 = 10;
+        const CALLBACK: u32 = 11;
+
+        let mut bytes = [0; 768];
+        let mut cursor = 0;
+        append_message(&mut bytes, &mut cursor, DISPLAY_OBJECT_ID, 1, |message| {
+            message.object(REGISTRY).unwrap();
+        });
+        for (global, object) in [
+            (CORE_GLOBALS[0], COMPOSITOR),
+            (CORE_GLOBALS[1], SHM),
+            (CORE_GLOBALS[4], WM_BASE),
+        ] {
+            append_message(&mut bytes, &mut cursor, REGISTRY, 0, |message| {
+                message.uint(global.name).unwrap();
+                message.string(global.interface.name()).unwrap();
+                message.uint(global.version).unwrap();
+                message.object(object).unwrap();
+            });
+        }
+        append_message(&mut bytes, &mut cursor, COMPOSITOR, 0, |message| {
+            message.object(SURFACE).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, SHM, 0, |message| {
+            message.object(POOL).unwrap();
+            message.int(3_072).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, POOL, 0, |message| {
+            message.object(BUFFER).unwrap();
+            message.int(0).unwrap();
+            message.int(32).unwrap();
+            message.int(24).unwrap();
+            message.int(stride).unwrap();
+            message.uint(1).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, WM_BASE, 2, |message| {
+            message.object(XDG_SURFACE).unwrap();
+            message.object(SURFACE).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, XDG_SURFACE, 1, |message| {
+            message.object(TOPLEVEL).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, TOPLEVEL, 2, |message| {
+            message.string(title).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, TOPLEVEL, 3, |message| {
+            message.string("slopos-system").unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, SURFACE, 1, |message| {
+            message.object(BUFFER).unwrap();
+            message.int(0).unwrap();
+            message.int(0).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, SURFACE, 9, |message| {
+            message.int(0).unwrap();
+            message.int(0).unwrap();
+            message.int(32).unwrap();
+            message.int(24).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, SURFACE, 3, |message| {
+            message.object(CALLBACK).unwrap();
+        });
+        if include_commit {
+            append_message(&mut bytes, &mut cursor, SURFACE, 6, |_| {});
+        }
+        (bytes, cursor)
+    }
+
+    #[test]
+    fn accepts_a_complete_single_xdg_toplevel_commit() {
+        let (wire, length) = single_surface_batch(128, true, "Userspace Surface");
+        let mut session = SingleSurfaceSession::<16>::new().unwrap();
+        let surface = session.accept(&wire[..length], 0x534c, 3_072).unwrap();
+        assert_eq!(surface.surface, 6);
+        assert_eq!(surface.buffer, 8);
+        assert_eq!(surface.frame_callback, 11);
+        assert_eq!(
+            (surface.width, surface.height, surface.stride),
+            (32, 24, 128)
+        );
+        assert_eq!(surface.format, 1);
+        assert_eq!(surface.title.as_str(), "Userspace Surface");
+        assert_eq!(surface.app_id.as_str(), "slopos-system");
+    }
+
+    #[test]
+    fn rejects_incomplete_or_malformed_surface_lifecycles() {
+        let (wire, length) = single_surface_batch(128, false, "Userspace Surface");
+        let mut session = SingleSurfaceSession::<16>::new().unwrap();
+        assert_eq!(
+            session.accept(&wire[..length], 0x534c, 3_072),
+            Err(SurfaceError::IncompleteLifecycle)
+        );
+
+        let (wire, length) = single_surface_batch(124, true, "Userspace Surface");
+        let mut session = SingleSurfaceSession::<16>::new().unwrap();
+        assert_eq!(
+            session.accept(&wire[..length], 0x534c, 3_072),
+            Err(SurfaceError::InvalidBuffer)
+        );
+
+        let (wire, length) = single_surface_batch(128, true, "");
+        let mut session = SingleSurfaceSession::<16>::new().unwrap();
+        assert_eq!(
+            session.accept(&wire[..length], 0x534c, 3_072),
+            Err(SurfaceError::InvalidMetadata)
+        );
+    }
+
+    #[test]
+    fn rejects_requests_after_the_atomic_surface_commit() {
+        let (mut wire, mut length) = single_surface_batch(128, true, "Userspace Surface");
+        append_message(&mut wire, &mut length, DISPLAY_OBJECT_ID, 0, |message| {
+            message.object(12).unwrap()
+        });
+        let mut session = SingleSurfaceSession::<16>::new().unwrap();
+        assert_eq!(
+            session.accept(&wire[..length], 0x534c, 3_072),
+            Err(SurfaceError::UnexpectedRequest)
         );
     }
 }

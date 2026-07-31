@@ -34,7 +34,7 @@ const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
 const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
 const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
-const ALLOCATION_PROBE_BLOCK: u64 = 117;
+const ALLOCATION_PROBE_BLOCK: u64 = 119;
 const CREATE_TRANSACTION_BLOCKS: usize = 5;
 const CREATE_PROBE_INODE: u32 = 32;
 const CREATE_PROBE_NAME: &[u8] = b"create-probe";
@@ -60,6 +60,7 @@ const INIT_EXECUTABLE_DISPLAY: &str = "/sbin/slop-init";
 const DESKTOP_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-shell"];
 const DESKTOP_EXECUTABLE_DISPLAY: &str = "/sbin/slop-shell";
 const INIT_EXECUTABLE_CAPACITY: usize = 32 * 1024;
+const DESKTOP_EXECUTABLE_CAPACITY: usize = 40 * 1024;
 const PROCESS_FILE_CAPACITY: usize = 8;
 const LINUX_ENOENT: i64 = -2;
 const LINUX_EBADF: i64 = -9;
@@ -122,7 +123,7 @@ const SWWW_SYSTEM_ENV_PATH: [&[u8]; 3] = [b"etc", b"swww", b"env"];
 const SWWW_FALLBACK_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"swww.env"];
 
 struct InitExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
-struct DesktopExecutableStorage(UnsafeCell<[u8; INIT_EXECUTABLE_CAPACITY]>);
+struct DesktopExecutableStorage(UnsafeCell<[u8; DESKTOP_EXECUTABLE_CAPACITY]>);
 
 // The block task is the sole writer and starts both user processes before it
 // resumes filesystem work. Their executable bytes remain immutable afterward.
@@ -132,7 +133,7 @@ unsafe impl Sync for DesktopExecutableStorage {}
 static INIT_EXECUTABLE: InitExecutableStorage =
     InitExecutableStorage(UnsafeCell::new([0; INIT_EXECUTABLE_CAPACITY]));
 static DESKTOP_EXECUTABLE: DesktopExecutableStorage =
-    DesktopExecutableStorage(UnsafeCell::new([0; INIT_EXECUTABLE_CAPACITY]));
+    DesktopExecutableStorage(UnsafeCell::new([0; DESKTOP_EXECUTABLE_CAPACITY]));
 
 #[derive(Clone, Copy)]
 struct ConfigCandidate {
@@ -772,7 +773,7 @@ async fn load_and_start_user_processes(
         .unwrap_or_else(|| device.fail("root VFS desktop executable was not found"));
     let desktop_size = usize::try_from(desktop_executable.inode.size)
         .unwrap_or_else(|_| device.fail("root VFS desktop executable exceeds address space"));
-    if desktop_size == 0 || desktop_size > INIT_EXECUTABLE_CAPACITY {
+    if desktop_size == 0 || desktop_size > DESKTOP_EXECUTABLE_CAPACITY {
         device.fail("root VFS desktop executable has an invalid size");
     }
     // SAFETY: same single-writer lifetime as INIT_EXECUTABLE above.
