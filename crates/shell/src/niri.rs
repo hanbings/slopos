@@ -279,6 +279,7 @@ pub struct NiriWindowRule<'a> {
     pub focus_ring_width: Option<u16>,
     pub focus_ring_active_color: Option<u32>,
     pub focus_ring_inactive_color: Option<u32>,
+    pub opacity: Option<i32>,
     pub default_floating_position: Option<FloatingPosition>,
     pub default_column_width: Option<ColumnWidth>,
     pub default_window_height: Option<ColumnWidth>,
@@ -420,6 +421,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         overridden.then_some(ring)
+    }
+
+    pub fn opacity_for(self, app_id: &str) -> Option<u16> {
+        let mut opacity = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.opacity {
+                    opacity = Some(value.clamp(0, 1000) as u16);
+                }
+            }
+        }
+        opacity
     }
 
     pub fn column_width_for(self, app_id: &str) -> Option<ColumnWidth> {
@@ -675,6 +688,7 @@ impl<'a> ShellConfigParser<'a> {
             focus_ring_width: None,
             focus_ring_active_color: None,
             focus_ring_inactive_color: None,
+            opacity: None,
             default_floating_position: None,
             default_column_width: None,
             default_window_height: None,
@@ -750,6 +764,13 @@ impl<'a> ShellConfigParser<'a> {
                     self.finish_node()?;
                 }
                 KdlToken::Word("focus-ring") => self.parse_rule_focus_ring(&mut rule)?,
+                KdlToken::Word("opacity") => {
+                    let KdlToken::Word(value) = self.next() else {
+                        return Err(NiriConfigError::InvalidWindowRule);
+                    };
+                    rule.opacity = Some(parse_rule_opacity(value)?);
+                    self.finish_node()?;
+                }
                 KdlToken::Word("default-floating-position") => {
                     rule.default_floating_position = Some(self.parse_floating_position()?);
                 }
@@ -1222,6 +1243,26 @@ fn parse_floating_coordinate(value: &str) -> Result<i32, NiriConfigError> {
     let coordinate = i32::try_from((thousandths + 500) / 1000)
         .map_err(|_| NiriConfigError::InvalidWindowRule)?;
     Ok(if negative { -coordinate } else { coordinate })
+}
+
+fn parse_rule_opacity(value: &str) -> Result<i32, NiriConfigError> {
+    let (negative, magnitude) = if let Some(value) = value.strip_prefix('-') {
+        (true, value)
+    } else if let Some(value) = value.strip_prefix('+') {
+        (false, value)
+    } else {
+        (false, value)
+    };
+    if magnitude.is_empty() {
+        return Err(NiriConfigError::InvalidWindowRule);
+    }
+    let value = super::parse_decimal_thousandths(magnitude)
+        .map_err(|_| NiriConfigError::InvalidWindowRule)?;
+    if value > 65_535_000 {
+        return Err(NiriConfigError::InvalidWindowRule);
+    }
+    let value = i32::try_from(value).map_err(|_| NiriConfigError::InvalidWindowRule)?;
+    Ok(if negative { -value } else { value })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2942,6 +2983,7 @@ mod tests {
                 open-maximized-to-edges true
                 open-fullscreen true
                 open-focused true
+                opacity 0.75
                 focus-ring {
                     off
                     width 5
@@ -2960,6 +3002,7 @@ mod tests {
                 open-maximized-to-edges true
                 open-fullscreen true
                 open-focused true
+                opacity -0.2
                 focus-ring {
                     on
                     width 7
@@ -2978,6 +3021,7 @@ mod tests {
                 open-maximized-to-edges false
                 open-fullscreen false
                 open-focused false
+                opacity 0.5
                 focus-ring {
                     off
                     active-color "#778899"
@@ -3466,6 +3510,11 @@ mod tests {
             Some(false)
         );
         assert_eq!(
+            config.window_rules.opacity_for("slopos-terminal"),
+            Some(750)
+        );
+        assert_eq!(config.window_rules.opacity_for("slopos-config"), Some(500));
+        assert_eq!(
             config.window_rules.focus_ring_for(
                 "slopos-terminal",
                 FocusRing {
@@ -3566,6 +3615,9 @@ mod tests {
             "window-rule { focus-ring { width 65536; } }",
             "window-rule { focus-ring { active-color #ffffff; } }",
             r##"window-rule { focus-ring { inactive-color "#zzzzzz"; } }"##,
+            "window-rule { opacity nope; }",
+            "window-rule { opacity 1.2345; }",
+            "window-rule { opacity 65536; }",
         ] {
             assert_eq!(
                 parse_niri_shell_config(input),
@@ -3598,6 +3650,27 @@ mod tests {
                 .window_rules
                 .window_height_for("anything"),
             Some(ColumnWidth::Client)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { opacity 1.5; }")
+                .unwrap()
+                .window_rules
+                .opacity_for("anything"),
+            Some(1000)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { opacity -0.5; }")
+                .unwrap()
+                .window_rules
+                .opacity_for("anything"),
+            Some(0)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { opacity +0.5; }")
+                .unwrap()
+                .window_rules
+                .opacity_for("anything"),
+            Some(500)
         );
         assert!(
             parse_niri_shell_config(

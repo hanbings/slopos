@@ -94,16 +94,8 @@ window-rule {
 layout {
     gaps 16
     center-focused-column "never"
-    preset-column-widths {
-        proportion 0.333
-        proportion 0.5
-        proportion 0.667
-    }
-    preset-window-heights {
-        proportion 0.333
-        proportion 0.5
-        proportion 0.667
-    }
+    preset-column-widths { proportion 0.333; proportion 0.5; proportion 0.667; }
+    preset-window-heights { proportion 0.333; proportion 0.5; proportion 0.667; }
     always-center-single-column
     default-column-width { proportion 0.5; }
 

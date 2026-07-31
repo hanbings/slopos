@@ -23,6 +23,7 @@ pub struct Framebuffer {
     height: usize,
     stride: usize,
     format: PixelFormat,
+    opacity: u16,
 }
 
 impl Framebuffer {
@@ -46,6 +47,7 @@ impl Framebuffer {
             height,
             stride,
             format: info.pixel_format,
+            opacity: 1000,
         })
     }
 
@@ -65,9 +67,30 @@ impl Framebuffer {
         if offset >= self.pixel_count {
             return;
         }
+        let color = if self.opacity == 1000 {
+            color
+        } else if self.opacity == 0 {
+            return;
+        } else {
+            // SAFETY: offset was checked against both geometry and mapped framebuffer size.
+            let encoded = unsafe { ptr::read_volatile(self.base.add(offset)) };
+            blend_color(self.decode(encoded), color, self.opacity)
+        };
+        let encoded = self.encode(color);
+        // SAFETY: offset was checked against both geometry and mapped framebuffer size.
+        unsafe { ptr::write_volatile(self.base.add(offset), encoded) };
+    }
+
+    pub fn set_opacity(&mut self, opacity: u16) -> u16 {
+        let previous = self.opacity;
+        self.opacity = opacity.min(1000);
+        previous
+    }
+
+    fn encode(&self, color: Color) -> Color {
         // UEFI PixelBlueGreenRedReserved8BitPerColor stores the low byte as blue;
         // our 0xRRGGBB color already has that in little-endian memory. RGB swaps it.
-        let encoded = match self.format {
+        match self.format {
             PixelFormat::Rgb => {
                 let red = (color >> 16) & 0xff;
                 let green = color & 0x00ff00;
@@ -75,9 +98,11 @@ impl Framebuffer {
                 blue << 16 | green | red
             }
             PixelFormat::Bgr | PixelFormat::Bitmask | PixelFormat::Unknown => color,
-        };
-        // SAFETY: offset was checked against both geometry and mapped framebuffer size.
-        unsafe { ptr::write_volatile(self.base.add(offset), encoded) };
+        }
+    }
+
+    fn decode(&self, color: Color) -> Color {
+        self.encode(color)
     }
 
     pub fn rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Color) {
@@ -90,21 +115,6 @@ impl Framebuffer {
                 self.pixel(px, py, color);
             }
         }
-    }
-
-    pub fn outline(
-        &mut self,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-        thickness: i32,
-        color: Color,
-    ) {
-        self.rect(x, y, width, thickness, color);
-        self.rect(x, y + height - thickness, width, thickness, color);
-        self.rect(x, y, thickness, height, color);
-        self.rect(x + width - thickness, y, thickness, height, color);
     }
 
     pub fn text(&mut self, mut x: i32, y: i32, text: &str, color: Color, scale: i32) {
@@ -123,4 +133,15 @@ impl Framebuffer {
             }
         }
     }
+}
+
+fn blend_color(background: Color, foreground: Color, opacity: u16) -> Color {
+    let opacity = u32::from(opacity.min(1000));
+    let inverse = 1000 - opacity;
+    let channel = |shift: u32| {
+        let background = (background >> shift) & 0xff_u32;
+        let foreground = (foreground >> shift) & 0xff_u32;
+        (foreground * opacity + background * inverse + 500) / 1000
+    };
+    channel(16) << 16 | channel(8) << 8 | channel(0)
 }

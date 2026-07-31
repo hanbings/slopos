@@ -72,6 +72,7 @@ sed \
     -e 's/open-fullscreen false/open-fullscreen true/' \
     -e 's/open-focused false/open-focused true/' \
     -e '/match app-id="slopos-config"/a\    focus-ring { off; }' \
+    -e '/match app-id="slopos-config"/a\    opacity 0.75' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 1\.0/proportion 0.5/' \
     -e '/match app-id="slopos-config"/,/^}/ s/default-column-display "normal"/default-column-display "tabbed"/' \
@@ -271,6 +272,9 @@ grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=focus-ring enabled=false width=3 active=0x7fc8ff inactive=0x505050 applied=true source=config" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=opacity value=750/1000 applied=true fullscreen_ignored=true source=config" \
+    "${serial_log}"
+grep -Fq \
     "SLOPOS-DESKTOP: window resized kind=CONFIG width=656 layout=scrolling" \
     "${serial_log}"
 grep -Fq \
@@ -338,6 +342,27 @@ test -s "${right_action_screenshot}"
 test -s "${middle_action_screenshot}"
 test -s "${scroll_up_screenshot}"
 test -s "${scroll_down_screenshot}"
+
+ppm_pixel_hex() {
+    local image="$1"
+    local x="$2"
+    local y="$3"
+    local offset=$((16 + 3 * (y * 1024 + x)))
+    dd if="${image}" bs=1 skip="${offset}" count=3 status=none \
+        | od -An -tx1 \
+        | tr -d ' \n'
+}
+
+if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 200 350)" != "222247" ]] \
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 800 350)" != "222a4b" ]]; then
+    echo "custom niri opacity did not alpha-blend the Config surface over the wallpaper" >&2
+    exit 1
+fi
+if [[ "$(ppm_pixel_hex "${workspace_screenshot}" 200 350)" != "171c2b" ]]; then
+    echo "fullscreen Config surface incorrectly retained its niri opacity rule" >&2
+    exit 1
+fi
+
 if command -v pnmtopng >/dev/null 2>&1; then
     pnmtopng "${workspace_screenshot}" \
         >"${repo_dir}/evidence/custom-config-workspace-click.png"

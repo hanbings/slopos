@@ -121,6 +121,7 @@ impl Desktop {
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let open_focused = niri.window_rules.focused_for(app_id);
             let focus_ring = niri.window_rules.focus_ring_for(app_id, config.focus_ring);
+            let opacity = niri.window_rules.opacity_for(app_id);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating =
                 niri.window_rules.floating_for(app_id).unwrap_or(false) && !maximized_to_edges;
@@ -234,6 +235,11 @@ impl Desktop {
                     focus_ring.width,
                     focus_ring.active_color,
                     focus_ring.inactive_color
+                ));
+            }
+            if let Some(opacity) = opacity {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={app_id} property=opacity value={opacity}/1000 applied=true fullscreen_ignored={fullscreen} source=config"
                 ));
             }
             match open_focused {
@@ -807,6 +813,7 @@ impl Desktop {
             let fullscreen = niri.window_rules.fullscreen_for(app_id).unwrap_or(false);
             let open_focused = niri.window_rules.focused_for(app_id);
             let focus_ring = niri.window_rules.focus_ring_for(app_id, layout.focus_ring);
+            let opacity = niri.window_rules.opacity_for(app_id);
             let floating_position = niri.window_rules.floating_position_for(app_id);
             let floating = niri
                 .window_rules
@@ -931,6 +938,11 @@ impl Desktop {
                     focus_ring.width,
                     focus_ring.active_color,
                     focus_ring.inactive_color
+                ));
+            }
+            if let Some(opacity) = opacity {
+                serialln(format_args!(
+                    "SLOPOS-NIRI: window rule app_id={app_id} property=opacity value={opacity}/1000 applied=true fullscreen_ignored={fullscreen} source=config"
                 ));
             }
             match open_focused {
@@ -1160,13 +1172,50 @@ impl Desktop {
             .window_rules
             .focus_ring_for(app_id(window.kind), self.workspaces.config().focus_ring)
             .unwrap_or(self.workspaces.config().focus_ring);
+        let opacity = self
+            .niri
+            .window_rules
+            .opacity_for(app_id(window.kind))
+            .unwrap_or(1000);
+        // The early renderer models niri's shadow as hard right/bottom strips.
+        // Keep it outside the surface so an opacity rule reveals the wallpaper
+        // rather than an opaque shadow rectangle hidden underneath the window.
         framebuffer.rect(
-            window.x + 7,
+            window.x + window.width,
             window.y + 8,
-            window.width,
+            7,
             window.height,
             0x080a12,
         );
+        framebuffer.rect(
+            window.x + 7,
+            window.y + window.height,
+            window.width,
+            8,
+            0x080a12,
+        );
+        // Like niri's default draw-border-with-background mode, the focus
+        // ring is compositor background: a translucent surface shows it
+        // through rather than changing the ring's own opacity.
+        if focus_ring.enabled {
+            let width = if active {
+                i32::from(focus_ring.width)
+            } else {
+                1
+            };
+            framebuffer.rect(
+                window.x - width,
+                window.y - width,
+                window.width + width * 2,
+                window.height + width * 2,
+                if active {
+                    focus_ring.active_color
+                } else {
+                    focus_ring.inactive_color
+                },
+            );
+        }
+        let previous_opacity = framebuffer.set_opacity(opacity);
         framebuffer.rect(window.x, window.y, window.width, window.height, WINDOW_ALT);
         framebuffer.rect(
             window.x,
@@ -1175,24 +1224,17 @@ impl Desktop {
             TITLE_HEIGHT,
             if active { self.accent() } else { WINDOW },
         );
-        if focus_ring.enabled {
-            framebuffer.outline(
-                window.x,
-                window.y,
-                window.width,
-                window.height,
-                if active {
-                    i32::from(focus_ring.width)
-                } else {
-                    1
-                },
-                if active {
-                    focus_ring.active_color
-                } else {
-                    focus_ring.inactive_color
-                },
-            );
+        framebuffer.text(window.x + 12, window.y + 9, title(window.kind), WHITE, 1);
+        framebuffer.rect(window.x + window.width - 26, window.y + 5, 20, 20, RED);
+        framebuffer.text(window.x + window.width - 20, window.y + 11, "X", WHITE, 1);
+
+        match window.kind {
+            WindowKind::Terminal => self.render_terminal(framebuffer, window),
+            WindowKind::System => self.render_system(framebuffer, window),
+            WindowKind::Config => self.render_config(framebuffer, window),
         }
+        framebuffer.set_opacity(previous_opacity);
+
         if let Some(info) = self.workspaces.tabbed_column_info(index as u32) {
             let tab_count = i32::try_from(info.tab_count).unwrap_or(i32::MAX).max(1);
             let indicator_gap = 3;
@@ -1217,15 +1259,6 @@ impl Desktop {
                 );
                 y += segment_height + indicator_gap;
             }
-        }
-        framebuffer.text(window.x + 12, window.y + 9, title(window.kind), WHITE, 1);
-        framebuffer.rect(window.x + window.width - 26, window.y + 5, 20, 20, RED);
-        framebuffer.text(window.x + window.width - 20, window.y + 11, "X", WHITE, 1);
-
-        match window.kind {
-            WindowKind::Terminal => self.render_terminal(framebuffer, window),
-            WindowKind::System => self.render_system(framebuffer, window),
-            WindowKind::Config => self.render_config(framebuffer, window),
         }
     }
 
