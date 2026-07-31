@@ -112,7 +112,9 @@ impl Desktop {
                 .workspace_for(app_id)
                 .and_then(|name| niri.workspaces.index_of(name))
                 .unwrap_or(0);
-            if niri.window_rules.floating_for(app_id).unwrap_or(false) {
+            let floating = niri.window_rules.floating_for(app_id).unwrap_or(false);
+            let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
+            if floating {
                 workspaces
                     .open_floating_window(workspace, window as u32)
                     .unwrap_or_else(|_| crate::fatal("niri floating seed capacity mismatch"));
@@ -120,6 +122,23 @@ impl Desktop {
                 workspaces
                     .open_window(workspace, window as u32)
                     .unwrap_or_else(|_| crate::fatal("niri layout seed capacity mismatch"));
+                if maximized {
+                    workspaces
+                        .set_window_maximized(workspace, window as u32, true)
+                        .unwrap_or_else(|_| crate::fatal("niri maximize seed failed"));
+                    let rect = workspaces
+                        .window_rect_in_workspace(workspace, window as u32)
+                        .unwrap_or_else(|_| crate::fatal("niri maximize geometry failed"));
+                    serialln(format_args!(
+                        "SLOPOS-NIRI: window rule app_id={} property=open-maximized value=true applied=true workspace={} x={} y={} width={} height={} mode=maximized-column source=config",
+                        app_id,
+                        workspace + 1,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height
+                    ));
+                }
             }
         }
         workspaces
@@ -661,6 +680,7 @@ impl Desktop {
                 .window_rules
                 .floating_for(app_id)
                 .unwrap_or_else(|| self.workspaces.window_is_floating_anywhere(window as u32));
+            let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
             if floating {
                 workspaces
                     .open_floating_window(workspace, window as u32)
@@ -669,6 +689,25 @@ impl Desktop {
                 workspaces
                     .open_window(workspace, window as u32)
                     .unwrap_or_else(|_| crate::fatal("published niri layout seed failed"));
+                if maximized {
+                    workspaces
+                        .set_window_maximized(workspace, window as u32, true)
+                        .unwrap_or_else(|_| crate::fatal("published niri maximize seed failed"));
+                    let rect = workspaces
+                        .window_rect_in_workspace(workspace, window as u32)
+                        .unwrap_or_else(|_| {
+                            crate::fatal("published niri maximize geometry failed")
+                        });
+                    serialln(format_args!(
+                        "SLOPOS-NIRI: window rule app_id={} property=open-maximized value=true applied=true workspace={} x={} y={} width={} height={} mode=maximized-column source=config",
+                        app_id,
+                        workspace + 1,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height
+                    ));
+                }
             }
         }
         workspaces

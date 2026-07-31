@@ -20,6 +20,7 @@ runtime_dir="$(mktemp -d /tmp/slopos-custom-config.XXXXXX)"
 runtime_esp="${runtime_dir}/slopos-esp.img"
 runtime_root="${runtime_dir}/slopos-root.ext4"
 runtime_vars="${runtime_dir}/OVMF_VARS_4M.fd"
+custom_niri="${runtime_dir}/niri.kdl"
 custom_waybar="${runtime_dir}/waybar.jsonc"
 fsck_log="${runtime_dir}/fsck.log"
 debugfs=/usr/sbin/debugfs
@@ -30,6 +31,7 @@ cleanup() {
         "${runtime_esp}" \
         "${runtime_root}" \
         "${runtime_vars}" \
+        "${custom_niri}" \
         "${custom_waybar}" \
         "${fsck_log}"
     do
@@ -60,6 +62,15 @@ cp --reflink=auto --sparse=always "${esp_image}" "${runtime_esp}"
 cp --reflink=auto --sparse=always "${root_image}" "${runtime_root}"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
 sed \
+    -e '1i// user open-maximized override accepted by the SlopOS desktop service' \
+    -e 's/open-maximized false/open-maximized true/' \
+    "${repo_dir}/assets/niri-config.kdl" >"${custom_niri}"
+custom_niri_bytes="$(wc -c <"${custom_niri}")"
+if (( custom_niri_bytes <= 3918 || custom_niri_bytes > 4096 )); then
+    echo "custom niri fixture has unexpected size: ${custom_niri_bytes}" >&2
+    exit 1
+fi
+sed \
     -e '1i// user override accepted by the SlopOS desktop service' \
     -e '/"modules-left":/,/]/ s/"niri\/workspaces"/"niri\/window"/' \
     -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
@@ -76,6 +87,11 @@ if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
     exit 1
 fi
 
+"${debugfs}" -w -R "rm /etc/slopos/niri.kdl" "${runtime_root}" >/dev/null 2>&1
+"${debugfs}" \
+    -w \
+    -R "write ${custom_niri} /etc/slopos/niri.kdl" \
+    "${runtime_root}" >/dev/null 2>&1
 "${debugfs}" -w -R "rm /etc/slopos/waybar.jsonc" "${runtime_root}" >/dev/null 2>&1
 "${debugfs}" \
     -w \
@@ -191,6 +207,9 @@ grep -Fq \
     "SLOPOS-WAYBAR: workspace clicked index=2 name=config changed=true module=niri/workspaces" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized value=true applied=true workspace=2 x=16 y=56 width=992 height=696 mode=maximized-column source=config" \
+    "${serial_log}"
+grep -Fq \
     "SLOPOS-WAYBAR: workspace clicked index=1 name=main changed=true module=niri/workspaces" \
     "${serial_log}"
 grep -Fq \
@@ -255,4 +274,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded user desktop configuration override, Waybar placement, actions, and alternate format verified"
+echo "SlopOS bounded niri/Waybar user configuration override, initial maximize, placement, actions, and alternate format verified"

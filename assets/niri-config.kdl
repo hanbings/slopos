@@ -82,6 +82,7 @@ window-rule {
     match app-id="slopos-config"
     open-on-workspace "config"
     open-floating false
+    open-maximized false
 }
 
 layout {

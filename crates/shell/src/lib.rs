@@ -866,6 +866,18 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         true
     }
 
+    pub fn set_window_maximized(
+        &mut self,
+        window: u32,
+        maximized: bool,
+    ) -> Result<bool, LayoutError> {
+        let (column_index, _) = self.find_window(window).ok_or(LayoutError::UnknownWindow)?;
+        let changed = self.columns[column_index].maximized != maximized;
+        self.columns[column_index].maximized = maximized;
+        self.ensure_focused_visible();
+        Ok(changed)
+    }
+
     pub fn toggle_maximize_focused_window_to_edges(&mut self) -> bool {
         if self.column_count == 0 {
             return false;
@@ -2239,6 +2251,25 @@ mod tests {
         assert_eq!(layout.tile_rect(1).unwrap().width, 968);
         assert!(layout.toggle_maximize_focused_column());
         assert_eq!(layout.tile_rect(1).unwrap().width, 311);
+    }
+
+    #[test]
+    fn applies_initial_maximize_to_a_specific_column_without_stealing_focus() {
+        let mut layout = ScrollLayout::<2, 1>::new(1000, 700, 30, LayoutConfig::default());
+        layout.open_window(1).unwrap();
+        layout.open_window(2).unwrap();
+        assert_eq!(layout.focused_window(), Some(2));
+
+        assert!(layout.set_window_maximized(1, true).unwrap());
+        assert_eq!(layout.focused_window(), Some(2));
+        assert_eq!(layout.tile_rect(1).unwrap().width, 968);
+        assert!(!layout.set_window_maximized(1, true).unwrap());
+        assert!(layout.set_window_maximized(1, false).unwrap());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 476);
+        assert_eq!(
+            layout.set_window_maximized(99, true),
+            Err(LayoutError::UnknownWindow)
+        );
     }
 
     #[test]

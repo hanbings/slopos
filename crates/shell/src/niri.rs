@@ -224,6 +224,7 @@ pub struct NiriWindowRule<'a> {
     pub app_id: Option<&'a str>,
     pub open_on_workspace: Option<&'a str>,
     pub open_floating: Option<bool>,
+    pub open_maximized: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -270,6 +271,18 @@ impl<'a> NiriWindowRuleList<'a> {
             }
         }
         floating
+    }
+
+    pub fn maximized_for(self, app_id: &str) -> Option<bool> {
+        let mut maximized = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.open_maximized {
+                    maximized = Some(value);
+                }
+            }
+        }
+        maximized
     }
 
     fn push(&mut self, rule: NiriWindowRule<'a>) -> Result<(), NiriConfigError> {
@@ -466,6 +479,7 @@ impl<'a> ShellConfigParser<'a> {
             app_id: None,
             open_on_workspace: None,
             open_floating: None,
+            open_maximized: None,
         };
         loop {
             match self.next_non_end() {
@@ -498,6 +512,14 @@ impl<'a> ShellConfigParser<'a> {
                 }
                 KdlToken::Word("open-floating") => {
                     rule.open_floating = Some(match self.next() {
+                        KdlToken::Word("true") => true,
+                        KdlToken::Word("false") => false,
+                        _ => return Err(NiriConfigError::InvalidWindowRule),
+                    });
+                    self.finish_node()?;
+                }
+                KdlToken::Word("open-maximized") => {
+                    rule.open_maximized = Some(match self.next() {
                         KdlToken::Word("true") => true,
                         KdlToken::Word("false") => false,
                         _ => return Err(NiriConfigError::InvalidWindowRule),
@@ -1316,6 +1338,20 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             .map_err(WorkspaceError::Layout)
     }
 
+    pub fn set_window_maximized(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        maximized: bool,
+    ) -> Result<bool, WorkspaceError> {
+        self.layouts
+            .get_mut(workspace)
+            .filter(|_| workspace < self.count)
+            .ok_or(WorkspaceError::InvalidWorkspace)?
+            .set_window_maximized(window, maximized)
+            .map_err(WorkspaceError::Layout)
+    }
+
     pub fn open_floating_window(
         &mut self,
         workspace: usize,
@@ -1366,18 +1402,29 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
     }
 
     pub fn tile_rect(&self, window: u32) -> Result<Rect, WorkspaceError> {
-        if self.fullscreen[self.active] == Some(window) {
+        self.window_rect_in_workspace(self.active, window)
+    }
+
+    pub fn window_rect_in_workspace(
+        &self,
+        workspace: usize,
+        window: u32,
+    ) -> Result<Rect, WorkspaceError> {
+        if workspace >= self.count {
+            return Err(WorkspaceError::InvalidWorkspace);
+        }
+        if self.fullscreen[workspace] == Some(window) {
             return Ok(Rect {
                 x: 0,
                 y: 0,
-                width: self.floating[self.active].output_width,
-                height: self.floating[self.active].output_height,
+                width: self.floating[workspace].output_width,
+                height: self.floating[workspace].output_height,
             });
         }
-        if let Some(rect) = self.floating[self.active].rect(window) {
+        if let Some(rect) = self.floating[workspace].rect(window) {
             return Ok(rect);
         }
-        self.layouts[self.active]
+        self.layouts[workspace]
             .tile_rect(window)
             .map_err(WorkspaceError::Layout)
     }
@@ -2094,14 +2141,19 @@ mod tests {
                 Mod+Q { close-window; }
             }
             window-rule {
+                open-maximized true
+            }
+            window-rule {
                 match app-id="slopos-config"
                 open-on-workspace "main"
                 open-floating true
+                open-maximized true
             }
             window-rule {
                 match app-id="slopos-config"
                 open-on-workspace "config"
                 open-floating false
+                open-maximized false
             }
             "#,
         )
@@ -2514,6 +2566,14 @@ mod tests {
             config.window_rules.floating_for("slopos-config"),
             Some(false)
         );
+        assert_eq!(
+            config.window_rules.maximized_for("slopos-terminal"),
+            Some(true)
+        );
+        assert_eq!(
+            config.window_rules.maximized_for("slopos-config"),
+            Some(false)
+        );
     }
 
     #[test]
@@ -2532,6 +2592,10 @@ mod tests {
         );
         assert_eq!(
             parse_niri_shell_config("window-rule { open-floating maybe; }"),
+            Err(NiriConfigError::InvalidWindowRule)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { open-maximized maybe; }"),
             Err(NiriConfigError::InvalidWindowRule)
         );
         assert!(
