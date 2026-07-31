@@ -12,9 +12,9 @@ root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`�
 
 `/sbin/slop-shell` 现在是跨 reload 常驻的 service：初次提交 policy generation 1 并收到确认后，它等待 config generation 1；收到后重新读取 Waybar/swww、提交 policy generation 2，再等待下一代 config。交互回归中的有效 `RELOAD` 发布 config generation 2，令 PID 2 再读文件并提交 policy generation 3；`RELOAD BAD` 保持 config generation 2，所以 PID 2 继续休眠且没有 policy generation 4。PID 1 在关闭自己的最后一个 fd 后常驻 `wait4` 作为 supervisor，block task 持有两者的 process/VFS runtime。
 
-首代 `policy-applied` 后，PID 2 还会通过 `0x534c0003` 提交一份 3436-byte 信封：332 bytes 是标准 Wayland little-endian request stream，完整建立 registry/compositor/shm/xdg-shell 对象链，设置 title/app-id，attach 32×24 XRGB8888 buffer，提交 full `damage_buffer`、frame callback 与 atomic commit；3072 bytes 是同一用户进程生成的像素快照。kernel 的 `slopos-wayland` dispatcher 校验 frame/argument/object map 与完整单 `xdg_toplevel` lifecycle，双 bank 在 desktop task 合成后才 acknowledge。截图中 System 窗口的四色 surface 由这份用户态像素产生，并由脚本读取四个精确像素验证。
+首代 `policy-applied` 后，PID 2 会以三次 `0x534c0003` request batch 和三次阻塞式 `0x534c0004` server-event wait 运行标准 xdg-shell 顺序。12-byte `get_registry` 先取得五个 `wl_registry.global`；216-byte role batch bind compositor/shm/xdg、创建 surface/toplevel、设置 title/app-id并做无 buffer 的首次 commit；PID 2 随即解析 shm formats、`xdg_toplevel.configure(32×24)` 与 serial 1 的 `xdg_surface.configure`。只有解析成功后，148-byte configured batch 才会发送 `ack_configure(1)`、window geometry、shm pool/buffer、attach、full `damage_buffer`、frame callback 与 atomic commit，信封同时携带 3072-byte XRGB8888 像素。kernel 的 `slopos-wayland` dispatcher和持久 session 校验 frame/argument/object map、批次顺序与 configure serial，未 ack 的 buffer commit不能进入双 bank。desktop task 合成后发布 `wl_buffer.release`、`wl_callback.done(1)` 与 `wl_display.delete_id(11)`，PID 2 解析完 presentation event 才进入常驻 config wait。截图中 System 窗口的四色 surface 由这份用户态像素产生，并由脚本读取四个精确像素验证。
 
-这仍不是完整的用户态桌面。PS/2 输入、四份配置的发现与 parse bank、niri 状态机、swww daemon/transition、placement、GOP renderer 与 composition 仍在 kernel。`0x534c0003` 是 PID 2 专用的有界 bootstrap transport，不是 Wayland Unix socket；inline FD 只是当前信封中的受限 token，没有 `SCM_RIGHTS`、真实共享映射、server→client registry/xdg configure event、configure ack、buffer release、subsurface/layer-shell、动态 placement 或普通第三方 client。
+这仍不是完整的用户态桌面。PS/2 输入、四份配置的发现与 parse bank、niri 状态机、swww daemon/transition、placement、GOP renderer 与 composition 仍在 kernel。`0x534c0003/4` 是 PID 2 专用的有界 bootstrap transport，不是 Wayland Unix socket；inline FD 只是当前信封中的受限 token，没有 `SCM_RIGHTS`、真实共享映射、subsurface/layer-shell、动态 placement、通用重复 buffer lifecycle、普通第三方 client 或多 client object ownership。
 
 ## VFS 配置发现与原子重载
 
@@ -212,7 +212,7 @@ VFS 中选中的 CSS 使用 Waybar 同样的 GTK CSS selector 命名；仓库默
 
 这里的 Super+右键 compositor resize 优先级只适用于 bar 不接收该坐标的情况；位于窗口前方且 `passthrough=false` 的 top/overlay bar 会像其他 pointer button 一样先吞掉它，`passthrough=true` 或被普通窗口覆盖的 bottom bar 才把它交给下方窗口。
 
-当前独立测试计数为 shell 56 项、desktop protocol 8 项和 Wayland 12 项，共 76 项；Wayland 组覆盖 frame/argument/object map、core/xdg 分派、FD 边界与完整单 surface lifecycle/reject 路径。
+当前独立测试计数为 shell 56 项、desktop protocol 11 项和 Wayland 13 项，共 80 项；Wayland 组覆盖 frame/argument/object map、core/xdg 分派、FD 边界、server event 编码与 configure-gated 单 surface lifecycle/reject 路径。
 
 ## swww 式壁纸控制
 

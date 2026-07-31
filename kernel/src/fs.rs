@@ -34,7 +34,7 @@ const BLOCK_SIZE: usize = 4096;
 const CACHE_ENTRY_COUNT: usize = 8;
 const MULTI_TRANSACTION_MAX_BLOCKS: usize = 8;
 const ALLOCATION_TRANSACTION_BLOCKS: usize = 5;
-const ALLOCATION_PROBE_BLOCK: u64 = 119;
+const ALLOCATION_PROBE_BLOCK: u64 = 120;
 const CREATE_TRANSACTION_BLOCKS: usize = 5;
 const CREATE_PROBE_INODE: u32 = 32;
 const CREATE_PROBE_NAME: &[u8] = b"create-probe";
@@ -872,6 +872,10 @@ async fn drive_user_processes(
                     .await;
                     crate::process::resume_desktop_wait(request, event)
                 }
+            }
+            crate::process::ProcessEvent::WaylandWaiting(request) => {
+                let event = crate::wayland_service::next_event(request.after_sequence()).await;
+                crate::process::resume_wayland_wait(request, event)
             }
             crate::process::ProcessEvent::Exited { pid } => {
                 release_exited_process_files(device, open_files, pid);

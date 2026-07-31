@@ -6,8 +6,9 @@ use core::cell::UnsafeCell;
 use core::ptr;
 use slopos_desktop_protocol::{
     COMMIT_SIZE, DESKTOP_COMMIT_SYSCALL, DESKTOP_WAIT_SYSCALL, DesktopCommit, DesktopServiceEvent,
-    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WAYLAND_SURFACE_HEADER_SIZE,
-    WAYLAND_SURFACE_MAX_SIZE, WAYLAND_SURFACE_SYSCALL, WaylandSurfaceCommit, WaylandSurfaceHeader,
+    EVENT_CONFIG_APPLIED, EVENT_POLICY_APPLIED, EVENT_SIZE, WAYLAND_EVENT_MAX_SIZE,
+    WAYLAND_EVENT_WAIT_SYSCALL, WAYLAND_SURFACE_HEADER_SIZE, WAYLAND_SURFACE_MAX_SIZE,
+    WAYLAND_SURFACE_SYSCALL, WaylandServerEvent, WaylandSurfaceCommit, WaylandSurfaceHeader,
 };
 use slopos_process::{
     ProcessError, ProcessImage, ProcessState, ProcessTable, build_linux_initial_stack,
@@ -19,7 +20,7 @@ const DESKTOP_PID: u32 = 2;
 pub const PROCESS_CAPACITY: usize = 4;
 const PROCESS_FD_CAPACITY: usize = 8;
 const INIT_EXPECTED_SYSCALLS: u64 = 18;
-const DESKTOP_EXPECTED_SYSCALLS: u64 = 17;
+const DESKTOP_EXPECTED_SYSCALLS: u64 = 22;
 const PROCESS_SYSCALL_PATH_CAPACITY: usize = 128;
 pub const PROCESS_SYSCALL_IO_CAPACITY: usize = 256;
 const LINUX_AT_FDCWD: u64 = (-100i64) as u64;
@@ -196,6 +197,19 @@ impl DesktopWaitRequest {
 }
 
 #[derive(Clone, Copy)]
+pub struct WaylandWaitRequest {
+    pid: u32,
+    destination: u64,
+    after_sequence: u64,
+}
+
+impl WaylandWaitRequest {
+    pub const fn after_sequence(&self) -> u64 {
+        self.after_sequence
+    }
+}
+
+#[derive(Clone, Copy)]
 enum PendingSyscall {
     OpenAt(OpenAtRequest),
     Read(ReadRequest),
@@ -204,6 +218,7 @@ enum PendingSyscall {
     Yield,
     Wait(WaitRequest),
     DesktopWait(DesktopWaitRequest),
+    WaylandWait(WaylandWaitRequest),
 }
 
 #[derive(Clone, Copy)]
@@ -216,6 +231,7 @@ pub enum ProcessEvent {
     Preempted { pid: u32, tick: u64, count: u64 },
     Waiting { pid: u32 },
     DesktopWaiting(DesktopWaitRequest),
+    WaylandWaiting(WaylandWaitRequest),
     Exited { pid: u32 },
 }
 
@@ -451,7 +467,7 @@ fn spawn_user_process(
     let argv0 = core::str::from_utf8(arguments[0]).unwrap_or("<non-utf8>");
     let argv1 = core::str::from_utf8(arguments[1]).unwrap_or("<non-utf8>");
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={pid} parent={} source={source} path={path} argv1={argv1} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frames={:#x}/{:#x} stack_frames={:#x}/{:#x} code=user-readonly stack=user-writable kernel=supervisor",
+        "SLOPOS-PROCESS: pid={pid} parent={} source={source} path={path} argv1={argv1} format=elf64 entry={:#x} segments={} file_bytes={} load_bytes={} memory_bytes={} address_space={:#x} user_code={:#x} user_stack={:#x} code_frames={:#x}/{:#x}/{:#x} stack_frames={:#x}/{:#x}/{:#x} code=user-readonly stack=user-writable kernel=supervisor",
         parent.unwrap_or(0),
         elf.entry(),
         elf.load_segment_count(),
@@ -463,8 +479,10 @@ fn spawn_user_process(
         crate::paging::USER_STACK_TOP,
         address_space.code_frames[0],
         address_space.code_frames[1],
+        address_space.code_frames[2],
         address_space.stack_frames[0],
-        address_space.stack_frames[1]
+        address_space.stack_frames[1],
+        address_space.stack_frames[2]
     ));
     crate::serial::serialln(format_args!(
         "SLOPOS-PROCESS: pid={pid} initial_stack abi=linux-x86_64 rsp={:#x} aligned=16 stack_pages={} argc={} argv0={argv0} argv1={argv1} envc={} auxv_pairs={} bytes={}",
@@ -712,7 +730,10 @@ pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> Proces
                 crate::fatal("non-read completion carried output bytes");
             }
         }
-        PendingSyscall::Yield | PendingSyscall::Wait(_) | PendingSyscall::DesktopWait(_) => {
+        PendingSyscall::Yield
+        | PendingSyscall::Wait(_)
+        | PendingSyscall::DesktopWait(_)
+        | PendingSyscall::WaylandWait(_) => {
             crate::fatal("scheduler syscall was sent through I/O completion")
         }
     }
@@ -771,6 +792,51 @@ pub fn resume_desktop_wait(
         "SLOPOS-SCHED: pid={pid} state=blocked->runnable reason=desktop-event event={} generation={}",
         desktop_event_name(event.kind),
         event.generation,
+    ));
+    run_process(pid)
+}
+
+pub fn resume_wayland_wait(
+    request: WaylandWaitRequest,
+    event: WaylandServerEvent<'_>,
+) -> ProcessEvent {
+    let pid = request.pid;
+    let pending = pending_syscall(pid)
+        .unwrap_or_else(|| crate::fatal("Wayland event resume has no pending syscall"));
+    let PendingSyscall::WaylandWait(pending_request) = pending else {
+        crate::fatal("Wayland event resumed a different pending syscall");
+    };
+    if pending_request.pid != request.pid
+        || pending_request.destination != request.destination
+        || pending_request.after_sequence != request.after_sequence
+        || event.validate().is_err()
+        || event.header.sequence <= request.after_sequence
+    {
+        crate::fatal("Wayland event completion failed validation");
+    }
+    let mut encoded = [0; WAYLAND_EVENT_MAX_SIZE];
+    let length = event
+        .encode(&mut encoded)
+        .unwrap_or_else(|_| crate::fatal("Wayland event encoding failed"));
+    copy_to_user(pid, request.destination, &encoded[..length])
+        .unwrap_or_else(|| crate::fatal("Wayland event destination became invalid"));
+    crate::wayland_service::acknowledge_event(event.header.sequence);
+    clear_pending_syscall(pid);
+    saved_syscall_frame_mut(pid).rax = length as u64;
+    let process = process_table()
+        .snapshot(pid)
+        .unwrap_or_else(|_| crate::fatal("Wayland event process disappeared"));
+    if process.state != ProcessState::Blocked {
+        crate::fatal("only a blocked Wayland client can receive an event");
+    }
+    process_table_mut()
+        .mark_runnable(pid)
+        .unwrap_or_else(|_| crate::fatal("Wayland client blocked-to-runnable transition failed"));
+    crate::serial::serialln(format_args!(
+        "SLOPOS-SCHED: pid={pid} state=blocked->runnable reason=wayland-event kind={} sequence={} wire_bytes={}",
+        event.header.kind,
+        event.header.sequence,
+        event.wire.len()
     ));
     run_process(pid)
 }
@@ -1156,15 +1222,48 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
             let wire_length = commit.wire.len();
             let pixel_length = commit.pixels.len();
             match crate::wayland_service::submit(pid, commit) {
-                Ok((generation, _)) => {
+                Ok(submission) => {
+                    let (phase, sequence) = match submission {
+                        crate::wayland_service::WaylandSubmission::Registry { event_sequence } => {
+                            ("registry", event_sequence)
+                        }
+                        crate::wayland_service::WaylandSubmission::Configure {
+                            event_sequence,
+                            ..
+                        } => ("initial-commit", event_sequence),
+                        crate::wayland_service::WaylandSubmission::Surface {
+                            generation, ..
+                        } => ("configured-commit", generation),
+                    };
                     frame.rax = 0;
                     crate::serial::serialln(format_args!(
-                        "SLOPOS-SYSCALL: pid={pid} abi=slopos-wayland-bootstrap-v1 entry=syscall return=sysretq nr={WAYLAND_SURFACE_SYSCALL} envelope_bytes={total_size} wire_bytes={wire_length} pixel_bytes={pixel_length} generation={generation} origin=cpl3 result=0"
+                        "SLOPOS-SYSCALL: pid={pid} abi=slopos-wayland-bootstrap-v1 entry=syscall return=sysretq nr={WAYLAND_SURFACE_SYSCALL} phase={phase} envelope_bytes={total_size} wire_bytes={wire_length} pixel_bytes={pixel_length} sequence={sequence} origin=cpl3 result=0"
                     ));
                 }
                 Err(_) => frame.rax = LINUX_EINVAL as u64,
             }
             0
+        }
+        WAYLAND_EVENT_WAIT_SYSCALL => {
+            if pid != DESKTOP_PID || frame.rsi != WAYLAND_EVENT_MAX_SIZE as u64 {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            }
+            if !validate_user_range(pid, frame.rdi, WAYLAND_EVENT_MAX_SIZE, true) {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let request = WaylandWaitRequest {
+                pid,
+                destination: frame.rdi,
+                after_sequence: frame.rdx,
+            };
+            suspend_io_syscall(pid, frame, PendingSyscall::WaylandWait(request));
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=slopos-wayland-bootstrap-v1 entry=syscall return=kernel nr={WAYLAND_EVENT_WAIT_SYSCALL} wait_event=server-wire after_sequence={} event_capacity={WAYLAND_EVENT_MAX_SIZE} state=blocked origin=cpl3",
+                request.after_sequence
+            ));
+            2
         }
         LINUX_SYS_EXIT => {
             if frame.rdi > u64::from(u8::MAX) {
@@ -1230,6 +1329,9 @@ fn process_event_after_user(pid: u32) -> ProcessEvent {
         }
         (ProcessState::Blocked, PendingSyscall::DesktopWait(request)) => {
             ProcessEvent::DesktopWaiting(request)
+        }
+        (ProcessState::Blocked, PendingSyscall::WaylandWait(request)) => {
+            ProcessEvent::WaylandWaiting(request)
         }
         (ProcessState::Runnable, PendingSyscall::Yield) => ProcessEvent::Yielded { pid },
         _ => crate::fatal("process returned with an inconsistent scheduler state"),

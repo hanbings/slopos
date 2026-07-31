@@ -446,6 +446,46 @@ pub fn encode_callback_done(
     message.finish()
 }
 
+pub fn encode_shm_format(bytes: &mut [u8], shm: u32, format: u32) -> Result<&[u8], WireError> {
+    let mut message = MessageBuilder::new(bytes, shm, 0)?;
+    message.uint(format)?;
+    message.finish()
+}
+
+pub fn encode_xdg_toplevel_configure<'a>(
+    bytes: &'a mut [u8],
+    toplevel: u32,
+    width: i32,
+    height: i32,
+    states: &[u8],
+) -> Result<&'a [u8], WireError> {
+    if width < 0 || height < 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, toplevel, 0)?;
+    message.int(width)?;
+    message.int(height)?;
+    message.array(states)?;
+    message.finish()
+}
+
+pub fn encode_xdg_surface_configure(
+    bytes: &mut [u8],
+    xdg_surface: u32,
+    serial: u32,
+) -> Result<&[u8], WireError> {
+    if serial == 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, xdg_surface, 0)?;
+    message.uint(serial)?;
+    message.finish()
+}
+
+pub fn encode_buffer_release(bytes: &mut [u8], buffer: u32) -> Result<&[u8], WireError> {
+    MessageBuilder::new(bytes, buffer, 0)?.finish()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ObjectState {
     Empty,
@@ -478,6 +518,7 @@ impl Object {
     }
 }
 
+#[derive(Clone)]
 pub struct ObjectMap<const CAPACITY: usize> {
     slots: [Object; CAPACITY],
 }
@@ -727,6 +768,7 @@ pub enum Request<'a> {
     },
 }
 
+#[derive(Clone)]
 pub struct Connection<const OBJECTS: usize> {
     objects: ObjectMap<OBJECTS>,
 }
@@ -1374,6 +1416,7 @@ pub enum SurfaceError {
     UnexpectedRequest,
     DuplicateLifecycle,
     IncompleteLifecycle,
+    InvalidConfigure,
     InvalidBuffer,
     InvalidMetadata,
 }
@@ -1384,15 +1427,48 @@ impl From<WireError> for SurfaceError {
     }
 }
 
-/// A strict bootstrap server for one `xdg_toplevel` backed by one `wl_shm`
-/// buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceSessionEvent {
+    Registry {
+        registry: u32,
+    },
+    Configure {
+        shm: u32,
+        xdg_surface: u32,
+        toplevel: u32,
+        serial: u32,
+    },
+    Committed(CommittedSurface),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PresentedSurface {
+    pub buffer: u32,
+    pub frame_callback: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SurfacePhase {
+    AwaitRegistry,
+    AwaitInitialCommit,
+    AwaitConfiguredCommit,
+    Committed,
+    Presented,
+}
+
+/// A strict, staged bootstrap server for one `xdg_toplevel` backed by one
+/// `wl_shm` buffer.
 ///
-/// This validates standard Wayland request framing and object relationships.
-/// Transport of the one file descriptor and its storage is deliberately left
-/// to the caller; SlopOS currently supplies those through its versioned
+/// The server requires `get_registry`, an initial bufferless role commit,
+/// `xdg_surface.configure` acknowledgement, and only then a damaged buffer
+/// commit. Transport of the one file descriptor and its storage is deliberately
+/// left to the caller; SlopOS currently supplies those through its versioned
 /// bootstrap syscall rather than a Unix-domain socket with `SCM_RIGHTS`.
+#[derive(Clone)]
 pub struct SingleSurfaceSession<const OBJECTS: usize> {
     connection: Connection<OBJECTS>,
+    phase: SurfacePhase,
+    configure_serial: u32,
     registry: Option<u32>,
     compositor: Option<u32>,
     shm: Option<u32>,
@@ -1407,10 +1483,13 @@ pub struct SingleSurfaceSession<const OBJECTS: usize> {
     frame_callback: Option<u32>,
     title: SurfaceText,
     app_id: SurfaceText,
+    initial_committed: bool,
+    configure_acked: bool,
+    window_geometry: bool,
     committed: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BufferState {
     id: u32,
     width: u32,
@@ -1420,9 +1499,14 @@ struct BufferState {
 }
 
 impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
-    pub fn new() -> Result<Self, SurfaceError> {
+    pub fn new(configure_serial: u32) -> Result<Self, SurfaceError> {
+        if configure_serial == 0 {
+            return Err(SurfaceError::InvalidConfigure);
+        }
         Ok(Self {
             connection: Connection::new()?,
+            phase: SurfacePhase::AwaitRegistry,
+            configure_serial,
             registry: None,
             compositor: None,
             shm: None,
@@ -1437,39 +1521,87 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
             frame_callback: None,
             title: SurfaceText::EMPTY,
             app_id: SurfaceText::EMPTY,
+            initial_committed: false,
+            configure_acked: false,
+            window_geometry: false,
             committed: false,
         })
     }
 
-    pub fn accept(
+    pub fn accept_batch(
         &mut self,
         mut wire: &[u8],
-        inline_file_descriptor: i32,
+        inline_file_descriptor: Option<i32>,
         pixel_length: usize,
-    ) -> Result<CommittedSurface, SurfaceError> {
-        if wire.is_empty() || pixel_length == 0 || self.committed {
+    ) -> Result<SurfaceSessionEvent, SurfaceError> {
+        if wire.is_empty()
+            || matches!(
+                self.phase,
+                SurfacePhase::Committed | SurfacePhase::Presented
+            )
+            || (matches!(self.phase, SurfacePhase::AwaitConfiguredCommit)
+                != (inline_file_descriptor.is_some() && pixel_length != 0))
+            || (!matches!(self.phase, SurfacePhase::AwaitConfiguredCommit)
+                && (inline_file_descriptor.is_some() || pixel_length != 0))
+        {
             return Err(SurfaceError::UnexpectedRequest);
         }
         while !wire.is_empty() {
-            if self.committed {
+            if self.initial_committed || self.committed {
                 return Err(SurfaceError::UnexpectedRequest);
             }
             let (frame, _) = Frame::decode(wire)?;
             let object = self.connection.objects().get(frame.header.object_id)?;
             let supplies_fd = object.interface == Interface::Shm && frame.header.opcode == 0;
-            let descriptors = if supplies_fd {
-                core::slice::from_ref(&inline_file_descriptor)
+            let descriptor = inline_file_descriptor.unwrap_or_default();
+            let descriptors = if supplies_fd && inline_file_descriptor.is_some() {
+                core::slice::from_ref(&descriptor)
             } else {
                 &[]
             };
             let (request, remaining) = self.connection.dispatch(wire, descriptors)?;
-            self.apply(request, inline_file_descriptor, pixel_length)?;
+            self.apply(request, descriptor, pixel_length)?;
             wire = remaining;
         }
-        if !self.committed {
-            return Err(SurfaceError::IncompleteLifecycle);
+        match self.phase {
+            SurfacePhase::AwaitRegistry => {
+                let registry = self.registry.ok_or(SurfaceError::IncompleteLifecycle)?;
+                self.phase = SurfacePhase::AwaitInitialCommit;
+                Ok(SurfaceSessionEvent::Registry { registry })
+            }
+            SurfacePhase::AwaitInitialCommit => {
+                if !self.initial_committed
+                    || self.compositor.is_none()
+                    || self.shm.is_none()
+                    || self.wm_base.is_none()
+                    || self.surface.is_none()
+                    || self.xdg_surface.is_none()
+                    || self.toplevel.is_none()
+                    || self.title.length == 0
+                    || self.app_id.length == 0
+                {
+                    return Err(SurfaceError::IncompleteLifecycle);
+                }
+                self.initial_committed = false;
+                self.phase = SurfacePhase::AwaitConfiguredCommit;
+                Ok(SurfaceSessionEvent::Configure {
+                    shm: self.shm.ok_or(SurfaceError::IncompleteLifecycle)?,
+                    xdg_surface: self.xdg_surface.ok_or(SurfaceError::IncompleteLifecycle)?,
+                    toplevel: self.toplevel.ok_or(SurfaceError::IncompleteLifecycle)?,
+                    serial: self.configure_serial,
+                })
+            }
+            SurfacePhase::AwaitConfiguredCommit => {
+                if !self.committed {
+                    return Err(SurfaceError::IncompleteLifecycle);
+                }
+                self.phase = SurfacePhase::Committed;
+                Ok(SurfaceSessionEvent::Committed(self.snapshot()?))
+            }
+            SurfacePhase::Committed | SurfacePhase::Presented => {
+                Err(SurfaceError::UnexpectedRequest)
+            }
         }
-        self.snapshot()
     }
 
     fn apply(
@@ -1478,47 +1610,59 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
         inline_file_descriptor: i32,
         pixel_length: usize,
     ) -> Result<(), SurfaceError> {
-        match request {
-            Request::GetRegistry { registry } => {
-                set_once(&mut self.registry, registry)?;
+        match (self.phase, request) {
+            (SurfacePhase::AwaitRegistry, Request::GetRegistry { registry }) => {
+                set_once(&mut self.registry, registry)?
             }
-            Request::Bind {
-                registry,
-                interface,
-                new_id,
-                ..
-            } if self.registry == Some(registry) => match interface {
+            (
+                SurfacePhase::AwaitInitialCommit,
+                Request::Bind {
+                    registry,
+                    interface,
+                    new_id,
+                    ..
+                },
+            ) if self.registry == Some(registry) => match interface {
                 Interface::Compositor => set_once(&mut self.compositor, new_id)?,
                 Interface::Shm => set_once(&mut self.shm, new_id)?,
                 Interface::XdgWmBase => set_once(&mut self.wm_base, new_id)?,
                 _ => return Err(SurfaceError::UnexpectedRequest),
             },
-            Request::CreateSurface {
-                compositor,
-                surface,
-            } if self.compositor == Some(compositor) => {
+            (
+                SurfacePhase::AwaitInitialCommit,
+                Request::CreateSurface {
+                    compositor,
+                    surface,
+                },
+            ) if self.compositor == Some(compositor) => {
                 set_once(&mut self.surface, surface)?;
             }
-            Request::ShmCreatePool {
-                shm,
-                pool,
-                fd,
-                size,
-            } if self.shm == Some(shm)
+            (
+                SurfacePhase::AwaitConfiguredCommit,
+                Request::ShmCreatePool {
+                    shm,
+                    pool,
+                    fd,
+                    size,
+                },
+            ) if self.shm == Some(shm)
                 && fd == inline_file_descriptor
                 && usize::try_from(size).ok() == Some(pixel_length) =>
             {
                 set_once(&mut self.pool, pool)?;
             }
-            Request::ShmPoolCreateBuffer {
-                pool,
-                buffer,
-                offset,
-                width,
-                height,
-                stride,
-                format,
-            } if self.pool == Some(pool) && self.buffer.is_none() => {
+            (
+                SurfacePhase::AwaitConfiguredCommit,
+                Request::ShmPoolCreateBuffer {
+                    pool,
+                    buffer,
+                    offset,
+                    width,
+                    height,
+                    stride,
+                    format,
+                },
+            ) if self.pool == Some(pool) && self.buffer.is_none() => {
                 if offset != 0 || format != 1 {
                     return Err(SurfaceError::InvalidBuffer);
                 }
@@ -1543,48 +1687,90 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                     format,
                 });
             }
-            Request::XdgGetSurface {
-                wm_base,
-                xdg_surface,
-                surface,
-            } if self.wm_base == Some(wm_base) && self.surface == Some(surface) => {
+            (
+                SurfacePhase::AwaitInitialCommit,
+                Request::XdgGetSurface {
+                    wm_base,
+                    xdg_surface,
+                    surface,
+                },
+            ) if self.wm_base == Some(wm_base) && self.surface == Some(surface) => {
                 set_once(&mut self.xdg_surface, xdg_surface)?;
             }
-            Request::XdgGetToplevel {
-                xdg_surface,
-                toplevel,
-            } if self.xdg_surface == Some(xdg_surface) => {
+            (
+                SurfacePhase::AwaitInitialCommit,
+                Request::XdgGetToplevel {
+                    xdg_surface,
+                    toplevel,
+                },
+            ) if self.xdg_surface == Some(xdg_surface) => {
                 set_once(&mut self.toplevel, toplevel)?;
             }
-            Request::ToplevelSetTitle { toplevel, title }
+            (SurfacePhase::AwaitInitialCommit, Request::ToplevelSetTitle { toplevel, title })
                 if self.toplevel == Some(toplevel) && self.title.length == 0 =>
             {
                 self.title = SurfaceText::parse(title)?;
             }
-            Request::ToplevelSetAppId { toplevel, app_id }
+            (SurfacePhase::AwaitInitialCommit, Request::ToplevelSetAppId { toplevel, app_id })
                 if self.toplevel == Some(toplevel) && self.app_id.length == 0 =>
             {
                 self.app_id = SurfaceText::parse(app_id)?;
             }
-            Request::SurfaceAttach {
-                surface,
-                buffer: Some(buffer),
-                x: 0,
-                y: 0,
-            } if self.surface == Some(surface)
+            (
+                SurfacePhase::AwaitConfiguredCommit,
+                Request::XdgAckConfigure {
+                    xdg_surface,
+                    serial,
+                },
+            ) if self.xdg_surface == Some(xdg_surface)
+                && serial == self.configure_serial
+                && !self.configure_acked =>
+            {
+                self.configure_acked = true;
+            }
+            (
+                SurfacePhase::AwaitConfiguredCommit,
+                Request::XdgSetWindowGeometry {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                    xdg_surface,
+                },
+            ) if self.xdg_surface == Some(xdg_surface) && !self.window_geometry => {
+                let buffer = self.buffer.ok_or(SurfaceError::IncompleteLifecycle)?;
+                if u32::try_from(width).ok() != Some(buffer.width)
+                    || u32::try_from(height).ok() != Some(buffer.height)
+                {
+                    return Err(SurfaceError::InvalidBuffer);
+                }
+                self.window_geometry = true;
+            }
+            (
+                SurfacePhase::AwaitConfiguredCommit,
+                Request::SurfaceAttach {
+                    surface,
+                    buffer: Some(buffer),
+                    x: 0,
+                    y: 0,
+                },
+            ) if self.surface == Some(surface)
                 && self.buffer.map(|state| state.id) == Some(buffer)
                 && !self.attached =>
             {
                 self.attached = true;
             }
-            Request::SurfaceDamage {
-                surface,
-                buffer_coordinates: true,
-                x: 0,
-                y: 0,
-                width,
-                height,
-            } if self.surface == Some(surface) && !self.damaged => {
+            (
+                SurfacePhase::AwaitConfiguredCommit,
+                Request::SurfaceDamage {
+                    surface,
+                    buffer_coordinates: true,
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                },
+            ) if self.surface == Some(surface) && !self.damaged => {
                 let buffer = self.buffer.ok_or(SurfaceError::IncompleteLifecycle)?;
                 if u32::try_from(width).ok() != Some(buffer.width)
                     || u32::try_from(height).ok() != Some(buffer.height)
@@ -1593,23 +1779,25 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                 }
                 self.damaged = true;
             }
-            Request::SurfaceFrame { surface, callback }
+            (SurfacePhase::AwaitConfiguredCommit, Request::SurfaceFrame { surface, callback })
                 if self.surface == Some(surface) && self.frame_callback.is_none() =>
             {
                 self.frame_callback = Some(callback);
             }
-            Request::SurfaceCommit { surface } if self.surface == Some(surface) => {
-                if self.compositor.is_none()
-                    || self.shm.is_none()
-                    || self.wm_base.is_none()
+            (SurfacePhase::AwaitInitialCommit, Request::SurfaceCommit { surface })
+                if self.surface == Some(surface) =>
+            {
+                self.initial_committed = true;
+            }
+            (SurfacePhase::AwaitConfiguredCommit, Request::SurfaceCommit { surface })
+                if self.surface == Some(surface) =>
+            {
+                if !self.configure_acked
                     || self.buffer.is_none()
-                    || self.xdg_surface.is_none()
-                    || self.toplevel.is_none()
                     || !self.attached
                     || !self.damaged
+                    || !self.window_geometry
                     || self.frame_callback.is_none()
-                    || self.title.length == 0
-                    || self.app_id.length == 0
                 {
                     return Err(SurfaceError::IncompleteLifecycle);
                 }
@@ -1618,6 +1806,23 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
             _ => return Err(SurfaceError::UnexpectedRequest),
         }
         Ok(())
+    }
+
+    pub fn present(&mut self) -> Result<PresentedSurface, SurfaceError> {
+        if self.phase != SurfacePhase::Committed {
+            return Err(SurfaceError::UnexpectedRequest);
+        }
+        let presentation = PresentedSurface {
+            buffer: self.buffer.ok_or(SurfaceError::IncompleteLifecycle)?.id,
+            frame_callback: self
+                .frame_callback
+                .ok_or(SurfaceError::IncompleteLifecycle)?,
+        };
+        self.connection
+            .objects
+            .retire(presentation.frame_callback)?;
+        self.phase = SurfacePhase::Presented;
+        Ok(presentation)
     }
 
     fn snapshot(&self) -> Result<CommittedSurface, SurfaceError> {
@@ -1963,23 +2168,26 @@ mod tests {
         *cursor += builder.finish().unwrap().len();
     }
 
-    fn single_surface_batch(stride: i32, include_commit: bool, title: &str) -> ([u8; 768], usize) {
+    fn registry_batch() -> ([u8; 768], usize) {
+        let mut bytes = [0; 768];
+        let mut cursor = 0;
+        append_message(&mut bytes, &mut cursor, DISPLAY_OBJECT_ID, 1, |message| {
+            message.object(2).unwrap();
+        });
+        (bytes, cursor)
+    }
+
+    fn initial_surface_batch(include_commit: bool, title: &str) -> ([u8; 768], usize) {
         const REGISTRY: u32 = 2;
         const COMPOSITOR: u32 = 3;
         const SHM: u32 = 4;
         const WM_BASE: u32 = 5;
         const SURFACE: u32 = 6;
-        const POOL: u32 = 7;
-        const BUFFER: u32 = 8;
         const XDG_SURFACE: u32 = 9;
         const TOPLEVEL: u32 = 10;
-        const CALLBACK: u32 = 11;
 
         let mut bytes = [0; 768];
         let mut cursor = 0;
-        append_message(&mut bytes, &mut cursor, DISPLAY_OBJECT_ID, 1, |message| {
-            message.object(REGISTRY).unwrap();
-        });
         for (global, object) in [
             (CORE_GLOBALS[0], COMPOSITOR),
             (CORE_GLOBALS[1], SHM),
@@ -1995,18 +2203,6 @@ mod tests {
         append_message(&mut bytes, &mut cursor, COMPOSITOR, 0, |message| {
             message.object(SURFACE).unwrap();
         });
-        append_message(&mut bytes, &mut cursor, SHM, 0, |message| {
-            message.object(POOL).unwrap();
-            message.int(3_072).unwrap();
-        });
-        append_message(&mut bytes, &mut cursor, POOL, 0, |message| {
-            message.object(BUFFER).unwrap();
-            message.int(0).unwrap();
-            message.int(32).unwrap();
-            message.int(24).unwrap();
-            message.int(stride).unwrap();
-            message.uint(1).unwrap();
-        });
         append_message(&mut bytes, &mut cursor, WM_BASE, 2, |message| {
             message.object(XDG_SURFACE).unwrap();
             message.object(SURFACE).unwrap();
@@ -2019,6 +2215,47 @@ mod tests {
         });
         append_message(&mut bytes, &mut cursor, TOPLEVEL, 3, |message| {
             message.string("slopos-system").unwrap();
+        });
+        if include_commit {
+            append_message(&mut bytes, &mut cursor, SURFACE, 6, |_| {});
+        }
+        (bytes, cursor)
+    }
+
+    fn configured_surface_batch(
+        stride: i32,
+        configure_serial: u32,
+        include_commit: bool,
+    ) -> ([u8; 768], usize) {
+        const SHM: u32 = 4;
+        const SURFACE: u32 = 6;
+        const POOL: u32 = 7;
+        const BUFFER: u32 = 8;
+        const XDG_SURFACE: u32 = 9;
+        const CALLBACK: u32 = 11;
+
+        let mut bytes = [0; 768];
+        let mut cursor = 0;
+        append_message(&mut bytes, &mut cursor, XDG_SURFACE, 4, |message| {
+            message.uint(configure_serial).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, SHM, 0, |message| {
+            message.object(POOL).unwrap();
+            message.int(3_072).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, POOL, 0, |message| {
+            message.object(BUFFER).unwrap();
+            message.int(0).unwrap();
+            message.int(32).unwrap();
+            message.int(24).unwrap();
+            message.int(stride).unwrap();
+            message.uint(1).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, XDG_SURFACE, 3, |message| {
+            message.int(0).unwrap();
+            message.int(0).unwrap();
+            message.int(32).unwrap();
+            message.int(24).unwrap();
         });
         append_message(&mut bytes, &mut cursor, SURFACE, 1, |message| {
             message.object(BUFFER).unwrap();
@@ -2040,11 +2277,38 @@ mod tests {
         (bytes, cursor)
     }
 
+    fn advance_to_configure(
+        session: &mut SingleSurfaceSession<16>,
+        title: &str,
+    ) -> SurfaceSessionEvent {
+        let (wire, length) = registry_batch();
+        assert_eq!(
+            session.accept_batch(&wire[..length], None, 0).unwrap(),
+            SurfaceSessionEvent::Registry { registry: 2 }
+        );
+        let (wire, length) = initial_surface_batch(true, title);
+        session.accept_batch(&wire[..length], None, 0).unwrap()
+    }
+
     #[test]
-    fn accepts_a_complete_single_xdg_toplevel_commit() {
-        let (wire, length) = single_surface_batch(128, true, "Userspace Surface");
-        let mut session = SingleSurfaceSession::<16>::new().unwrap();
-        let surface = session.accept(&wire[..length], 0x534c, 3_072).unwrap();
+    fn accepts_a_configured_single_xdg_toplevel_commit() {
+        let mut session = SingleSurfaceSession::<16>::new(41).unwrap();
+        assert_eq!(
+            advance_to_configure(&mut session, "Userspace Surface"),
+            SurfaceSessionEvent::Configure {
+                shm: 4,
+                xdg_surface: 9,
+                toplevel: 10,
+                serial: 41,
+            }
+        );
+        let (wire, length) = configured_surface_batch(128, 41, true);
+        let SurfaceSessionEvent::Committed(surface) = session
+            .accept_batch(&wire[..length], Some(0x534c), 3_072)
+            .unwrap()
+        else {
+            panic!("configured commit did not publish a surface");
+        };
         assert_eq!(surface.surface, 6);
         assert_eq!(surface.buffer, 8);
         assert_eq!(surface.frame_callback, 11);
@@ -2055,42 +2319,99 @@ mod tests {
         assert_eq!(surface.format, 1);
         assert_eq!(surface.title.as_str(), "Userspace Surface");
         assert_eq!(surface.app_id.as_str(), "slopos-system");
+        assert_eq!(
+            session.present().unwrap(),
+            PresentedSurface {
+                buffer: 8,
+                frame_callback: 11,
+            }
+        );
     }
 
     #[test]
-    fn rejects_incomplete_or_malformed_surface_lifecycles() {
-        let (wire, length) = single_surface_batch(128, false, "Userspace Surface");
-        let mut session = SingleSurfaceSession::<16>::new().unwrap();
+    fn rejects_incomplete_unconfigured_or_malformed_surface_lifecycles() {
         assert_eq!(
-            session.accept(&wire[..length], 0x534c, 3_072),
+            SingleSurfaceSession::<16>::new(0).err(),
+            Some(SurfaceError::InvalidConfigure)
+        );
+
+        let mut session = SingleSurfaceSession::<16>::new(41).unwrap();
+        let (wire, length) = registry_batch();
+        session.accept_batch(&wire[..length], None, 0).unwrap();
+        let (wire, length) = initial_surface_batch(false, "Userspace Surface");
+        assert_eq!(
+            session.accept_batch(&wire[..length], None, 0),
             Err(SurfaceError::IncompleteLifecycle)
         );
 
-        let (wire, length) = single_surface_batch(124, true, "Userspace Surface");
-        let mut session = SingleSurfaceSession::<16>::new().unwrap();
+        let mut session = SingleSurfaceSession::<16>::new(41).unwrap();
+        advance_to_configure(&mut session, "Userspace Surface");
+        let (wire, length) = configured_surface_batch(128, 42, true);
         assert_eq!(
-            session.accept(&wire[..length], 0x534c, 3_072),
+            session.accept_batch(&wire[..length], Some(0x534c), 3_072),
+            Err(SurfaceError::UnexpectedRequest)
+        );
+
+        let mut session = SingleSurfaceSession::<16>::new(41).unwrap();
+        advance_to_configure(&mut session, "Userspace Surface");
+        let (wire, length) = configured_surface_batch(124, 41, true);
+        assert_eq!(
+            session.accept_batch(&wire[..length], Some(0x534c), 3_072),
             Err(SurfaceError::InvalidBuffer)
         );
 
-        let (wire, length) = single_surface_batch(128, true, "");
-        let mut session = SingleSurfaceSession::<16>::new().unwrap();
+        let mut session = SingleSurfaceSession::<16>::new(41).unwrap();
+        let (wire, length) = registry_batch();
+        session.accept_batch(&wire[..length], None, 0).unwrap();
+        let (wire, length) = initial_surface_batch(true, "");
         assert_eq!(
-            session.accept(&wire[..length], 0x534c, 3_072),
+            session.accept_batch(&wire[..length], None, 0),
             Err(SurfaceError::InvalidMetadata)
         );
     }
 
     #[test]
-    fn rejects_requests_after_the_atomic_surface_commit() {
-        let (mut wire, mut length) = single_surface_batch(128, true, "Userspace Surface");
+    fn rejects_requests_after_each_atomic_surface_commit() {
+        let mut session = SingleSurfaceSession::<16>::new(41).unwrap();
+        let (wire, length) = registry_batch();
+        session.accept_batch(&wire[..length], None, 0).unwrap();
+        let (mut wire, mut length) = initial_surface_batch(true, "Userspace Surface");
         append_message(&mut wire, &mut length, DISPLAY_OBJECT_ID, 0, |message| {
             message.object(12).unwrap()
         });
-        let mut session = SingleSurfaceSession::<16>::new().unwrap();
         assert_eq!(
-            session.accept(&wire[..length], 0x534c, 3_072),
+            session.accept_batch(&wire[..length], None, 0),
             Err(SurfaceError::UnexpectedRequest)
+        );
+    }
+
+    #[test]
+    fn encodes_configure_and_presentation_events() {
+        let mut bytes = [0; 64];
+        let frame = encode_shm_format(&mut bytes, 4, 1).unwrap();
+        assert_eq!(Frame::decode(frame).unwrap().0.header.object_id, 4);
+
+        let frame = encode_xdg_toplevel_configure(&mut bytes, 10, 32, 24, &[]).unwrap();
+        let (frame, _) = Frame::decode(frame).unwrap();
+        let mut arguments = ArgumentReader::new(frame.payload);
+        assert_eq!(arguments.int().unwrap(), 32);
+        assert_eq!(arguments.int().unwrap(), 24);
+        assert_eq!(arguments.array().unwrap(), &[]);
+
+        let frame = encode_xdg_surface_configure(&mut bytes, 9, 41).unwrap();
+        assert_eq!(
+            ArgumentReader::new(Frame::decode(frame).unwrap().0.payload)
+                .uint()
+                .unwrap(),
+            41
+        );
+        assert_eq!(
+            Frame::decode(encode_buffer_release(&mut bytes, 8).unwrap())
+                .unwrap()
+                .0
+                .header
+                .object_id,
+            8
         );
     }
 }

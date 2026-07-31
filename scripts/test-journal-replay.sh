@@ -16,7 +16,7 @@ replay_serial="${repo_dir}/evidence/journal-replay-serial.log"
 replay_debug="${repo_dir}/evidence/journal-replay-uefi-debugcon.log"
 replay_qemu="${repo_dir}/evidence/journal-replay-qemu.log"
 home_snapshot="${repo_dir}/target/journal-replay-homes.bin"
-home_blocks=(0 1 33 38 119)
+home_blocks=(0 1 33 38 120)
 
 restore_clean_artifacts() {
     "${cargo_bin}" build --locked --release \
@@ -61,7 +61,7 @@ done >"${home_snapshot}"
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "${injection_vars}"
 
 set +e
-timeout 8s qemu-system-x86_64 \
+timeout 10s qemu-system-x86_64 \
     -machine q35,accel=tcg \
     -cpu qemu64 \
     -m 256M \
@@ -85,18 +85,18 @@ grep -Fq \
     "SLOPOS-VFS: executable loaded path=/sbin/slop-init inode=23 bytes=26344 blocks=7 matches_boot=true" \
     "${injection_serial}"
 grep -Fq \
-    "SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/119 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5" \
+    "SLOPOS-EXT4: allocation crash injected sequence=1 start=1 tags=5 targets=0/1/33/38/120 old_state=allocated/grown new_state=free/original crash_point=after_commit_before_home writes=14 flushes=5" \
     "${injection_serial}"
 grep -Fq "needs_recovery" <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-grep -Eq "^Free blocks:[[:space:]]+61290$" \
+grep -Eq "^Free blocks:[[:space:]]+61289$" \
     <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-grep -Fq "Block 119 marked in use" \
-    <(/usr/sbin/debugfs -R "testb 119" "${root_image}" 2>/dev/null)
+grep -Fq "Block 120 marked in use" \
+    <(/usr/sbin/debugfs -R "testb 120" "${root_image}" 2>/dev/null)
 grep -Fq "Size: 8192" \
     <(/usr/sbin/debugfs -R "stat <31>" "${root_image}" 2>/dev/null)
 grep -Fq "Blockcount: 16" \
     <(/usr/sbin/debugfs -R "stat <31>" "${root_image}" 2>/dev/null)
-block_is_byte 119 71
+block_is_byte 120 71
 
 "${cargo_bin}" build --locked --release \
     -p slopos-kernel --target x86_64-unknown-none
@@ -104,7 +104,7 @@ block_is_byte 119 71
 cp /usr/share/OVMF/OVMF_VARS_4M.fd "${replay_vars}"
 
 set +e
-timeout 14s qemu-system-x86_64 \
+timeout 20s qemu-system-x86_64 \
     -machine q35,accel=tcg \
     -cpu qemu64 \
     -m 256M \
@@ -143,10 +143,16 @@ grep -Fq \
     "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-WAYLAND-SERVER: commit accepted pid=2 generation=1 transport=syscall-bootstrap-v1 objects=registry/compositor/shm/xdg_toplevel surface=6 buffer=8 callback=11 geometry=32x24 stride=128 format=1 title=\"SlopOS Userspace\" app_id=slopos-system wire_bytes=332 pixel_bytes=3072" \
+    "SLOPOS-WAYLAND-SERVER: registry advertised pid=2 sequence=1 registry=2 globals=wl_compositor/wl_shm/wl_seat/wl_output/xdg_wm_base wire_bytes=156" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-WAYLAND-SERVER: commit acknowledged generation=1 renderer=desktop active_bank=0" \
+    "SLOPOS-WAYLAND-SERVER: configure emitted pid=2 sequence=2 serial=1 shm=4 formats=argb8888/xrgb8888 xdg_surface=9 toplevel=10 geometry=32x24 states=empty wire_bytes=56" \
+    "${replay_serial}"
+grep -Fq \
+    "SLOPOS-WAYLAND-SERVER: commit accepted pid=2 generation=1 transport=syscall-bootstrap-v1 lifecycle=registry/configure/ack-configure objects=registry/compositor/shm/xdg_toplevel surface=6 buffer=8 callback=11 geometry=32x24 stride=128 format=1 title=\"SlopOS Userspace\" app_id=slopos-system wire_bytes=148 pixel_bytes=3072" \
+    "${replay_serial}"
+grep -Fq \
+    "SLOPOS-WAYLAND-SERVER: commit acknowledged generation=1 renderer=desktop active_bank=0 event_sequence=3 events=wl_buffer.release/wl_callback.done/wl_display.delete_id callback_data=1" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-WAYLAND-COMPOSITOR: surface rendered generation=1 owner_pid=2 app_id=slopos-system title=\"SlopOS Userspace\" geometry=32x24 destination=system-window scale=3 buffer_format=xrgb8888 frame_callback=11" \
@@ -193,10 +199,10 @@ if /usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null | grep -Fq "needs_recovery"
     echo "journal replay did not clear the ext4 recovery flag" >&2
     exit 1
 fi
-grep -Eq "^Free blocks:[[:space:]]+61291$" \
+grep -Eq "^Free blocks:[[:space:]]+61290$" \
     <(/usr/sbin/dumpe2fs -h "${root_image}" 2>/dev/null)
-grep -Fq "Block 119 not in use" \
-    <(/usr/sbin/debugfs -R "testb 119" "${root_image}" 2>/dev/null)
+grep -Fq "Block 120 not in use" \
+    <(/usr/sbin/debugfs -R "testb 120" "${root_image}" 2>/dev/null)
 grep -Fq "Size: 4096" \
     <(/usr/sbin/debugfs -R "stat <31>" "${root_image}" 2>/dev/null)
 grep -Fq "Blockcount: 8" \
@@ -235,7 +241,7 @@ sed -i 's/\r$//' \
 restore_clean_artifacts
 trap - EXIT
 clean_hash="$(sha256sum "${root_image}" | awk '{print $1}')"
-if [[ "${clean_hash}" != "2959e79b49ebe4259414e420500d2a70a57ca7f6c0dc3d355702cf9760be2da8" ]]; then
+if [[ "${clean_hash}" != "42e927083a024c72b46c43c03e761d862364e5ebeff68e03eca0532a93a0d1fd" ]]; then
     echo "journal replay cleanup did not restore the reproducible root image" >&2
     exit 1
 fi
