@@ -1043,7 +1043,7 @@ impl Desktop {
             animate |= self.pointer_middle_pressed();
         }
         if event.wheel != 0 {
-            animate |= self.pointer_scrolled(event.wheel);
+            animate |= self.pointer_scrolled(event.wheel, event.modifiers);
         }
 
         if left && self.scrolling_view && (event.dx != 0 || event.dy != 0) {
@@ -1202,19 +1202,36 @@ impl Desktop {
         self.execute_bar_action(module, action, "middle")
     }
 
-    fn pointer_scrolled(&mut self, wheel: i8) -> bool {
+    fn pointer_scrolled(&mut self, wheel: i8, modifiers: KeyModifiers) -> bool {
+        let (key, direction) = if wheel > 0 {
+            (BindingKey::WheelScrollUp, "up")
+        } else {
+            (BindingKey::WheelScrollDown, "down")
+        };
+        let modifiers = binding_modifiers(modifiers);
+        if let Some(action) = self.niri.bindings.action(modifiers, key) {
+            serialln(format_args!(
+                "SLOPOS-NIRI: wheel binding direction={} modifiers={:#x} action={} source=ps2-intellimouse",
+                direction,
+                modifiers.bits(),
+                action_name(action)
+            ));
+            self.execute_niri_action(action);
+            return false;
+        }
+
         let Some(module) = self.bar_module_at(self.pointer_x, self.pointer_y) else {
             return false;
         };
         let Some(config) = self.bar.module_configs.get(module) else {
             return false;
         };
-        let (action, direction) = if wheel > 0 {
+        let (action, button) = if wheel > 0 {
             (config.on_scroll_up, "scroll-up")
         } else {
             (config.on_scroll_down, "scroll-down")
         };
-        action.is_some_and(|action| self.execute_bar_action(module, action, direction))
+        action.is_some_and(|action| self.execute_bar_action(module, action, button))
     }
 
     fn bar_workspace_at(&self, x: i32, y: i32) -> Option<usize> {

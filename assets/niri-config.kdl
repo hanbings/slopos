@@ -23,6 +23,14 @@ binds {
     Mod+Ctrl+Page_Down { move-column-to-workspace-down; }
     Mod+Shift+Page_Up { move-workspace-up; }
     Mod+Shift+Page_Down { move-workspace-down; }
+    Mod+WheelScrollDown { focus-workspace-down; }
+    Mod+WheelScrollUp { focus-workspace-up; }
+    Mod+Ctrl+WheelScrollDown { move-column-to-workspace-down; }
+    Mod+Ctrl+WheelScrollUp { move-column-to-workspace-up; }
+    Mod+Shift+WheelScrollDown { focus-column-right; }
+    Mod+Shift+WheelScrollUp { focus-column-left; }
+    Mod+Ctrl+Shift+WheelScrollDown { move-column-right; }
+    Mod+Ctrl+Shift+WheelScrollUp { move-column-left; }
     Mod+1 { focus-workspace 1; }
     Mod+2 { focus-workspace 2; }
     Mod+3 { focus-workspace 3; }

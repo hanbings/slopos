@@ -3,6 +3,11 @@
 
 set -euo pipefail
 
+if ! command -v socat >/dev/null 2>&1; then
+    echo "test-interaction requires socat for deterministic QMP modifier+wheel input" >&2
+    exit 1
+fi
+
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${repo_dir}/target/slopos-esp.img"
 root_image="${repo_dir}/target/slopos-root.ext4"
@@ -12,9 +17,11 @@ runtime_dir="$(mktemp -d /tmp/slopos-interaction.XXXXXX)"
 runtime_image="${runtime_dir}/slopos-esp.img"
 runtime_root_image="${runtime_dir}/slopos-root.ext4"
 ovmf_vars="${runtime_dir}/OVMF_VARS_4M.fd"
+qmp_socket="${runtime_dir}/qmp.sock"
 
 cleanup() {
-    unlink "${runtime_image}" "${runtime_root_image}" "${ovmf_vars}" 2>/dev/null || true
+    unlink "${runtime_image}" "${runtime_root_image}" "${ovmf_vars}" "${qmp_socket}" \
+        2>/dev/null || true
     rmdir "${runtime_dir}" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -40,6 +47,52 @@ monitor_type() {
         esac
     done
     echo "sendkey ret 10"
+}
+
+qmp_wheel() {
+    local modifiers="$1"
+    local direction="$2"
+    local press
+    local release
+    local button
+
+    case "${modifiers}" in
+        mod)
+            press='{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"meta_l"}}}'
+            release='{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"meta_l"}}}'
+            ;;
+        mod-shift)
+            press='{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"meta_l"}}},{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"shift"}}}'
+            release='{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"shift"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"meta_l"}}}'
+            ;;
+        mod-ctrl)
+            press='{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"meta_l"}}},{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"ctrl"}}}'
+            release='{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"ctrl"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"meta_l"}}}'
+            ;;
+        mod-ctrl-shift)
+            press='{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"meta_l"}}},{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"ctrl"}}},{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"shift"}}}'
+            release='{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"shift"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"ctrl"}}},{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"meta_l"}}}'
+            ;;
+        *) return 2 ;;
+    esac
+    # QEMU's PS/2 IntelliMouse packet sign is opposite the QMP wheel-button name.
+    case "${direction}" in
+        down) button="wheel-up" ;;
+        up) button="wheel-down" ;;
+        *) return 2 ;;
+    esac
+
+    {
+        printf '%s\n' '{"execute":"qmp_capabilities"}'
+        printf '%s\n' \
+            "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[${press}]}}"
+        sleep 0.3
+        printf '%s\n' \
+            "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[{\"type\":\"btn\",\"data\":{\"down\":true,\"button\":\"${button}\"}},{\"type\":\"btn\",\"data\":{\"down\":false,\"button\":\"${button}\"}}]}}"
+        sleep 0.3
+        printf '%s\n' \
+            "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[${release}]}}"
+    } | socat - "UNIX-CONNECT:${qmp_socket}" >/dev/null
 }
 
 {
@@ -129,6 +182,30 @@ monitor_type() {
     echo "sendkey meta_l-shift-pgup 50"
     sleep 1
     echo "screendump ${repo_dir}/evidence/niri-workspace-moved-up.ppm"
+    qmp_wheel mod down
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-wheel-workspace-down.ppm"
+    qmp_wheel mod up
+    sleep 1
+    qmp_wheel mod-shift down
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-wheel-column-focus-right.ppm"
+    qmp_wheel mod-shift up
+    sleep 1
+    qmp_wheel mod-shift down
+    sleep 1
+    qmp_wheel mod-ctrl down
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-wheel-column-workspace-down.ppm"
+    qmp_wheel mod-ctrl up
+    sleep 1
+    qmp_wheel mod-shift up
+    sleep 1
+    qmp_wheel mod-ctrl-shift down
+    sleep 1
+    echo "screendump ${repo_dir}/evidence/niri-wheel-column-moved-right.ppm"
+    qmp_wheel mod-ctrl-shift up
+    sleep 1
     echo "sendkey meta_l-shift-f 50"
     sleep 1
     echo "mouse_move -441 -364"
@@ -383,6 +460,7 @@ monitor_type() {
     -global isa-debugcon.iobase=0x402 \
     -display none \
     -monitor stdio \
+    -qmp "unix:${qmp_socket},server=on,wait=off" \
     -no-reboot >/dev/null
 
 sed -i 's/\r$//' "${serial_log}" "${debugcon_log}"
@@ -492,6 +570,20 @@ grep -Fq "SLOPOS-NIRI: binding action=focus-workspace changed=true workspace=2 n
 grep -Fq "SLOPOS-NIRI: workspace target action=focus-workspace kind=name value=main" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace reordered action=move-workspace-up workspace=1 name=main previous=2 focused=0 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-workspace-up changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: wheel binding direction=down modifiers=0x1 action=focus-workspace-down source=ps2-intellimouse" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: wheel binding direction=up modifiers=0x1 action=focus-workspace-up source=ps2-intellimouse" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: wheel binding direction=down modifiers=0x5 action=focus-column-right source=ps2-intellimouse" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: wheel binding direction=up modifiers=0x5 action=focus-column-left source=ps2-intellimouse" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: wheel binding direction=down modifiers=0x3 action=move-column-to-workspace-down source=ps2-intellimouse" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: wheel binding direction=up modifiers=0x3 action=move-column-to-workspace-up source=ps2-intellimouse" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: wheel binding direction=down modifiers=0x7 action=move-column-right source=ps2-intellimouse" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: wheel binding direction=up modifiers=0x7 action=move-column-left source=ps2-intellimouse" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-down changed=true workspace=2 name=config focused=2" "${serial_log}"
+grep -Fq "SLOPOS-NIRI: binding action=focus-workspace-up changed=true workspace=1 name=main focused=0" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-down member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace-up member=SYSTEM workspace=1 name=main x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: column reordered kind=TERMINAL x=520 direction=move-column-right layout=scrolling" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP: column reordered kind=TERMINAL x=16 direction=move-column-left layout=scrolling" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: fullscreen toggled state=active kind=TERMINAL restore_layer=tiling x=0 y=0 width=1024 height=768 bar=covered layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: fullscreen toggled state=inactive kind=TERMINAL restore_layer=tiling x=16 y=56 width=488 height=696 bar=visible layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-NIRI: binding action=move-window-to-floating changed=true workspace=1 name=main focused=0" "${serial_log}"
@@ -638,6 +730,10 @@ test -s "${repo_dir}/evidence/niri-focus-column-first.ppm"
 test -s "${repo_dir}/evidence/niri-workspace-moved-down.ppm"
 test -s "${repo_dir}/evidence/niri-workspace-reordered-name.ppm"
 test -s "${repo_dir}/evidence/niri-workspace-moved-up.ppm"
+test -s "${repo_dir}/evidence/niri-wheel-workspace-down.ppm"
+test -s "${repo_dir}/evidence/niri-wheel-column-focus-right.ppm"
+test -s "${repo_dir}/evidence/niri-wheel-column-workspace-down.ppm"
+test -s "${repo_dir}/evidence/niri-wheel-column-moved-right.ppm"
 test -s "${repo_dir}/evidence/niri-tiled-fullscreen.ppm"
 test -s "${repo_dir}/evidence/niri-tiled-fullscreen-restored.ppm"
 test -s "${repo_dir}/evidence/niri-floating-fullscreen.ppm"
@@ -714,6 +810,14 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/niri-workspace-reordered-name.png"
     pnmtopng "${repo_dir}/evidence/niri-workspace-moved-up.ppm" \
         >"${repo_dir}/evidence/niri-workspace-moved-up.png"
+    pnmtopng "${repo_dir}/evidence/niri-wheel-workspace-down.ppm" \
+        >"${repo_dir}/evidence/niri-wheel-workspace-down.png"
+    pnmtopng "${repo_dir}/evidence/niri-wheel-column-focus-right.ppm" \
+        >"${repo_dir}/evidence/niri-wheel-column-focus-right.png"
+    pnmtopng "${repo_dir}/evidence/niri-wheel-column-workspace-down.ppm" \
+        >"${repo_dir}/evidence/niri-wheel-column-workspace-down.png"
+    pnmtopng "${repo_dir}/evidence/niri-wheel-column-moved-right.ppm" \
+        >"${repo_dir}/evidence/niri-wheel-column-moved-right.png"
     pnmtopng "${repo_dir}/evidence/niri-tiled-fullscreen.ppm" \
         >"${repo_dir}/evidence/niri-tiled-fullscreen.png"
     pnmtopng "${repo_dir}/evidence/niri-tiled-fullscreen-restored.ppm" \

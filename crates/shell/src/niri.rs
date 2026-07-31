@@ -5,7 +5,7 @@ use crate::{
 };
 
 pub const MAX_NIRI_WORKSPACES: usize = 8;
-pub const MAX_NIRI_BINDINGS: usize = 64;
+pub const MAX_NIRI_BINDINGS: usize = 80;
 pub const MAX_NIRI_WINDOW_RULES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +39,8 @@ pub enum BindingKey {
     Down,
     PageUp,
     PageDown,
+    WheelScrollUp,
+    WheelScrollDown,
     Home,
     End,
     Return,
@@ -704,6 +706,8 @@ fn parse_binding_key(value: &str) -> Result<BindingKey, NiriConfigError> {
         "Down" => Ok(BindingKey::Down),
         "PageUp" | "Page_Up" => Ok(BindingKey::PageUp),
         "PageDown" | "Page_Down" => Ok(BindingKey::PageDown),
+        "WheelScrollUp" => Ok(BindingKey::WheelScrollUp),
+        "WheelScrollDown" => Ok(BindingKey::WheelScrollDown),
         "Home" => Ok(BindingKey::Home),
         "End" => Ok(BindingKey::End),
         "Return" => Ok(BindingKey::Return),
@@ -2044,6 +2048,10 @@ mod tests {
                 Mod+Shift+Down repeat=false { move-column-to-workspace-down; }
                 Mod+Shift+Page_Up { move-workspace-up; }
                 Mod+Shift+Page_Down { move-workspace-down; }
+                Mod+WheelScrollDown cooldown-ms=150 { focus-workspace-down; }
+                Mod+Ctrl+WheelScrollUp cooldown-ms=150 { move-column-to-workspace-up; }
+                Mod+Shift+WheelScrollDown { focus-column-right; }
+                Mod+Ctrl+Shift+WheelScrollUp { move-column-left; }
                 Mod+1 { focus-workspace 1; }
                 Mod+Ctrl+2 { move-column-to-workspace 2; }
                 Mod+Alt+C { focus-workspace "config"; }
@@ -2104,7 +2112,7 @@ mod tests {
             config.workspaces.get(1).unwrap().open_on_output,
             Some("SLOPOS-1")
         );
-        assert_eq!(config.bindings.len(), 50);
+        assert_eq!(config.bindings.len(), 54);
         assert_eq!(
             config
                 .bindings
@@ -2171,6 +2179,35 @@ mod tests {
                 BindingKey::PageDown
             ),
             Some(NiriAction::MoveWorkspaceDown)
+        );
+        assert_eq!(
+            config
+                .bindings
+                .action(BindingModifiers::MOD, BindingKey::WheelScrollDown),
+            Some(NiriAction::FocusWorkspaceDown)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::CTRL),
+                BindingKey::WheelScrollUp
+            ),
+            Some(NiriAction::MoveColumnToWorkspaceUp)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD.with(BindingModifiers::SHIFT),
+                BindingKey::WheelScrollDown
+            ),
+            Some(NiriAction::FocusColumnRight)
+        );
+        assert_eq!(
+            config.bindings.action(
+                BindingModifiers::MOD
+                    .with(BindingModifiers::CTRL)
+                    .with(BindingModifiers::SHIFT),
+                BindingKey::WheelScrollUp
+            ),
+            Some(NiriAction::MoveColumnLeft)
         );
         assert_eq!(
             config.bindings.action(
