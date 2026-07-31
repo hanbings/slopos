@@ -131,6 +131,10 @@ pub fn acknowledge_config_applied(generation: u64) {
     ));
 }
 
+pub fn config_applied_generation() -> u64 {
+    CONFIG_APPLIED_GENERATION.load(Ordering::Acquire)
+}
+
 pub fn event_after(kind: u16, after_generation: u64) -> Option<DesktopServiceEvent> {
     let generation = match kind {
         EVENT_POLICY_APPLIED => POLICY_APPLIED_GENERATION.load(Ordering::Acquire),

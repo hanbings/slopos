@@ -305,6 +305,27 @@ impl<const SOCKETS: usize, const BACKLOG: usize, const BYTES: usize>
         Ok(count)
     }
 
+    /// Enqueues one complete stream batch or leaves the peer ring unchanged.
+    ///
+    /// Protocol servers use this for framed events so bounded backpressure can
+    /// never leave a truncated frame in the byte stream.
+    pub fn send_exact(&mut self, socket: SocketHandle, input: &[u8]) -> Result<usize, SocketError> {
+        let index = self.index(socket)?;
+        if self.slots[index].state != SocketState::Connected {
+            return Err(SocketError::InvalidState);
+        }
+        let peer = self.slots[index].peer.ok_or(SocketError::BrokenPipe)?;
+        if self.slots[index].peer_closed || self.slots[peer].state != SocketState::Connected {
+            return Err(SocketError::BrokenPipe);
+        }
+        if input.len() > self.slots[peer].receive.available() {
+            return Err(SocketError::WouldBlock);
+        }
+        let count = self.slots[peer].receive.push(input);
+        debug_assert_eq!(count, input.len());
+        Ok(count)
+    }
+
     /// Atomically enqueues one rights object with a complete byte batch.
     ///
     /// A single receive endpoint can hold one not-yet-delivered ancillary
@@ -545,6 +566,21 @@ mod tests {
         let mut byte = [0];
         table.recv(server, &mut byte).unwrap();
         assert!(table.readiness(first).unwrap().writable);
+    }
+
+    #[test]
+    fn exact_send_never_leaves_a_partial_protocol_frame() {
+        let mut table = Sockets::new();
+        let (_, client, server) = connection(&mut table);
+        assert_eq!(table.send_exact(client, b"123456"), Ok(6));
+        assert_eq!(
+            table.send_exact(client, b"frame"),
+            Err(SocketError::WouldBlock)
+        );
+        let mut bytes = [0; 8];
+        assert_eq!(table.recv(server, &mut bytes), Ok(6));
+        assert_eq!(&bytes[..6], b"123456");
+        assert_eq!(table.recv(server, &mut bytes), Err(SocketError::WouldBlock));
     }
 
     #[test]

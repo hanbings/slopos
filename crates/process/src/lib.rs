@@ -285,6 +285,17 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
             .map_err(ProcessError::Vfs)
     }
 
+    pub fn open_desktop_events(
+        &mut self,
+        pid: ProcessId,
+        generation: u64,
+    ) -> Result<u32, ProcessError> {
+        self.live_slot_mut(pid)?
+            .descriptors
+            .open_desktop_events(generation)
+            .map_err(ProcessError::Vfs)
+    }
+
     pub fn descriptor_object(
         &self,
         pid: ProcessId,
@@ -304,6 +315,18 @@ impl<const N: usize, const FDS: usize> ProcessTable<N, FDS> {
         self.live_slot(pid)?
             .descriptors
             .readable_object(fd)
+            .map_err(ProcessError::Vfs)
+    }
+
+    pub fn set_descriptor_object_offset(
+        &mut self,
+        pid: ProcessId,
+        fd: u32,
+        offset: u64,
+    ) -> Result<(), ProcessError> {
+        self.live_slot_mut(pid)?
+            .descriptors
+            .set_object_offset(fd, offset)
             .map_err(ProcessError::Vfs)
     }
 

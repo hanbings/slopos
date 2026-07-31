@@ -59,6 +59,7 @@ const INIT_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-init"];
 const INIT_EXECUTABLE_DISPLAY: &str = "/sbin/slop-init";
 const DESKTOP_EXECUTABLE_PATH: [&[u8]; 2] = [b"sbin", b"slop-shell"];
 const DESKTOP_EXECUTABLE_DISPLAY: &str = "/sbin/slop-shell";
+const DESKTOP_EVENTS_PATH: &[u8] = b"/run/slopos/desktop-events";
 const INIT_EXECUTABLE_CAPACITY: usize = 32 * 1024;
 const DESKTOP_EXECUTABLE_CAPACITY: usize = 48 * 1024;
 const PROCESS_FILE_CAPACITY: usize = 8;
@@ -72,28 +73,43 @@ type ProcessOpenFiles =
 struct UserProcessRuntime {
     namespace: MountTable<4>,
     open_files: ProcessOpenFiles,
-    desktop_wait: crate::process::DesktopWaitRequest,
+    parked: ParkedUserProcess,
+}
+
+#[derive(Clone, Copy)]
+enum ParkedUserProcess {
+    Desktop(crate::process::DesktopWaitRequest),
+    Poll(crate::process::PollRequest),
 }
 
 enum BlockRuntimeEvent {
     Desktop(slopos_desktop_protocol::DesktopServiceEvent),
+    Poll,
     Reload { inject_invalid: bool },
     Wallpaper,
 }
 
 struct NextBlockRuntimeEvent {
-    desktop_wait: crate::process::DesktopWaitRequest,
+    parked: ParkedUserProcess,
 }
 
 impl Future for NextBlockRuntimeEvent {
     type Output = BlockRuntimeEvent;
 
     fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(event) = crate::desktop_service::event_after(
-            self.desktop_wait.kind(),
-            self.desktop_wait.after_generation(),
-        ) {
-            return Poll::Ready(BlockRuntimeEvent::Desktop(event));
+        match self.parked {
+            ParkedUserProcess::Desktop(request) => {
+                if let Some(event) =
+                    crate::desktop_service::event_after(request.kind(), request.after_generation())
+                {
+                    return Poll::Ready(BlockRuntimeEvent::Desktop(event));
+                }
+            }
+            ParkedUserProcess::Poll(request) => {
+                if crate::process::poll_request_ready(request) {
+                    return Poll::Ready(BlockRuntimeEvent::Poll);
+                }
+            }
         }
         if crate::desktop_config::take_reload_request() {
             return Poll::Ready(BlockRuntimeEvent::Reload {
@@ -696,14 +712,16 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
     ));
     loop {
         match (NextBlockRuntimeEvent {
-            desktop_wait: user_processes.desktop_wait,
+            parked: user_processes.parked,
         })
         .await
         {
             BlockRuntimeEvent::Desktop(event) => {
-                let process_event =
-                    crate::process::resume_desktop_wait(user_processes.desktop_wait, event);
-                user_processes.desktop_wait = drive_user_processes(
+                let ParkedUserProcess::Desktop(request) = user_processes.parked else {
+                    device.fail("desktop event woke a poll request");
+                };
+                let process_event = crate::process::resume_desktop_wait(request, event);
+                user_processes.parked = drive_user_processes(
                     &mut mount,
                     &mut device,
                     &user_processes.namespace,
@@ -711,10 +729,22 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
                     process_event,
                 )
                 .await;
-                crate::serial::serialln(format_args!(
-                    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation={} init=wait4 resources=retained",
-                    user_processes.desktop_wait.after_generation()
-                ));
+                log_parked_process(user_processes.parked, "desktop-event");
+            }
+            BlockRuntimeEvent::Poll => {
+                let ParkedUserProcess::Poll(request) = user_processes.parked else {
+                    device.fail("descriptor readiness woke a desktop wait request");
+                };
+                let process_event = crate::process::resume_poll(request);
+                user_processes.parked = drive_user_processes(
+                    &mut mount,
+                    &mut device,
+                    &user_processes.namespace,
+                    &mut user_processes.open_files,
+                    process_event,
+                )
+                .await;
+                log_parked_process(user_processes.parked, "poll-ready");
             }
             BlockRuntimeEvent::Reload { inject_invalid } => {
                 load_and_publish_desktop_config(&mut mount, &mut device, false, inject_invalid)
@@ -811,16 +841,25 @@ async fn load_and_start_user_processes(
         "vfs",
         DESKTOP_EXECUTABLE_DISPLAY,
     );
-    let desktop_wait =
-        drive_user_processes(mount, device, &namespace, &mut open_files, event).await;
-    crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: userspace runtime parked init=wait4 desktop=config-applied after_generation={} resources=retained",
-        desktop_wait.after_generation()
-    ));
+    let parked = drive_user_processes(mount, device, &namespace, &mut open_files, event).await;
+    log_parked_process(parked, "userspace-start");
     UserProcessRuntime {
         namespace,
         open_files,
-        desktop_wait,
+        parked,
+    }
+}
+
+fn log_parked_process(parked: ParkedUserProcess, reason: &str) {
+    match parked {
+        ParkedUserProcess::Desktop(request) => crate::serial::serialln(format_args!(
+            "SLOPOS-PROCESS: userspace runtime parked reason={reason} init=wait4 desktop=config-applied after_generation={} resources=retained",
+            request.after_generation()
+        )),
+        ParkedUserProcess::Poll(request) => crate::serial::serialln(format_args!(
+            "SLOPOS-PROCESS: userspace runtime parked reason={reason} init=wait4 desktop=poll pid={} resources=retained",
+            request.pid()
+        )),
     }
 }
 
@@ -830,7 +869,7 @@ async fn drive_user_processes(
     namespace: &MountTable<4>,
     open_files: &mut ProcessOpenFiles,
     mut event: crate::process::ProcessEvent,
-) -> crate::process::DesktopWaitRequest {
+) -> ParkedUserProcess {
     let mut parked_desktop = None;
     loop {
         event = match event {
@@ -862,10 +901,10 @@ async fn drive_user_processes(
             crate::process::ProcessEvent::DesktopWaiting(request) => {
                 if request.kind() == EVENT_CONFIG_APPLIED {
                     if let Some(next) = crate::process::schedule_next_if_any(request.pid()) {
-                        parked_desktop = Some(request);
+                        parked_desktop = Some(ParkedUserProcess::Desktop(request));
                         next
                     } else {
-                        return request;
+                        return ParkedUserProcess::Desktop(request);
                     }
                 } else {
                     let event = crate::desktop_service::next_event(
@@ -879,6 +918,14 @@ async fn drive_user_processes(
             crate::process::ProcessEvent::WaylandWaiting(request) => {
                 let event = crate::wayland_service::next_event(request.after_sequence()).await;
                 crate::process::resume_wayland_wait(request, event)
+            }
+            crate::process::ProcessEvent::PollWaiting(request) => {
+                if let Some(next) = crate::process::schedule_next_if_any(request.pid()) {
+                    parked_desktop = Some(ParkedUserProcess::Poll(request));
+                    next
+                } else {
+                    return ParkedUserProcess::Poll(request);
+                }
             }
             crate::process::ProcessEvent::Exited { pid } => {
                 release_exited_process_files(device, open_files, pid);
@@ -896,6 +943,20 @@ async fn complete_process_openat(
     request: crate::process::OpenAtRequest,
 ) -> crate::process::ProcessEvent {
     let pid = request.pid();
+    if request.path() == DESKTOP_EVENTS_PATH {
+        if pid != 2 || request.access_mode() != AccessMode::ReadOnly {
+            return crate::process::resume_probe(pid, LINUX_EINVAL, None);
+        }
+        let generation = crate::desktop_service::config_applied_generation();
+        let fd = match crate::process::open_desktop_events(pid, generation) {
+            Ok(fd) => fd,
+            Err(_) => return crate::process::resume_probe(pid, LINUX_EMFILE, None),
+        };
+        crate::serial::serialln(format_args!(
+            "SLOPOS-VFS: process event stream open complete pid={pid} fd={fd} object=desktop-events cursor_generation={generation} access=readonly path=/run/slopos/desktop-events"
+        ));
+        return crate::process::resume_probe(pid, i64::from(fd), None);
+    }
     let process_index = process_index(pid)
         .unwrap_or_else(|| device.fail("process PID is outside the VFS backing table"));
     let path = match AbsolutePath::parse(request.path()) {
@@ -973,6 +1034,34 @@ async fn complete_process_read(
                 request.user_pages()
             ));
             return crate::process::resume_probe(pid, bytes as i64, Some(&output[..bytes]));
+        }
+        Ok(DescriptorObject::DesktopEvents) => {
+            let Ok((DescriptorObject::DesktopEvents, after_generation)) =
+                crate::process::readable_descriptor_object(pid, request.fd)
+            else {
+                return crate::process::resume_probe(pid, LINUX_EBADF, None);
+            };
+            if request.requested < slopos_desktop_protocol::EVENT_SIZE {
+                return crate::process::resume_probe(pid, LINUX_EINVAL, None);
+            }
+            let Some(event) =
+                crate::desktop_service::event_after(EVENT_CONFIG_APPLIED, after_generation)
+            else {
+                return crate::process::resume_probe(pid, LINUX_EINVAL, None);
+            };
+            if crate::process::set_descriptor_object_offset(pid, request.fd, event.generation)
+                .is_err()
+            {
+                return crate::process::resume_probe(pid, LINUX_EBADF, None);
+            }
+            let output = event.encode();
+            crate::serial::serialln(format_args!(
+                "SLOPOS-VFS: process event stream read complete pid={pid} fd={} object=desktop-events after_generation={after_generation} generation={} bytes={} async=false",
+                request.fd,
+                event.generation,
+                output.len()
+            ));
+            return crate::process::resume_probe(pid, output.len() as i64, Some(&output));
         }
         Ok(DescriptorObject::File(_)) => {}
         Ok(DescriptorObject::SharedMemory { index, generation }) => {
@@ -1162,6 +1251,9 @@ async fn complete_process_write(
         Ok(DescriptorObject::SharedMemory { .. }) => {
             return crate::process::resume_probe(pid, LINUX_EBADF, None);
         }
+        Ok(DescriptorObject::DesktopEvents) => {
+            return crate::process::resume_probe(pid, LINUX_EBADF, None);
+        }
         Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
     }
     let process_index = process_index(pid)
@@ -1230,6 +1322,16 @@ fn complete_process_close(
             ));
             return crate::process::resume_probe(pid, 0, None);
         }
+        Ok(DescriptorObject::DesktopEvents) => {
+            if crate::process::close_fd(pid, request.fd).is_err() {
+                return crate::process::resume_probe(pid, LINUX_EBADF, None);
+            }
+            crate::serial::serialln(format_args!(
+                "SLOPOS-VFS: process event stream close complete pid={pid} fd={} object=desktop-events async=false",
+                request.fd
+            ));
+            return crate::process::resume_probe(pid, 0, None);
+        }
         Ok(DescriptorObject::File(_)) => {}
         Err(_) => return crate::process::resume_probe(pid, LINUX_EBADF, None),
     }
@@ -1262,6 +1364,7 @@ fn release_exited_process_files(device: &BlockDevice, open_files: &mut ProcessOp
         .unwrap_or_else(|_| device.fail("exited process descriptor snapshot failed"));
     let mut socket_objects = 0usize;
     let mut shared_objects = 0usize;
+    let mut event_objects = 0usize;
     for object in objects[..object_count].iter().flatten() {
         match object {
             DescriptorObject::LocalSocket { index, generation } => {
@@ -1280,6 +1383,7 @@ fn release_exited_process_files(device: &BlockDevice, open_files: &mut ProcessOp
                 shared_objects += 1;
             }
             DescriptorObject::File(_) => {}
+            DescriptorObject::DesktopEvents => event_objects += 1,
         }
     }
     let descriptors = crate::process::close_all_files(pid)
@@ -1290,11 +1394,11 @@ fn release_exited_process_files(device: &BlockDevice, open_files: &mut ProcessOp
             backing_objects += 1;
         }
     }
-    if descriptors != backing_objects + socket_objects + shared_objects {
+    if descriptors != backing_objects + socket_objects + shared_objects + event_objects {
         device.fail("exited process descriptor/backing cleanup diverged");
     }
     crate::serial::serialln(format_args!(
-        "SLOPOS-PROCESS: pid={pid} exit resources released descriptors={descriptors} backing_objects={backing_objects} socket_objects={socket_objects} shared_objects={shared_objects} address_space_release=pending-reap"
+        "SLOPOS-PROCESS: pid={pid} exit resources released descriptors={descriptors} backing_objects={backing_objects} socket_objects={socket_objects} shared_objects={shared_objects} event_objects={event_objects} address_space_release=pending-reap"
     ));
 }
 

@@ -30,6 +30,7 @@ const LINUX_SYS_READ: u64 = 0;
 const USER_STDOUT: u64 = 1;
 const LINUX_SYS_WRITE: u64 = 1;
 const LINUX_SYS_CLOSE: u64 = 3;
+const LINUX_SYS_POLL: u64 = 7;
 const LINUX_SYS_LSEEK: u64 = 8;
 const LINUX_SYS_MMAP: u64 = 9;
 const LINUX_SYS_SCHED_YIELD: u64 = 24;
@@ -54,6 +55,10 @@ const LINUX_MSGHDR_SIZE: usize = 56;
 const LINUX_IOVEC_SIZE: usize = 16;
 const LINUX_CMSG_SPACE_ONE_FD: usize = 24;
 const LINUX_CMSG_LEN_ONE_FD: u64 = 20;
+const LINUX_POLLFD_SIZE: usize = 8;
+const LINUX_POLL_CAPACITY: usize = 4;
+const LINUX_POLLIN: i16 = 0x0001;
+const LINUX_POLLNVAL: i16 = 0x0020;
 const LINUX_EBADF: i64 = -9;
 const LINUX_ECHILD: i64 = -10;
 const LINUX_EFAULT: i64 = -14;
@@ -65,6 +70,7 @@ const LINUX_ECONNREFUSED: i64 = -111;
 const WAYLAND_MEMFD_NAME: &[u8] = b"slopos-wayland-shm\0";
 const INIT_MESSAGE: &[u8] = b"SLOPOS user write\n";
 const DESKTOP_MESSAGE: &[u8] = b"SLOPOS desktop policy ready\n";
+const DESKTOP_INPUT_MESSAGE: &[u8] = b"SLOPOS Wayland input ready\n";
 const INIT_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-init", b"--system"];
 const DESKTOP_ARGUMENTS: &[&[u8]] = &[b"/sbin/slop-shell", b"--session"];
 const INIT_ENVIRONMENT: &[&[u8]] = &[
@@ -219,6 +225,30 @@ pub struct CloseRequest {
 }
 
 #[derive(Clone, Copy)]
+struct PollDescriptor {
+    fd: u32,
+    events: i16,
+}
+
+impl PollDescriptor {
+    const EMPTY: Self = Self { fd: 0, events: 0 };
+}
+
+#[derive(Clone, Copy)]
+pub struct PollRequest {
+    pid: u32,
+    destination: u64,
+    descriptor_count: usize,
+    descriptors: [PollDescriptor; LINUX_POLL_CAPACITY],
+}
+
+impl PollRequest {
+    pub const fn pid(&self) -> u32 {
+        self.pid
+    }
+}
+
+#[derive(Clone, Copy)]
 struct WaitRequest {
     pid: u32,
     #[allow(dead_code)]
@@ -271,6 +301,7 @@ enum PendingSyscall {
     Wait(WaitRequest),
     DesktopWait(DesktopWaitRequest),
     WaylandWait(WaylandWaitRequest),
+    Poll(PollRequest),
 }
 
 #[derive(Clone, Copy)]
@@ -285,6 +316,7 @@ pub enum ProcessEvent {
     Waiting { pid: u32 },
     DesktopWaiting(DesktopWaitRequest),
     WaylandWaiting(WaylandWaitRequest),
+    PollWaiting(PollRequest),
     Exited { pid: u32 },
 }
 
@@ -618,6 +650,10 @@ pub fn open_shared_memory_read_only(
     process_table_mut().open_shared_memory_read_only(pid, handle.index(), handle.generation())
 }
 
+pub fn open_desktop_events(pid: u32, generation: u64) -> Result<u32, ProcessError> {
+    process_table_mut().open_desktop_events(pid, generation)
+}
+
 pub fn descriptor_object(pid: u32, fd: u32) -> Result<DescriptorObject, ProcessError> {
     process_table().descriptor_object(pid, fd)
 }
@@ -655,6 +691,10 @@ pub fn advance_descriptor_object(
     object_size: u64,
 ) -> Result<(), ProcessError> {
     process_table_mut().advance_descriptor_object(pid, fd, length, object_size)
+}
+
+pub fn set_descriptor_object_offset(pid: u32, fd: u32, offset: u64) -> Result<(), ProcessError> {
+    process_table_mut().set_descriptor_object_offset(pid, fd, offset)
 }
 
 pub fn seek_fd(pid: u32, fd: u32, offset: u64) -> Result<(), ProcessError> {
@@ -841,7 +881,8 @@ pub fn resume_probe(pid: u32, result: i64, read_output: Option<&[u8]>) -> Proces
         PendingSyscall::Yield
         | PendingSyscall::Wait(_)
         | PendingSyscall::DesktopWait(_)
-        | PendingSyscall::WaylandWait(_) => {
+        | PendingSyscall::WaylandWait(_)
+        | PendingSyscall::Poll(_) => {
             crate::fatal("scheduler syscall was sent through I/O completion")
         }
     }
@@ -926,6 +967,78 @@ fn finish_io_resume(pid: u32, result: i64) -> ProcessEvent {
         "SLOPOS-SCHED: pid={pid} state=blocked->runnable reason=io-complete"
     ));
     run_process(pid)
+}
+
+fn poll_descriptor_revents(pid: u32, descriptor: PollDescriptor) -> i16 {
+    if descriptor.events != LINUX_POLLIN {
+        return LINUX_POLLNVAL;
+    }
+    match readable_descriptor_object(pid, descriptor.fd) {
+        Ok((DescriptorObject::LocalSocket { index, generation }, _)) => {
+            let handle = slopos_ipc::SocketHandle::from_parts(index, generation);
+            match crate::local_socket_service::readiness(pid, handle) {
+                Ok(readiness) if readiness.readable => LINUX_POLLIN,
+                Ok(_) => 0,
+                Err(_) => LINUX_POLLNVAL,
+            }
+        }
+        Ok((DescriptorObject::DesktopEvents, after_generation)) => {
+            if crate::desktop_service::event_after(EVENT_CONFIG_APPLIED, after_generation).is_some()
+            {
+                LINUX_POLLIN
+            } else {
+                0
+            }
+        }
+        Ok(_) | Err(_) => LINUX_POLLNVAL,
+    }
+}
+
+fn poll_ready_count(request: PollRequest, write_results: bool) -> usize {
+    let mut ready = 0usize;
+    for (index, descriptor) in request.descriptors[..request.descriptor_count]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let revents = poll_descriptor_revents(request.pid, descriptor);
+        ready += usize::from(revents != 0);
+        if write_results {
+            let destination = request
+                .destination
+                .checked_add((index * LINUX_POLLFD_SIZE + 6) as u64)
+                .unwrap_or_else(|| crate::fatal("poll revents destination overflowed"));
+            copy_to_user(request.pid, destination, &revents.to_ne_bytes())
+                .unwrap_or_else(|| crate::fatal("poll revents destination became invalid"));
+        }
+    }
+    ready
+}
+
+pub fn poll_request_ready(request: PollRequest) -> bool {
+    poll_ready_count(request, false) != 0
+}
+
+pub fn resume_poll(request: PollRequest) -> ProcessEvent {
+    let pending = pending_syscall(request.pid)
+        .unwrap_or_else(|| crate::fatal("poll resume has no pending syscall"));
+    let PendingSyscall::Poll(pending_request) = pending else {
+        crate::fatal("poll resumed a different pending syscall");
+    };
+    if pending_request.destination != request.destination
+        || pending_request.descriptor_count != request.descriptor_count
+    {
+        crate::fatal("poll completion request changed while blocked");
+    }
+    let ready = poll_ready_count(request, true);
+    if ready == 0 {
+        crate::fatal("poll resumed without a ready descriptor");
+    }
+    crate::serial::serialln(format_args!(
+        "SLOPOS-SYSCALL: pid={} abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds={} ready={} timeout=-1 wake=descriptor-readiness",
+        request.pid, request.descriptor_count, ready
+    ));
+    finish_io_resume(request.pid, ready as i64)
 }
 
 pub fn resume_desktop_wait(
@@ -1469,15 +1582,16 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
         }
         LINUX_SYS_WRITE => {
             if frame.rdi == USER_STDOUT {
-                let expected = match pid {
-                    INIT_PID => INIT_MESSAGE,
-                    DESKTOP_PID => DESKTOP_MESSAGE,
+                let expected: &[u8] = match (pid, frame.rdx) {
+                    (INIT_PID, length) if length == INIT_MESSAGE.len() as u64 => INIT_MESSAGE,
+                    (DESKTOP_PID, length) if length == DESKTOP_MESSAGE.len() as u64 => {
+                        DESKTOP_MESSAGE
+                    }
+                    (DESKTOP_PID, length) if length == DESKTOP_INPUT_MESSAGE.len() as u64 => {
+                        DESKTOP_INPUT_MESSAGE
+                    }
                     _ => crate::fatal("stdout write came from an unknown process"),
                 };
-                if frame.rdx != expected.len() as u64 {
-                    frame.rax = LINUX_EINVAL as u64;
-                    return 0;
-                }
                 let mut message = [0u8; DESKTOP_MESSAGE.len()];
                 if copy_from_user(pid, frame.rsi, &mut message[..expected.len()]).is_none() {
                     frame.rax = LINUX_EFAULT as u64;
@@ -1492,6 +1606,11 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                     expected.len(),
                     expected.len()
                 ));
+                if expected == DESKTOP_INPUT_MESSAGE {
+                    crate::serial::serialln(format_args!(
+                        "SLOPOS-WAYLAND-CLIENT: live input parsed keyboard=a-press/a-release pointer=motion/button-press/button-release/axis framing=stream-safe wait=poll"
+                    ));
+                }
                 return 0;
             }
             let Ok(fd) = u32::try_from(frame.rdi) else {
@@ -1653,6 +1772,80 @@ extern "C" fn slopos_syscall_handler(frame: &mut SyscallFrame) -> u64 {
                 frame.rsi
             ));
             0
+        }
+        LINUX_SYS_POLL => {
+            let Ok(descriptor_count) = usize::try_from(frame.rsi) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            let timeout = frame.rdx as i64;
+            let Some(byte_length) = descriptor_count.checked_mul(LINUX_POLLFD_SIZE) else {
+                frame.rax = LINUX_EINVAL as u64;
+                return 0;
+            };
+            if descriptor_count == 0
+                || descriptor_count > LINUX_POLL_CAPACITY
+                || !matches!(timeout, -1 | 0)
+                || !validate_user_range(pid, frame.rdi, byte_length, true)
+            {
+                frame.rax = if descriptor_count == 0
+                    || descriptor_count > LINUX_POLL_CAPACITY
+                    || !matches!(timeout, -1 | 0)
+                {
+                    LINUX_EINVAL as u64
+                } else {
+                    LINUX_EFAULT as u64
+                };
+                return 0;
+            }
+            let mut bytes = [0u8; LINUX_POLL_CAPACITY * LINUX_POLLFD_SIZE];
+            if copy_from_user(pid, frame.rdi, &mut bytes[..byte_length]).is_none() {
+                frame.rax = LINUX_EFAULT as u64;
+                return 0;
+            }
+            let mut request = PollRequest {
+                pid,
+                destination: frame.rdi,
+                descriptor_count,
+                descriptors: [PollDescriptor::EMPTY; LINUX_POLL_CAPACITY],
+            };
+            for (index, descriptor) in request.descriptors[..descriptor_count]
+                .iter_mut()
+                .enumerate()
+            {
+                let offset = index * LINUX_POLLFD_SIZE;
+                let fd = i32::from_ne_bytes(
+                    bytes[offset..offset + 4]
+                        .try_into()
+                        .unwrap_or_else(|_| crate::fatal("poll fd bytes were truncated")),
+                );
+                let events = i16::from_ne_bytes(
+                    bytes[offset + 4..offset + 6]
+                        .try_into()
+                        .unwrap_or_else(|_| crate::fatal("poll event bytes were truncated")),
+                );
+                if fd < 0 || events != LINUX_POLLIN {
+                    frame.rax = LINUX_EINVAL as u64;
+                    return 0;
+                }
+                *descriptor = PollDescriptor {
+                    fd: fd as u32,
+                    events,
+                };
+            }
+            if timeout == 0 || poll_request_ready(request) {
+                let ready = poll_ready_count(request, true);
+                frame.rax = ready as u64;
+                crate::serial::serialln(format_args!(
+                    "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=sysretq nr=7 poll nfds={descriptor_count} ready={ready} timeout={timeout} origin=cpl3"
+                ));
+                return 0;
+            }
+            suspend_io_syscall(pid, frame, PendingSyscall::Poll(request));
+            crate::serial::serialln(format_args!(
+                "SLOPOS-SYSCALL: pid={pid} abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds={descriptor_count} events=POLLIN timeout=-1 state=blocked origin=cpl3"
+            ));
+            2
         }
         LINUX_SYS_LSEEK => {
             let Ok(fd) = u32::try_from(frame.rdi) else {
@@ -1937,6 +2130,9 @@ fn process_event_after_user(pid: u32) -> ProcessEvent {
         }
         (ProcessState::Blocked, PendingSyscall::WaylandWait(request)) => {
             ProcessEvent::WaylandWaiting(request)
+        }
+        (ProcessState::Blocked, PendingSyscall::Poll(request)) => {
+            ProcessEvent::PollWaiting(request)
         }
         (ProcessState::Runnable, PendingSyscall::Yield) => ProcessEvent::Yielded { pid },
         _ => crate::fatal("process returned with an inconsistent scheduler state"),

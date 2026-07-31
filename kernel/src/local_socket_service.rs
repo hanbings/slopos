@@ -2,7 +2,7 @@
 
 use core::cell::UnsafeCell;
 use slopos_desktop_protocol::WAYLAND_EVENT_CONFIGURE;
-use slopos_ipc::{AncillaryRights, LocalSocketTable, SocketError, SocketHandle};
+use slopos_ipc::{AncillaryRights, LocalSocketTable, Readiness, SocketError, SocketHandle};
 use slopos_wayland::SLOPOS_XKB_KEYMAP_TEXT;
 
 const SOCKET_CAPACITY: usize = 8;
@@ -174,6 +174,33 @@ pub fn send_with_rights(
             Err(error.into())
         }
     }
+}
+
+pub fn readiness(pid: u32, client: SocketHandle) -> Result<Readiness, LocalSocketServiceError> {
+    let state = state_mut();
+    if state.connection_index(pid, client).is_none() {
+        return Err(LocalSocketServiceError::PermissionDenied);
+    }
+    Ok(state.table.readiness(client)?)
+}
+
+/// Pushes one complete server event to the trusted desktop client.
+///
+/// The exact-send primitive preserves Wayland frame boundaries under bounded
+/// ring backpressure. The input task drops the whole batch when the client is
+/// behind, never a prefix that would corrupt the stream decoder.
+pub fn send_server_event(input: &[u8]) -> Result<usize, LocalSocketServiceError> {
+    let state = state_mut();
+    let connection = state
+        .connections
+        .iter()
+        .flatten()
+        .find(|connection| connection.pid == 2)
+        .copied()
+        .ok_or(LocalSocketServiceError::PermissionDenied)?;
+    let sent = state.table.send_exact(connection.server, input)?;
+    crate::executor::wake_task(crate::executor::BLOCK_TASK);
+    Ok(sent)
 }
 
 pub async fn recv(

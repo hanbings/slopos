@@ -64,6 +64,7 @@ pub enum ModifierKey {
 #[derive(Clone, Copy, Debug)]
 pub struct ModifierEvent {
     pub key: ModifierKey,
+    pub evdev_code: u32,
     pub pressed: bool,
     pub modifiers: KeyModifiers,
 }
@@ -71,6 +72,8 @@ pub struct ModifierEvent {
 #[derive(Clone, Copy, Debug)]
 pub struct KeyEvent {
     pub key: Key,
+    pub evdev_code: u32,
+    pub pressed: bool,
     pub modifiers: KeyModifiers,
 }
 
@@ -217,6 +220,7 @@ impl Controller {
             self.shift = !released;
             return Some(InputEvent::Modifier(ModifierEvent {
                 key: ModifierKey::Shift,
+                evdev_code: u32::from(code),
                 pressed: self.shift,
                 modifiers: self.modifiers(),
             }));
@@ -225,6 +229,7 @@ impl Controller {
             self.control = !released;
             return Some(InputEvent::Modifier(ModifierEvent {
                 key: ModifierKey::Control,
+                evdev_code: if extended { 97 } else { 29 },
                 pressed: self.control,
                 modifiers: self.modifiers(),
             }));
@@ -233,6 +238,7 @@ impl Controller {
             self.alt = !released;
             return Some(InputEvent::Modifier(ModifierEvent {
                 key: ModifierKey::Alt,
+                evdev_code: if extended { 100 } else { 56 },
                 pressed: self.alt,
                 modifiers: self.modifiers(),
             }));
@@ -241,32 +247,35 @@ impl Controller {
             self.logo = !released;
             return Some(InputEvent::Modifier(ModifierEvent {
                 key: ModifierKey::Logo,
+                evdev_code: if code == 0x5b { 125 } else { 126 },
                 pressed: self.logo,
                 modifiers: self.modifiers(),
             }));
         }
-        if released {
-            return None;
-        }
-        let key = match (extended, code) {
-            (true, 0x48) => Key::Up,
-            (true, 0x50) => Key::Down,
-            (true, 0x4b) => Key::Left,
-            (true, 0x4d) => Key::Right,
-            (true, 0x49) => Key::PageUp,
-            (true, 0x51) => Key::PageDown,
-            (true, 0x47) => Key::Home,
-            (true, 0x4f) => Key::End,
-            (true, 0x1c) => Key::Enter,
+        let (key, evdev_code) = match (extended, code) {
+            (true, 0x48) => (Key::Up, 103),
+            (true, 0x50) => (Key::Down, 108),
+            (true, 0x4b) => (Key::Left, 105),
+            (true, 0x4d) => (Key::Right, 106),
+            (true, 0x49) => (Key::PageUp, 104),
+            (true, 0x51) => (Key::PageDown, 109),
+            (true, 0x47) => (Key::Home, 102),
+            (true, 0x4f) => (Key::End, 107),
+            (true, 0x1c) => (Key::Enter, 96),
             (true, _) => return None,
-            (false, 0x01) => Key::Escape,
-            (false, 0x0e) => Key::Backspace,
-            (false, 0x0f) => Key::Tab,
-            (false, 0x1c) => Key::Enter,
-            (false, code) => Key::Character(scancode_character(code, self.shift)?),
+            (false, 0x01) => (Key::Escape, 1),
+            (false, 0x0e) => (Key::Backspace, 14),
+            (false, 0x0f) => (Key::Tab, 15),
+            (false, 0x1c) => (Key::Enter, 28),
+            (false, code) => (
+                Key::Character(scancode_character(code, self.shift)?),
+                u32::from(code),
+            ),
         };
         Some(InputEvent::Key(KeyEvent {
             key,
+            evdev_code,
+            pressed: !released,
             modifiers: self.modifiers(),
         }))
     }

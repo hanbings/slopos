@@ -85,6 +85,7 @@ pub struct Desktop {
     pointer_x: i32,
     pointer_y: i32,
     previous_buttons: u8,
+    input_modifiers: KeyModifiers,
     scrolling_view: bool,
     resizing_column: bool,
     command: [u8; 128],
@@ -394,6 +395,12 @@ impl Desktop {
             pointer_x: width / 2,
             pointer_y: height / 2,
             previous_buttons: 0,
+            input_modifiers: KeyModifiers {
+                shift: false,
+                control: false,
+                alt: false,
+                logo: false,
+            },
             scrolling_view: false,
             resizing_column: false,
             command: [0; 128],
@@ -503,18 +510,40 @@ impl Desktop {
                     if let Some(event) = input.consume(byte) {
                         match event {
                             InputEvent::Modifier(modifier) => {
+                                self.input_modifiers = modifier.modifiers;
                                 if self.modifier(modifier) {
                                     self.render(framebuffer);
                                 }
+                                self.sync_wayland_keyboard_focus();
+                                crate::wayland_service::publish_keyboard_key(
+                                    modifier.evdev_code,
+                                    modifier.pressed,
+                                    wayland_modifier_mask(modifier.modifiers),
+                                );
                             }
                             InputEvent::Key(key) => {
-                                if self.keyboard(key) {
+                                self.input_modifiers = key.modifiers;
+                                let (animate, consumed) = if key.pressed {
+                                    self.keyboard(key)
+                                } else {
+                                    (false, self.keyboard_event_is_consumed(key))
+                                };
+                                self.sync_wayland_keyboard_focus();
+                                if !consumed {
+                                    crate::wayland_service::publish_keyboard_key(
+                                        key.evdev_code,
+                                        key.pressed,
+                                        wayland_modifier_mask(key.modifiers),
+                                    );
+                                }
+                                if animate {
                                     self.animate_wallpaper(framebuffer);
                                 } else {
                                     self.render(framebuffer);
                                 }
                             }
                             InputEvent::Mouse(mouse) => {
+                                self.input_modifiers = mouse.modifiers;
                                 if self.mouse(mouse) {
                                     self.animate_wallpaper(framebuffer);
                                 } else {
@@ -1897,36 +1926,54 @@ impl Desktop {
         framebuffer.text(x, y + 182, "KDL SUBSET VALIDATED AT STARTUP.", MUTED, 1);
     }
 
-    fn keyboard(&mut self, event: KeyEvent) -> bool {
+    fn keyboard(&mut self, event: KeyEvent) -> (bool, bool) {
         let modifiers = binding_modifiers(event.modifiers);
         if let Some(key) = binding_key(event.key)
             && let Some((index, binding)) = self.niri.bindings.binding(modifiers, key)
         {
             self.execute_niri_binding(index, binding, modifiers, "keyboard", None);
-            return false;
+            return (false, true);
         }
         if event.modifiers.logo || event.modifiers.control || event.modifiers.alt {
-            return false;
+            return (false, false);
         }
         match event.key {
-            Key::Tab => self.focus_next(),
+            Key::Tab => {
+                self.focus_next();
+                return (false, true);
+            }
             Key::Escape => {
                 self.scrolling_view = false;
                 self.resizing_column = false;
+                return (false, true);
             }
             Key::Backspace if self.terminal_focused() && self.command_length > 0 => {
                 self.command_length -= 1;
+                return (false, true);
             }
-            Key::Enter if self.terminal_focused() => return self.execute_command(),
+            Key::Enter if self.terminal_focused() => return (self.execute_command(), true),
             Key::Character(character)
                 if self.terminal_focused() && self.command_length < self.command.len() =>
             {
                 self.command[self.command_length] = character.to_ascii_uppercase();
                 self.command_length += 1;
+                return (false, true);
             }
             _ => {}
         }
-        false
+        (false, false)
+    }
+
+    fn keyboard_event_is_consumed(&self, event: KeyEvent) -> bool {
+        let modifiers = binding_modifiers(event.modifiers);
+        if binding_key(event.key)
+            .is_some_and(|key| self.niri.bindings.binding(modifiers, key).is_some())
+        {
+            return true;
+        }
+        matches!(event.key, Key::Tab | Key::Escape)
+            || (self.terminal_focused()
+                && matches!(event.key, Key::Backspace | Key::Enter | Key::Character(_)))
     }
 
     fn modifier(&mut self, event: ModifierEvent) -> bool {
@@ -2062,6 +2109,13 @@ impl Desktop {
                 }
             }
         }
+        self.sync_wayland_keyboard_focus();
+        crate::wayland_service::publish_pointer(
+            self.wayland_surface_position(),
+            event.dx != 0 || event.dy != 0,
+            event.buttons,
+            event.wheel,
+        );
         self.previous_buttons = event.buttons;
         animate
     }
@@ -3289,6 +3343,33 @@ impl Desktop {
         self.windows[0].open && self.workspaces.focused_window() == Some(0)
     }
 
+    fn sync_wayland_keyboard_focus(&self) {
+        crate::wayland_service::set_keyboard_focus(
+            self.wayland_surface.is_some() && self.workspaces.focused_window() == Some(1),
+            wayland_modifier_mask(self.input_modifiers),
+        );
+    }
+
+    fn wayland_surface_position(&self) -> Option<(i32, i32)> {
+        const SCALE: i32 = 3;
+        let snapshot = self.wayland_surface?;
+        let window = self.positioned_window(1)?;
+        let width = i32::try_from(snapshot.metadata.width).ok()?;
+        let height = i32::try_from(snapshot.metadata.height).ok()?;
+        let destination_x = window.x + window.width - 16 - width * SCALE;
+        let destination_y = window.y + 63;
+        let relative_x = self.pointer_x - destination_x;
+        let relative_y = self.pointer_y - destination_y;
+        if relative_x < 0
+            || relative_y < 0
+            || relative_x >= width * SCALE
+            || relative_y >= height * SCALE
+        {
+            return None;
+        }
+        Some((relative_x * 256 / SCALE, relative_y * 256 / SCALE))
+    }
+
     fn sync_focused_window(&mut self) {
         if let Some(window) = self.workspaces.focused_window() {
             self.active = window as usize;
@@ -3376,6 +3457,15 @@ const fn binding_modifiers(modifiers: KeyModifiers) -> BindingModifiers {
             | ((modifiers.shift as u8) << 2)
             | ((modifiers.alt as u8) << 3),
     )
+}
+
+const fn wayland_modifier_mask(modifiers: KeyModifiers) -> u32 {
+    // The bundled XKB map uses the conventional core modifier indices:
+    // Shift=0, Control=2, Mod1/Alt=3, and Mod4/Logo=6.
+    (modifiers.shift as u32)
+        | ((modifiers.control as u32) << 2)
+        | ((modifiers.alt as u32) << 3)
+        | ((modifiers.logo as u32) << 6)
 }
 
 const fn binding_key(key: Key) -> Option<BindingKey> {

@@ -528,6 +528,21 @@ pub fn encode_keyboard_enter<'a>(
     message.finish()
 }
 
+pub fn encode_keyboard_leave(
+    bytes: &mut [u8],
+    keyboard: u32,
+    serial: u32,
+    surface: u32,
+) -> Result<&[u8], WireError> {
+    if serial == 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, keyboard, 2)?;
+    message.uint(serial)?;
+    message.object(surface)?;
+    message.finish()
+}
+
 pub fn encode_keyboard_key(
     bytes: &mut [u8],
     keyboard: u32,
@@ -601,6 +616,75 @@ pub fn encode_pointer_enter(
     message.fixed(surface_x)?;
     message.fixed(surface_y)?;
     message.finish()
+}
+
+pub fn encode_pointer_leave(
+    bytes: &mut [u8],
+    pointer: u32,
+    serial: u32,
+    surface: u32,
+) -> Result<&[u8], WireError> {
+    if serial == 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, pointer, 1)?;
+    message.uint(serial)?;
+    message.object(surface)?;
+    message.finish()
+}
+
+pub fn encode_pointer_motion(
+    bytes: &mut [u8],
+    pointer: u32,
+    time: u32,
+    surface_x: i32,
+    surface_y: i32,
+) -> Result<&[u8], WireError> {
+    let mut message = MessageBuilder::new(bytes, pointer, 2)?;
+    message.uint(time)?;
+    message.fixed(surface_x)?;
+    message.fixed(surface_y)?;
+    message.finish()
+}
+
+pub fn encode_pointer_button(
+    bytes: &mut [u8],
+    pointer: u32,
+    serial: u32,
+    time: u32,
+    button: u32,
+    state: u32,
+) -> Result<&[u8], WireError> {
+    if serial == 0 || state > 1 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, pointer, 3)?;
+    message.uint(serial)?;
+    message.uint(time)?;
+    message.uint(button)?;
+    message.uint(state)?;
+    message.finish()
+}
+
+pub fn encode_pointer_axis(
+    bytes: &mut [u8],
+    pointer: u32,
+    time: u32,
+    axis: u32,
+    value: i32,
+) -> Result<&[u8], WireError> {
+    if axis > 1 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, pointer, 4)?;
+    message.uint(time)?;
+    message.uint(axis)?;
+    message.fixed(value)?;
+    message.finish()
+}
+
+pub fn encode_pointer_frame(bytes: &mut [u8], pointer: u32) -> Result<&[u8], WireError> {
+    MessageBuilder::new(bytes, pointer, 5)?.finish()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2852,6 +2936,33 @@ mod tests {
         assert_eq!(arguments.object().unwrap(), 6);
         assert_eq!(arguments.fixed().unwrap(), 16 << 8);
         assert_eq!(arguments.fixed().unwrap(), 12 << 8);
+
+        let frame = encode_keyboard_leave(&mut bytes, 15, 6, 6).unwrap();
+        assert_eq!(Frame::decode(frame).unwrap().0.header.opcode, 2);
+        let frame = encode_pointer_motion(&mut bytes, 14, 1300, 7 << 8, 9 << 8).unwrap();
+        assert_eq!(Frame::decode(frame).unwrap().0.header.opcode, 2);
+        let frame = encode_pointer_button(&mut bytes, 14, 7, 1300, 0x110, 1).unwrap();
+        assert_eq!(Frame::decode(frame).unwrap().0.header.opcode, 3);
+        let frame = encode_pointer_axis(&mut bytes, 14, 1300, 0, -(15 << 8)).unwrap();
+        assert_eq!(Frame::decode(frame).unwrap().0.header.opcode, 4);
+        assert_eq!(
+            Frame::decode(encode_pointer_frame(&mut bytes, 14).unwrap())
+                .unwrap()
+                .0
+                .header
+                .opcode,
+            5
+        );
+        let frame = encode_pointer_leave(&mut bytes, 14, 8, 6).unwrap();
+        assert_eq!(Frame::decode(frame).unwrap().0.header.opcode, 1);
+        assert_eq!(
+            encode_pointer_button(&mut bytes, 14, 0, 1300, 0x110, 1),
+            Err(WireError::InvalidArgument)
+        );
+        assert_eq!(
+            encode_pointer_axis(&mut bytes, 14, 1300, 2, 1),
+            Err(WireError::InvalidArgument)
+        );
 
         let frame =
             encode_output_geometry(&mut bytes, 13, 0, 0, 270, 203, 0, "SlopOS", "Virtual", 0)

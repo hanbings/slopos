@@ -579,10 +579,10 @@ grep -Fq \
     "SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=61 wait4 child=any state=blocked origin=cpl3" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: userspace runtime parked init=wait4 desktop=config-applied after_generation=0 resources=retained" \
+    "SLOPOS-PROCESS: userspace runtime parked reason=userspace-start init=wait4 desktop=config-applied after_generation=0 resources=retained" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=1 init=wait4 resources=retained" \
+    "SLOPOS-PROCESS: userspace runtime parked reason=desktop-event init=wait4 desktop=poll pid=2 resources=retained" \
     "${serial_log}"
 grep -Fq "SLOPOS-TERMINAL: command=STATUS" "${serial_log}"
 grep -Fq \
@@ -598,14 +598,14 @@ grep -Fq "SLOPOS-CONFIG: reload requested generation=1 accepted=true" "${serial_
 grep -Fq "SLOPOS-CONFIG: VFS load published initial=false generation=2 atomic=true" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: reload applied generation=2 atomic=true" "${serial_log}"
 grep -Fq \
-    "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=config-applied generation=2" \
+    "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness" \
     "${serial_log}"
-grep -Fq "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=3" "${serial_log}"
+grep -Fq "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=2" "${serial_log}"
 grep -Fq \
-    "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=3 owner_pid=2 event=policy-applied wake=block-task" \
+    "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=2 owner_pid=2 event=policy-applied wake=block-task" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=2 init=wait4 resources=retained" \
+    "SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained" \
     "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: invalid reload requested generation=2 accepted=true" "${serial_log}"
 grep -Fq "SLOPOS-CONFIG: VFS load rejected initial=false error=invalid-waybar-style retained_generation=2" "${serial_log}"
@@ -613,7 +613,7 @@ if grep -Fq "SLOPOS-CONFIG: reload applied generation=3" "${serial_log}"; then
     echo "invalid desktop configuration was published" >&2
     exit 1
 fi
-if grep -Fq "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=4" "${serial_log}"; then
+if grep -Fq "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=3" "${serial_log}"; then
     echo "desktop service was woken by a rejected configuration" >&2
     exit 1
 fi

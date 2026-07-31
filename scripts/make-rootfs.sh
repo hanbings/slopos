@@ -11,6 +11,8 @@ user_binary="${repo_dir}/target/x86_64-unknown-none/release/slopos-init"
 desktop_binary="${repo_dir}/target/x86_64-unknown-none/release/slopos-desktop"
 mke2fs=/usr/sbin/mke2fs
 debugfs=/usr/sbin/debugfs
+llvm_strip="$(command -v llvm-strip || true)"
+llvm_objcopy="$(command -v llvm-objcopy || true)"
 export E2FSPROGS_FAKE_TIME=1785369600
 fixed_time=1785369600
 staging_dir="$(mktemp -d)"
@@ -18,6 +20,10 @@ trap 'rm -rf -- "${staging_dir}"' EXIT
 
 if [[ ! -x "${mke2fs}" || ! -x "${debugfs}" ]]; then
     echo "missing build tools from Debian package e2fsprogs" >&2
+    exit 1
+fi
+if [[ ! -x "${llvm_strip}" || ! -x "${llvm_objcopy}" ]]; then
+    echo "missing llvm-strip/llvm-objcopy required for the deterministic userspace image" >&2
     exit 1
 fi
 if ! command -v base64 >/dev/null 2>&1 || ! command -v gzip >/dev/null 2>&1; then
@@ -40,6 +46,16 @@ cp -a "${source_dir}/." "${staging_dir}/"
 mkdir -p "${staging_dir}/sbin"
 cp "${user_binary}" "${staging_dir}/sbin/slop-init"
 cp "${desktop_binary}" "${staging_dir}/sbin/slop-shell"
+"${llvm_strip}" --strip-all "${staging_dir}/sbin/slop-shell"
+# Keep the deterministic ten-block rootfs allocation layout while allowing the
+# executable's load segment to grow independently of non-loadable ELF symbols.
+desktop_padding="${staging_dir}/.slop-shell-padding"
+dd if=/dev/zero bs=4096 count=5 status=none | tr '\000' 'S' >"${desktop_padding}"
+"${llvm_objcopy}" \
+    --add-section ".slopos_padding=${desktop_padding}" \
+    "${staging_dir}/sbin/slop-shell"
+rm -f -- "${desktop_padding}"
+truncate -s 40960 "${staging_dir}/sbin/slop-shell"
 ln -s slopos-release "${staging_dir}/etc/current-release"
 cp "${repo_dir}/assets/niri-config.kdl" "${staging_dir}/etc/slopos/niri.kdl"
 cp "${repo_dir}/assets/waybar-config.jsonc" "${staging_dir}/etc/slopos/waybar.jsonc"

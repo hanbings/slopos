@@ -316,10 +316,9 @@ required_markers=(
     "SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2"
     "SLOPOS-DESKTOP-SERVICE: config acknowledged generation=1 event=config-applied wake=block-task"
     "SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=config-applied generation=1"
-    "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=2 protocol=1"
-    "SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=sysretq nr=1397489665 commit_bytes=40 generation=2 origin=cpl3 result=0"
-    "SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=2 owner_pid=2 event=policy-applied wake=block-task"
-    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=1 init=wait4 resources=retained"
+    "SLOPOS-VFS: process event stream open complete pid=2 fd=4 object=desktop-events cursor_generation=1"
+    "SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1"
+    "SLOPOS-PROCESS: userspace runtime parked reason=desktop-event init=wait4 desktop=poll pid=2 resources=retained"
 )
 for marker in "${required_markers[@]}"; do
     if ! grep -Fq "${marker}" "${serial_log}"; then
@@ -331,8 +330,8 @@ done
 policy_markers="$(
     grep -F "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2" "${serial_log}"
 )"
-if [[ "$(grep -Fc "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2" "${serial_log}")" -lt 2 ]]; then
-    echo "desktop service did not republish the custom policy" >&2
+if [[ "$(grep -Fc "SLOPOS-DESKTOP-SERVICE: policy submitted pid=2" "${serial_log}")" -lt 1 ]]; then
+    echo "desktop service did not publish the custom policy" >&2
     exit 1
 fi
 if [[ "${policy_markers}" == *"config_hashes=0xd34d4a92c88d065b/"* ]]; then

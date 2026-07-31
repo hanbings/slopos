@@ -50,11 +50,11 @@ SLOPOS-PROCESS: pid=2 parent=1 source=vfs path=/sbin/slop-shell argv1=--session 
 SLOPOS-PROCESS: pid=2 initial_stack abi=linux-x86_64 rsp=0x40006ea0 aligned=16 stack_pages=3 argc=2 argv0=/sbin/slop-shell argv1=--session envc=4 auxv_pairs=9 bytes=352
 SLOPOS-PROCESS: table initialized capacity=4 processes=2 pids=1/2 roles=init/desktop-service states=ready/ready fd_capacity=8 per_process_fds=true
 SLOPOS-SYSCALL: fast path ready instruction=syscall return=sysretq star=0x10000800000000 lstar=0x40013ef fmask=0x47700 efer_sce=true
-SLOPOS-SCHED: timer preempt from=1 to=2 tick=3 preemptions=1 next_state=Ready independent_cr3=true
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
+SLOPOS-SCHED: cooperative switch from=1 to=2 next_state=Ready independent_cr3=true
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
 SLOPOS-SCHED: cooperative switch from=2 to=1 next_state=Runnable independent_cr3=true
-SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
-SLOPOS-SCHED: cooperative switch from=1 to=2 next_state=Runnable independent_cr3=true
+SLOPOS-SCHED: timer preempt from=1 to=2 tick=3 preemptions=1 next_state=Runnable independent_cr3=true
 SLOPOS-SCHED: timer preempt from=2 to=1 tick=4 preemptions=1 next_state=Runnable independent_cr3=true
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path=/etc/slopos/waybar.jsonc origin=cpl3
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -112,25 +112,6 @@ SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd=3 origin=cpl3
 SLOPOS-VFS: process close complete pid=2 fd=3 inode=17 async=false
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
-SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=1 protocol=1 capabilities=waybar-provider/swww-policy/wayland-surface cpu=0 memory=36 wallpaper=aurora config_hashes=0xd34d4a92c88d065b/0xb6ea39f5fd14c33a
-SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=sysretq nr=1397489665 commit_bytes=40 generation=1 origin=cpl3 result=0
-SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=policy-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3
-SLOPOS-SWWW: policy applied owner_pid=2 image=/usr/share/backgrounds/slopos-aurora.ppm output=SLOPOS-1 transition=simple step=32 fps=30
-SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2 capabilities=waybar-provider/swww-policy/wayland-surface cpu=0 memory=36 wallpaper=/usr/share/backgrounds/slopos-aurora.ppm renderer=kernel-mechanism
-SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=1 owner_pid=2 event=policy-applied wake=block-task
-SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=41 socket domain=AF_UNIX type=SOCK_STREAM protocol=0 fd=3 origin=cpl3
-SLOPOS-IPC: AF_UNIX connected pid=2 path=/run/slopos/wayland-0 client=1:1 server=2:1 transport=bounded-stream
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=42 connect fd=3 family=AF_UNIX path=/run/slopos/wayland-0 origin=cpl3 result=0
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=12 user_pages=1 origin=cpl3
-SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=write requested=12 bytes=12 user_pages=1 async=true
-SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
-SLOPOS-WAYLAND-SERVER: registry advertised pid=2 sequence=1 registry=2 globals=wl_compositor/wl_shm/wl_seat/wl_output/xdg_wm_base wire_bytes=156
-SLOPOS-WAYLAND-SERVER: request received pid=2 transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes=12 scm_rights=false
-SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=1 sequence=1 wire_bytes=156 read_bytes=156 scm_rights=false
-SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=156 user_pages=1 async=true
-SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=64 user_pages=2 origin=cpl3
 SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true flushed=true
@@ -153,6 +134,25 @@ SLOPOS-SCHED: pid=1 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=18 origin=cpl3 result=18
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=61 wait4 child=any state=blocked origin=cpl3
 SLOPOS-SCHED: cooperative switch from=1 to=2 next_state=Runnable independent_cr3=true
+SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=1 protocol=1 capabilities=waybar-provider/swww-policy/wayland-surface cpu=0 memory=36 wallpaper=aurora config_hashes=0xd34d4a92c88d065b/0xb6ea39f5fd14c33a
+SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=sysretq nr=1397489665 commit_bytes=40 generation=1 origin=cpl3 result=0
+SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=policy-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3
+SLOPOS-SWWW: policy applied owner_pid=2 image=/usr/share/backgrounds/slopos-aurora.ppm output=SLOPOS-1 transition=simple step=32 fps=30
+SLOPOS-DESKTOP-SERVICE: policy applied generation=1 owner_pid=2 capabilities=waybar-provider/swww-policy/wayland-surface cpu=0 memory=36 wallpaper=/usr/share/backgrounds/slopos-aurora.ppm renderer=kernel-mechanism
+SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=1 owner_pid=2 event=policy-applied wake=block-task
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=1
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=41 socket domain=AF_UNIX type=SOCK_STREAM protocol=0 fd=3 origin=cpl3
+SLOPOS-IPC: AF_UNIX connected pid=2 path=/run/slopos/wayland-0 client=1:1 server=2:1 transport=bounded-stream
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=42 connect fd=3 family=AF_UNIX path=/run/slopos/wayland-0 origin=cpl3 result=0
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=12 user_pages=1 origin=cpl3
+SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=write requested=12 bytes=12 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-WAYLAND-SERVER: registry advertised pid=2 sequence=1 registry=2 globals=wl_compositor/wl_shm/wl_seat/wl_output/xdg_wm_base wire_bytes=156
+SLOPOS-WAYLAND-SERVER: request received pid=2 transport=AF_UNIX/SOCK_STREAM path=/run/slopos/wayland-0 wire_bytes=12 scm_rights=false
+SLOPOS-WAYLAND-SERVER: event sent pid=2 transport=AF_UNIX/SOCK_STREAM kind=1 sequence=1 wire_bytes=156 read_bytes=156 scm_rights=false
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=156 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=256 user_pages=1 origin=cpl3
 SLOPOS-IPC: process write complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM operation=write requested=256 bytes=256 user_pages=1 async=true
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
@@ -318,18 +318,136 @@ SLOPOS-PROCESS: userspace runtime parked reason=desktop-event init=wait4 desktop
 SLOPOS-ASYNC: timer future completed tick=101 input_dropped=0 virtio_interrupts=510/510
 SLOPOS-ASYNC: timer future completed tick=601 input_dropped=0 virtio_interrupts=510/510
 SLOPOS-ASYNC: timer future completed tick=1101 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=2101 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=2601 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=3101 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=3601 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=4101 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=4601 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=5101 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=5601 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=6101 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=6601 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=7101 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=7601 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=8101 input_dropped=0 virtio_interrupts=510/510
-SLOPOS-ASYNC: timer future completed tick=8601 input_dropped=0 virtio_interrupts=510/510
+SLOPOS-CONFIG: reload requested generation=1 accepted=true
+SLOPOS-TERMINAL: command=RELOAD
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-CONFIG: VFS load published initial=false generation=2 atomic=true paths=/etc/slopos/niri.kdl,/etc/slopos/waybar.jsonc,/etc/slopos/waybar.css,/etc/slopos/swww.env
+SLOPOS-NIRI: window rule app_id=slopos-config property=open-focused value=false applied=true workspace=2 activated=false source=config
+SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=default exclusive=true passthrough=false visible=true reserved_top=40 source=config
+SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=false/false/false name=- namespace=waybar source=config
+SLOPOS-WAYBAR: output name=SLOPOS-1 identifier="SlopOS Virtual Display 0x00000001" selector=any entries=0 selected=true source=config
+SLOPOS-WAYBAR: output-dimensions width=1024 height=768 selector=any entries=0 selected=true source=config
+SLOPOS-WAYBAR: modifier-reset strategy=press active=false source=config
+SLOPOS-DESKTOP-SERVICE: config acknowledged generation=2 event=config-applied wake=block-task
+SLOPOS-CONFIG: reload applied generation=2 atomic=true niri=/etc/slopos/niri.kdl waybar=/etc/slopos/waybar.jsonc style=/etc/slopos/waybar.css swww=/etc/slopos/swww.env workspaces=3 module_configs=6 css_rules=12
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=4 requested=32 user_pages=1 origin=cpl3
+SLOPOS-VFS: process event stream read complete pid=2 fd=4 object=desktop-events after_generation=1 generation=2 bytes=32 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path=/etc/slopos/waybar.jsonc origin=cpl3
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-VFS: process open complete pid=2 fd=5 inode=20 bytes=904 access=readonly async=true path=/etc/slopos/waybar.jsonc
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=5 requested=256 user_pages=1 origin=cpl3
+SLOPOS-VFS: process read complete pid=2 fd=5 inode=20 offset=0 requested=256 bytes=256 user_pages=1 cross_page=false async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=5 requested=256 user_pages=1 origin=cpl3
+SLOPOS-VFS: process read complete pid=2 fd=5 inode=20 offset=256 requested=256 bytes=256 user_pages=1 cross_page=false async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=5 requested=256 user_pages=1 origin=cpl3
+SLOPOS-VFS: process read complete pid=2 fd=5 inode=20 offset=512 requested=256 bytes=256 user_pages=1 cross_page=false async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=5 requested=256 user_pages=1 origin=cpl3
+SLOPOS-VFS: process read complete pid=2 fd=5 inode=20 offset=768 requested=256 bytes=136 user_pages=1 cross_page=false async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=5 requested=256 user_pages=1 origin=cpl3
+SLOPOS-VFS: process read complete pid=2 fd=5 inode=20 offset=904 requested=256 bytes=0 user_pages=1 cross_page=false async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd=5 origin=cpl3
+SLOPOS-VFS: process close complete pid=2 fd=5 inode=20 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path=/etc/slopos/swww.env origin=cpl3
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-VFS: process open complete pid=2 fd=5 inode=17 bytes=244 access=readonly async=true path=/etc/slopos/swww.env
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=5 requested=256 user_pages=1 origin=cpl3
+SLOPOS-VFS: process read complete pid=2 fd=5 inode=17 offset=0 requested=256 bytes=244 user_pages=1 cross_page=false async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=5 requested=256 user_pages=1 origin=cpl3
+SLOPOS-VFS: process read complete pid=2 fd=5 inode=17 offset=244 requested=256 bytes=0 user_pages=1 cross_page=false async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=3 close fd=5 origin=cpl3
+SLOPOS-VFS: process close complete pid=2 fd=5 inode=17 async=false
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-DESKTOP-SERVICE: policy submitted pid=2 generation=2 protocol=1 capabilities=waybar-provider/swww-policy/wayland-surface cpu=0 memory=36 wallpaper=aurora config_hashes=0xd34d4a92c88d065b/0xb6ea39f5fd14c33a
+SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=sysretq nr=1397489665 commit_bytes=40 generation=2 origin=cpl3 result=0
+SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=policy-applied after_generation=1 event_bytes=32 state=blocked origin=cpl3
+SLOPOS-DESKTOP-SERVICE: policy applied generation=2 owner_pid=2 capabilities=waybar-provider/swww-policy/wayland-surface cpu=0 memory=36 wallpaper=/usr/share/backgrounds/slopos-aurora.ppm renderer=kernel-mechanism
+SLOPOS-DESKTOP-SERVICE: policy acknowledged generation=2 owner_pid=2 event=policy-applied wake=block-task
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-applied generation=2
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1 state=blocked origin=cpl3
+SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained
+SLOPOS-ASYNC: timer future completed tick=1601 input_dropped=0 virtio_interrupts=527/527
+SLOPOS-WAYLAND-INPUT: keyboard focus=enter serial=2 surface=6 modifiers=0x0 wire_bytes=48
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=48 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1 state=blocked origin=cpl3
+SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained
+SLOPOS-ASYNC: timer future completed tick=2101 input_dropped=0 virtio_interrupts=527/527
+SLOPOS-WAYLAND-INPUT: key code=30 state=pressed serial=3 time_ms=21170 modifiers=0x0 wire_bytes=24
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=24 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1 state=blocked origin=cpl3
+SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained
+SLOPOS-WAYLAND-INPUT: key code=30 state=released serial=4 time_ms=21270 modifiers=0x0 wire_bytes=24
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=24 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1 state=blocked origin=cpl3
+SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained
+SLOPOS-WAYLAND-INPUT: pointer surface_fixed=3072/2133 moved=true buttons=0x0 wheel=0 time_ms=23430 wire_bytes=32 frame=true
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=32 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1 state=blocked origin=cpl3
+SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained
+SLOPOS-WAYLAND-INPUT: pointer surface_fixed=3242/2133 moved=true buttons=0x0 wheel=0 time_ms=25180 wire_bytes=28 frame=true
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=28 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1 state=blocked origin=cpl3
+SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained
+SLOPOS-ASYNC: timer future completed tick=2601 input_dropped=0 virtio_interrupts=527/527
+SLOPOS-WAYLAND-INPUT: pointer surface_fixed=3242/2133 moved=false buttons=0x1 wheel=0 time_ms=27180 wire_bytes=32 frame=true
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=32 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1 state=blocked origin=cpl3
+SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained
+SLOPOS-WAYLAND-INPUT: pointer surface_fixed=3242/2133 moved=false buttons=0x0 wheel=0 time_ms=29180 wire_bytes=32 frame=true
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=32 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1 state=blocked origin=cpl3
+SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained
+SLOPOS-ASYNC: timer future completed tick=3101 input_dropped=0 virtio_interrupts=527/527
+SLOPOS-WAYLAND-INPUT: pointer surface_fixed=3242/2133 moved=false buttons=0x0 wheel=1 time_ms=31170 wire_bytes=28 frame=true
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=resume return=runnable nr=7 poll nfds=2 ready=1 timeout=-1 wake=descriptor-readiness
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
+SLOPOS-IPC: process read complete pid=2 fd=3 family=AF_UNIX type=SOCK_STREAM requested=256 bytes=28 user_pages=1 async=true
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=27 origin=cpl3 result=27
+SLOPOS-WAYLAND-CLIENT: live input parsed keyboard=a-press/a-release pointer=motion/button-press/button-release/axis framing=stream-safe wait=poll
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=7 poll nfds=2 events=POLLIN timeout=-1 state=blocked origin=cpl3
+SLOPOS-PROCESS: userspace runtime parked reason=poll-ready init=wait4 desktop=poll pid=2 resources=retained
+SLOPOS-ASYNC: timer future completed tick=3601 input_dropped=0 virtio_interrupts=527/527

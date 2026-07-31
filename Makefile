@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 CARGO := $(shell command -v cargo 2>/dev/null || echo "$$HOME/.cargo/bin/cargo")
 
-.PHONY: all build rootfs image run test-acpi test-ebpf test-elf test-process test-ipc test-shell test-wayland test-pci test-virtio test-ext4 test-vfs test-boot test-interaction test-page-fault test-journal-replay clean
+.PHONY: all build rootfs image run test-acpi test-ebpf test-elf test-process test-ipc test-shell test-wayland test-pci test-virtio test-ext4 test-vfs test-boot test-wayland-input test-interaction test-page-fault test-journal-replay clean
 
 all: build
 
@@ -58,6 +58,9 @@ test-vfs:
 
 test-boot: image
 	./scripts/test-boot.sh
+
+test-wayland-input: image
+	./scripts/test-wayland-input.sh
 
 test-interaction: image
 	./scripts/test-interaction.sh

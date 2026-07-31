@@ -209,6 +209,7 @@ pub enum DescriptorObject {
     File(FileNode),
     LocalSocket { index: u16, generation: u16 },
     SharedMemory { index: u16, generation: u16 },
+    DesktopEvents,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -309,6 +310,12 @@ impl<const N: usize> FileDescriptorTable<N> {
             DescriptorObject::SharedMemory { index, generation },
             AccessMode::ReadOnly,
         )
+    }
+
+    pub fn open_desktop_events(&mut self, generation: u64) -> Result<u32, VfsError> {
+        let fd = self.open_object(DescriptorObject::DesktopEvents, AccessMode::ReadOnly)?;
+        self.descriptor_mut(fd)?.offset = generation;
+        Ok(fd)
     }
 
     fn open_object(
@@ -466,6 +473,17 @@ impl<const N: usize> FileDescriptorTable<N> {
             return Err(VfsError::InvalidOffset);
         }
         descriptor.offset = new_offset;
+        Ok(())
+    }
+
+    pub fn set_object_offset(&mut self, fd: u32, offset: u64) -> Result<(), VfsError> {
+        let descriptor = self.descriptor_mut(fd)?;
+        if !descriptor.access_mode.readable()
+            || matches!(descriptor.object, DescriptorObject::File(_))
+        {
+            return Err(VfsError::BadFileDescriptor);
+        }
+        descriptor.offset = offset;
         Ok(())
     }
 
@@ -668,6 +686,19 @@ mod tests {
         descriptors.close(fd).unwrap();
         let fd = descriptors.open_shared_memory_read_only(3, 8).unwrap();
         assert_eq!(descriptors.readable_object(fd).unwrap().1, 0);
+    }
+
+    #[test]
+    fn tracks_a_read_only_desktop_event_generation_cursor() {
+        let mut descriptors = FileDescriptorTable::<1>::new();
+        let fd = descriptors.open_desktop_events(7).unwrap();
+        assert_eq!(
+            descriptors.readable_object(fd),
+            Ok((DescriptorObject::DesktopEvents, 7))
+        );
+        descriptors.set_object_offset(fd, 11).unwrap();
+        assert_eq!(descriptors.readable_object(fd).unwrap().1, 11);
+        assert_eq!(descriptors.write_window(fd, 1), Err(VfsError::NotWritable));
     }
 
     #[test]

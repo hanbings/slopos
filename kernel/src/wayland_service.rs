@@ -13,19 +13,20 @@ use slopos_desktop_protocol::{
 use slopos_wayland::{
     CORE_GLOBALS, CommittedSurface, SLOPOS_XKB_KEYMAP_TEXT, SingleSurfaceSession,
     SurfaceSessionEvent, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, encode_buffer_release,
-    encode_callback_done, encode_display_delete_id, encode_keyboard_enter, encode_keyboard_keymap,
+    encode_callback_done, encode_display_delete_id, encode_keyboard_enter, encode_keyboard_key,
+    encode_keyboard_keymap, encode_keyboard_leave, encode_keyboard_modifiers,
     encode_keyboard_repeat_info, encode_output_description, encode_output_done,
     encode_output_geometry, encode_output_mode, encode_output_name, encode_output_scale,
-    encode_pointer_enter, encode_registry_global, encode_seat_capabilities, encode_seat_name,
-    encode_shm_format, encode_xdg_surface_configure, encode_xdg_toplevel_configure,
+    encode_pointer_axis, encode_pointer_button, encode_pointer_enter, encode_pointer_frame,
+    encode_pointer_leave, encode_pointer_motion, encode_registry_global, encode_seat_capabilities,
+    encode_seat_name, encode_shm_format, encode_xdg_surface_configure,
+    encode_xdg_toplevel_configure,
 };
 
 const DESKTOP_SERVICE_PID: u32 = 2;
 const SURFACE_BANKS: usize = 2;
 const NO_BANK: usize = usize::MAX;
 const CONFIGURE_SERIAL: u32 = 1;
-const POINTER_ENTER_SERIAL: u32 = 2;
-const KEYBOARD_ENTER_SERIAL: u32 = 3;
 const SERVER_SHM_FD: i32 = 1;
 
 struct SurfaceBank {
@@ -96,6 +97,66 @@ static EVENT: SharedEvent = SharedEvent(UnsafeCell::new(EventBank {
 static EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static EVENT_ACK: AtomicU64 = AtomicU64::new(0);
 
+struct InputState {
+    serial: u32,
+    keyboard_focused: bool,
+    pointer_focused: bool,
+    modifiers: u32,
+    pressed_keys: [u64; 2],
+    pointer_buttons: u8,
+    dropped_batches: u64,
+}
+
+impl InputState {
+    const fn new() -> Self {
+        Self {
+            serial: 1,
+            keyboard_focused: false,
+            pointer_focused: false,
+            modifiers: 0,
+            pressed_keys: [0; 2],
+            pointer_buttons: 0,
+            dropped_batches: 0,
+        }
+    }
+
+    fn next_serial(&mut self) -> u32 {
+        self.serial = self.serial.wrapping_add(1);
+        if self.serial == 0 {
+            self.serial = 1;
+        }
+        self.serial
+    }
+
+    fn key_is_pressed(&self, key: u32) -> bool {
+        let index = usize::try_from(key / 64).unwrap_or(usize::MAX);
+        self.pressed_keys
+            .get(index)
+            .is_some_and(|word| word & (1u64 << (key % 64)) != 0)
+    }
+
+    fn set_key_pressed(&mut self, key: u32, pressed: bool) {
+        let index = usize::try_from(key / 64).unwrap_or(usize::MAX);
+        let Some(word) = self.pressed_keys.get_mut(index) else {
+            return;
+        };
+        let bit = 1u64 << (key % 64);
+        if pressed {
+            *word |= bit;
+        } else {
+            *word &= !bit;
+        }
+    }
+}
+
+struct SharedInputState(UnsafeCell<InputState>);
+
+// SAFETY: the input task and block-task syscall completion paths execute
+// serially on the bootstrap processor; no borrow crosses an await point.
+unsafe impl Sync for SharedInputState {}
+
+static INPUT_STATE: SharedInputState = SharedInputState(UnsafeCell::new(InputState::new()));
+
 #[derive(Clone, Copy)]
 pub struct WaylandSurfaceSnapshot {
     pub generation: u64,
@@ -124,6 +185,241 @@ pub enum WaylandServiceError {
     PermissionDenied,
     InvalidProtocol,
     CommitPending,
+}
+
+fn input_state_mut() -> &'static mut InputState {
+    // SAFETY: justified by SharedInputState's single-processor contract.
+    unsafe { &mut *INPUT_STATE.0.get() }
+}
+
+fn presented_metadata() -> Option<CommittedSurface> {
+    let bank = ACTIVE_BANK.load(Ordering::Acquire);
+    if bank >= SURFACE_BANKS {
+        return None;
+    }
+    // SAFETY: ACTIVE_BANK points at the renderer-pinned immutable bank.
+    unsafe { (*BANKS.0.get())[bank].metadata }
+}
+
+fn send_input_batch(wire: &[u8]) -> bool {
+    if wire.is_empty() {
+        return true;
+    }
+    let state = input_state_mut();
+    match crate::local_socket_service::send_server_event(wire) {
+        Ok(sent) if sent == wire.len() => true,
+        _ => {
+            state.dropped_batches = state.dropped_batches.saturating_add(1);
+            crate::serial::serialln(format_args!(
+                "SLOPOS-WAYLAND-INPUT: batch dropped wire_bytes={} dropped_batches={} reason=backpressure-or-disconnected",
+                wire.len(),
+                state.dropped_batches
+            ));
+            false
+        }
+    }
+}
+
+pub fn set_keyboard_focus(focused: bool, modifiers: u32) {
+    let Some(metadata) = presented_metadata() else {
+        return;
+    };
+    let state = input_state_mut();
+    if state.keyboard_focused == focused {
+        return;
+    }
+    let mut wire = [0u8; 96];
+    let mut cursor = 0;
+    let serial = state.next_serial();
+    if focused {
+        cursor += encode_keyboard_enter(
+            &mut wire[cursor..],
+            metadata.keyboard,
+            serial,
+            metadata.surface,
+            &[],
+        )
+        .unwrap_or_else(|_| crate::fatal("Wayland keyboard enter encoding failed"))
+        .len();
+        cursor += encode_keyboard_modifiers(
+            &mut wire[cursor..],
+            metadata.keyboard,
+            serial,
+            modifiers,
+            0,
+            0,
+            0,
+        )
+        .unwrap_or_else(|_| crate::fatal("Wayland keyboard focus modifiers encoding failed"))
+        .len();
+    } else {
+        cursor += encode_keyboard_leave(
+            &mut wire[cursor..],
+            metadata.keyboard,
+            serial,
+            metadata.surface,
+        )
+        .unwrap_or_else(|_| crate::fatal("Wayland keyboard leave encoding failed"))
+        .len();
+    }
+    if send_input_batch(&wire[..cursor]) {
+        let state = input_state_mut();
+        state.keyboard_focused = focused;
+        state.modifiers = if focused { modifiers } else { 0 };
+        if !focused {
+            state.pressed_keys.fill(0);
+        }
+        crate::serial::serialln(format_args!(
+            "SLOPOS-WAYLAND-INPUT: keyboard focus={} serial={serial} surface={} modifiers={:#x} wire_bytes={cursor}",
+            if focused { "enter" } else { "leave" },
+            metadata.surface,
+            modifiers
+        ));
+    }
+}
+
+pub fn publish_keyboard_key(key: u32, pressed: bool, modifiers: u32) {
+    let Some(metadata) = presented_metadata() else {
+        return;
+    };
+    let state = input_state_mut();
+    if !state.keyboard_focused || key >= 128 || (!pressed && !state.key_is_pressed(key)) {
+        return;
+    }
+    let mut wire = [0u8; 80];
+    let mut cursor = 0;
+    let serial = state.next_serial();
+    let time = crate::timer::ticks().wrapping_mul(10) as u32;
+    cursor += encode_keyboard_key(
+        &mut wire[cursor..],
+        metadata.keyboard,
+        serial,
+        time,
+        key,
+        u32::from(pressed),
+    )
+    .unwrap_or_else(|_| crate::fatal("Wayland keyboard key encoding failed"))
+    .len();
+    if modifiers != state.modifiers {
+        cursor += encode_keyboard_modifiers(
+            &mut wire[cursor..],
+            metadata.keyboard,
+            serial,
+            modifiers,
+            0,
+            0,
+            0,
+        )
+        .unwrap_or_else(|_| crate::fatal("Wayland keyboard modifiers encoding failed"))
+        .len();
+    }
+    if send_input_batch(&wire[..cursor]) {
+        let state = input_state_mut();
+        state.set_key_pressed(key, pressed);
+        state.modifiers = modifiers;
+        crate::serial::serialln(format_args!(
+            "SLOPOS-WAYLAND-INPUT: key code={key} state={} serial={serial} time_ms={time} modifiers={modifiers:#x} wire_bytes={cursor}",
+            if pressed { "pressed" } else { "released" }
+        ));
+    }
+}
+
+pub fn publish_pointer(surface_position: Option<(i32, i32)>, moved: bool, buttons: u8, wheel: i8) {
+    let Some(metadata) = presented_metadata() else {
+        return;
+    };
+    let state = input_state_mut();
+    let mut wire = [0u8; 192];
+    let mut cursor = 0;
+    let time = crate::timer::ticks().wrapping_mul(10) as u32;
+    if let Some((surface_x, surface_y)) = surface_position {
+        if !state.pointer_focused {
+            let serial = state.next_serial();
+            cursor += encode_pointer_enter(
+                &mut wire[cursor..],
+                metadata.pointer,
+                serial,
+                metadata.surface,
+                surface_x,
+                surface_y,
+            )
+            .unwrap_or_else(|_| crate::fatal("Wayland pointer enter encoding failed"))
+            .len();
+        } else if moved {
+            cursor += encode_pointer_motion(
+                &mut wire[cursor..],
+                metadata.pointer,
+                time,
+                surface_x,
+                surface_y,
+            )
+            .unwrap_or_else(|_| crate::fatal("Wayland pointer motion encoding failed"))
+            .len();
+        }
+        for (mask, button) in [(1u8, 0x110u32), (2, 0x111), (4, 0x112)] {
+            if buttons & mask != state.pointer_buttons & mask {
+                let serial = state.next_serial();
+                cursor += encode_pointer_button(
+                    &mut wire[cursor..],
+                    metadata.pointer,
+                    serial,
+                    time,
+                    button,
+                    u32::from(buttons & mask != 0),
+                )
+                .unwrap_or_else(|_| crate::fatal("Wayland pointer button encoding failed"))
+                .len();
+            }
+        }
+        if wheel != 0 {
+            cursor += encode_pointer_axis(
+                &mut wire[cursor..],
+                metadata.pointer,
+                time,
+                0,
+                -i32::from(wheel) * (15 << 8),
+            )
+            .unwrap_or_else(|_| crate::fatal("Wayland pointer axis encoding failed"))
+            .len();
+        }
+        if cursor != 0 {
+            cursor += encode_pointer_frame(&mut wire[cursor..], metadata.pointer)
+                .unwrap_or_else(|_| crate::fatal("Wayland pointer frame encoding failed"))
+                .len();
+        }
+        if send_input_batch(&wire[..cursor]) {
+            let state = input_state_mut();
+            state.pointer_focused = true;
+            state.pointer_buttons = buttons;
+            if cursor != 0 {
+                crate::serial::serialln(format_args!(
+                    "SLOPOS-WAYLAND-INPUT: pointer surface_fixed={surface_x}/{surface_y} moved={moved} buttons={buttons:#x} wheel={wheel} time_ms={time} wire_bytes={cursor} frame=true"
+                ));
+            }
+        }
+    } else if state.pointer_focused {
+        let serial = state.next_serial();
+        cursor += encode_pointer_leave(
+            &mut wire[cursor..],
+            metadata.pointer,
+            serial,
+            metadata.surface,
+        )
+        .unwrap_or_else(|_| crate::fatal("Wayland pointer leave encoding failed"))
+        .len();
+        cursor += encode_pointer_frame(&mut wire[cursor..], metadata.pointer)
+            .unwrap_or_else(|_| crate::fatal("Wayland pointer leave frame encoding failed"))
+            .len();
+        if send_input_batch(&wire[..cursor]) {
+            let state = input_state_mut();
+            state.pointer_focused = false;
+            state.pointer_buttons = 0;
+            crate::serial::serialln(format_args!(
+                "SLOPOS-WAYLAND-INPUT: pointer focus=leave serial={serial} surface={} wire_bytes={cursor}",
+                metadata.surface
+            ));
+        }
+    }
 }
 
 /// Returns the private syscall staging buffer.
@@ -464,27 +760,6 @@ pub fn acknowledge(generation: u64) {
         .unwrap_or_else(|_| crate::fatal("Wayland presentation lifecycle is invalid"));
     let mut wire = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
     let mut cursor = 0;
-    if generation == 1 {
-        cursor += encode_pointer_enter(
-            &mut wire[cursor..],
-            presented.pointer,
-            POINTER_ENTER_SERIAL,
-            presented.surface,
-            16 << 8,
-            12 << 8,
-        )
-        .unwrap_or_else(|_| crate::fatal("Wayland pointer enter encoding failed"))
-        .len();
-        cursor += encode_keyboard_enter(
-            &mut wire[cursor..],
-            presented.keyboard,
-            KEYBOARD_ENTER_SERIAL,
-            presented.surface,
-            &[],
-        )
-        .unwrap_or_else(|_| crate::fatal("Wayland keyboard enter encoding failed"))
-        .len();
-    }
     cursor += encode_buffer_release(&mut wire[cursor..], presented.buffer)
         .unwrap_or_else(|_| crate::fatal("Wayland buffer release encoding failed"))
         .len();
@@ -501,11 +776,7 @@ pub fn acknowledge(generation: u64) {
     let event_sequence = publish_event(WAYLAND_EVENT_PRESENTED, &wire[..cursor])
         .unwrap_or_else(|_| crate::fatal("Wayland presentation event remained pending"));
     *current = Some(candidate);
-    let events = if generation == 1 {
-        "wl_pointer.enter/wl_keyboard.enter/wl_buffer.release/wl_callback.done/wl_display.delete_id"
-    } else {
-        "wl_buffer.release/wl_callback.done/wl_display.delete_id"
-    };
+    let events = "wl_buffer.release/wl_callback.done/wl_display.delete_id";
     crate::serial::serialln(format_args!(
         "SLOPOS-WAYLAND-SERVER: commit acknowledged generation={generation} renderer=desktop active_bank={bank} event_sequence={event_sequence} events={events} callback_data={generation}"
     ));

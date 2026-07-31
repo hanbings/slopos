@@ -34,6 +34,7 @@ const LINUX_AT_EXECFN: u64 = 31;
 const SYS_READ: u64 = 0;
 const SYS_WRITE: u64 = 1;
 const SYS_CLOSE: u64 = 3;
+const SYS_POLL: u64 = 7;
 const SYS_MMAP: u64 = 9;
 const SYS_SCHED_YIELD: u64 = 24;
 const SYS_SOCKET: u64 = 41;
@@ -46,6 +47,7 @@ const SYS_OPENAT: u64 = 257;
 const SYS_MEMFD_CREATE: u64 = 319;
 const AT_FDCWD: i64 = -100;
 const O_RDONLY: u64 = 0;
+const POLLIN: i16 = 0x0001;
 const STDOUT: u64 = 1;
 const FIRST_DYNAMIC_FD: i64 = 3;
 const AF_UNIX: u64 = 1;
@@ -80,10 +82,12 @@ const SURFACE_WIDTH: usize = 32;
 const SURFACE_HEIGHT: usize = 24;
 const SURFACE_PIXEL_LENGTH: usize = SURFACE_WIDTH * SURFACE_HEIGHT * 4;
 static MESSAGE: &[u8; 28] = b"SLOPOS desktop policy ready\n";
+static INPUT_MESSAGE: &[u8; 27] = b"SLOPOS Wayland input ready\n";
 static WAYBAR_PATH: &[u8; 25] = b"/etc/slopos/waybar.jsonc\0";
 static SWWW_PATH: &[u8; 21] = b"/etc/slopos/swww.env\0";
 static WAYLAND_SOCKET_PATH: &[u8; 21] = b"/run/slopos/wayland-0";
 static WAYLAND_MEMFD_NAME: &[u8; 19] = b"slopos-wayland-shm\0";
+static DESKTOP_EVENTS_PATH: &[u8; 27] = b"/run/slopos/desktop-events\0";
 static EXPECTED_ARGV: [&[u8]; 2] = [b"/sbin/slop-shell", b"--session"];
 static EXPECTED_ENVIRONMENT: [&[u8]; INITIAL_ENVC] = [
     b"SLOPOS_ROLE=desktop-shell",
@@ -120,9 +124,18 @@ struct RightsControl {
     padding: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct PollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+
 const _: () = assert!(size_of::<IoVec>() == 16);
 const _: () = assert!(size_of::<MessageHeader>() == 56);
 const _: () = assert!(size_of::<RightsControl>() == 24);
+const _: () = assert!(size_of::<PollFd>() == 8);
 
 global_asm!(
     r#"
@@ -144,46 +157,101 @@ pub extern "C" fn slopos_desktop_main(initial_stack: *const u64) -> ! {
         exit(1);
     }
     exercise_preemption();
-    let mut policy_generation = 0;
-    let mut config_generation = 0;
-    let mut announced = false;
-    let mut wayland_socket = None;
+    let commit = load_policy(true, FIRST_DYNAMIC_FD);
+    if syscall2(
+        DESKTOP_COMMIT_SYSCALL,
+        (&raw const commit) as u64,
+        COMMIT_SIZE as u64,
+    ) != 0
+    {
+        exit(8);
+    }
+    let mut policy_generation = wait_for_event(EVENT_POLICY_APPLIED, 0).unwrap_or_else(|| exit(9));
+    let wayland_socket = connect_wayland_socket();
+    submit_wayland_surface(wayland_socket);
+    if syscall3(
+        SYS_WRITE,
+        STDOUT,
+        MESSAGE.as_ptr() as u64,
+        MESSAGE.len() as u64,
+    ) != MESSAGE.len() as i64
+    {
+        exit(10);
+    }
+    let mut config_generation = wait_for_event(EVENT_CONFIG_APPLIED, 0).unwrap_or_else(|| exit(11));
+    let desktop_events = open(DESKTOP_EVENTS_PATH);
+    if desktop_events != FIRST_DYNAMIC_FD + 1 {
+        exit(30);
+    }
+    let mut input = LiveInputState::new();
     loop {
-        let expected_config_fd = if wayland_socket.is_some() {
-            FIRST_DYNAMIC_FD + 1
-        } else {
-            FIRST_DYNAMIC_FD
-        };
-        let commit = load_policy(policy_generation == 0, expected_config_fd);
-        if syscall2(
-            DESKTOP_COMMIT_SYSCALL,
-            (&raw const commit) as u64,
-            COMMIT_SIZE as u64,
-        ) != 0
-        {
-            exit(8);
+        let mut poll_fds = [
+            PollFd {
+                fd: wayland_socket as i32,
+                events: POLLIN,
+                revents: 0,
+            },
+            PollFd {
+                fd: desktop_events as i32,
+                events: POLLIN,
+                revents: 0,
+            },
+        ];
+        let ready = syscall3(
+            SYS_POLL,
+            poll_fds.as_mut_ptr() as u64,
+            poll_fds.len() as u64,
+            u64::MAX,
+        );
+        if ready <= 0 || ready > poll_fds.len() as i64 {
+            exit(31);
         }
-        policy_generation =
-            wait_for_event(EVENT_POLICY_APPLIED, policy_generation).unwrap_or_else(|| exit(9));
-        if wayland_socket.is_none() {
-            let fd = connect_wayland_socket();
-            submit_wayland_surface(fd);
-            wayland_socket = Some(fd);
-        }
-        if !announced {
-            let result = syscall3(
-                SYS_WRITE,
-                STDOUT,
-                MESSAGE.as_ptr() as u64,
-                MESSAGE.len() as u64,
-            );
-            if result != MESSAGE.len() as i64 {
-                exit(10);
+        if poll_fds[1].revents == POLLIN {
+            config_generation =
+                read_config_event(desktop_events, config_generation).unwrap_or_else(|| exit(32));
+            let commit = load_policy(false, FIRST_DYNAMIC_FD + 2);
+            if syscall2(
+                DESKTOP_COMMIT_SYSCALL,
+                (&raw const commit) as u64,
+                COMMIT_SIZE as u64,
+            ) != 0
+            {
+                exit(33);
             }
-            announced = true;
+            policy_generation =
+                wait_for_event(EVENT_POLICY_APPLIED, policy_generation).unwrap_or_else(|| exit(34));
+        } else if poll_fds[1].revents != 0 {
+            exit(35);
         }
-        config_generation =
-            wait_for_event(EVENT_CONFIG_APPLIED, config_generation).unwrap_or_else(|| exit(11));
+        if poll_fds[0].revents == POLLIN {
+            let mut bytes = [0u8; CONFIG_READ_CAPACITY];
+            let length = syscall3(
+                SYS_READ,
+                wayland_socket as u64,
+                bytes.as_mut_ptr() as u64,
+                bytes.len() as u64,
+            );
+            if length <= 0 || length as usize > bytes.len() {
+                exit(36);
+            }
+            if !input.push(&bytes[..length as usize]) {
+                exit(37);
+            }
+            if input.complete && !input.announced {
+                if syscall3(
+                    SYS_WRITE,
+                    STDOUT,
+                    INPUT_MESSAGE.as_ptr() as u64,
+                    INPUT_MESSAGE.len() as u64,
+                ) != INPUT_MESSAGE.len() as i64
+                {
+                    exit(38);
+                }
+                input.announced = true;
+            }
+        } else if poll_fds[0].revents != 0 {
+            exit(39);
+        }
     }
 }
 
@@ -611,25 +679,6 @@ fn wait_configure(socket: i64) -> Option<u32> {
 fn wait_presented(socket: i64, callback_data: u32) -> Option<()> {
     let mut event_bytes = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
     let mut wire = receive_wayland_event(socket, &mut event_bytes)?;
-    if callback_data == 1 {
-        let mut enter = take_event(&mut wire, POINTER, 0)?;
-        if enter.uint().ok()? != 2
-            || enter.object().ok()? != SURFACE
-            || enter.fixed().ok()? != 16 << 8
-            || enter.fixed().ok()? != 12 << 8
-            || enter.finish().is_err()
-        {
-            return None;
-        }
-        let mut enter = take_event(&mut wire, KEYBOARD, 1)?;
-        if enter.uint().ok()? != 3
-            || enter.object().ok()? != SURFACE
-            || !enter.array().ok()?.is_empty()
-            || enter.finish().is_err()
-        {
-            return None;
-        }
-    }
     if take_event(&mut wire, BUFFER, 0)?.finish().is_err() {
         return None;
     }
@@ -644,6 +693,184 @@ fn wait_presented(socket: i64, callback_data: u32) -> Option<()> {
         return None;
     }
     Some(())
+}
+
+struct LiveInputState {
+    bytes: [u8; WAYLAND_EVENT_MAX_WIRE_SIZE],
+    length: usize,
+    keyboard_focused: bool,
+    pointer_focused: bool,
+    key_a_pressed: bool,
+    key_a_released: bool,
+    pointer_motion: bool,
+    pointer_button_pressed: bool,
+    pointer_button_released: bool,
+    pointer_axis: bool,
+    complete: bool,
+    announced: bool,
+}
+
+impl LiveInputState {
+    const fn new() -> Self {
+        Self {
+            bytes: [0; WAYLAND_EVENT_MAX_WIRE_SIZE],
+            length: 0,
+            keyboard_focused: false,
+            pointer_focused: false,
+            key_a_pressed: false,
+            key_a_released: false,
+            pointer_motion: false,
+            pointer_button_pressed: false,
+            pointer_button_released: false,
+            pointer_axis: false,
+            complete: false,
+            announced: false,
+        }
+    }
+
+    fn push(&mut self, input: &[u8]) -> bool {
+        let Some(end) = self.length.checked_add(input.len()) else {
+            return false;
+        };
+        if end > self.bytes.len() {
+            return false;
+        }
+        self.bytes[self.length..end].copy_from_slice(input);
+        self.length = end;
+        let mut consumed = 0usize;
+        while self.length - consumed >= 8 {
+            let word = u32::from_le_bytes(
+                self.bytes[consumed + 4..consumed + 8]
+                    .try_into()
+                    .unwrap_or([0; 4]),
+            );
+            let size = usize::from((word >> 16) as u16);
+            if size < 8 || size % 4 != 0 || size > self.bytes.len() {
+                return false;
+            }
+            if self.length - consumed < size {
+                break;
+            }
+            let mut frame_storage = [0u8; WAYLAND_EVENT_MAX_WIRE_SIZE];
+            frame_storage[..size].copy_from_slice(&self.bytes[consumed..consumed + size]);
+            let Ok((frame, remaining)) = Frame::decode(&frame_storage[..size]) else {
+                return false;
+            };
+            if !remaining.is_empty() || !self.accept(frame) {
+                return false;
+            }
+            consumed += size;
+        }
+        if consumed != 0 {
+            self.bytes.copy_within(consumed..self.length, 0);
+            self.length -= consumed;
+        }
+        self.complete = self.key_a_pressed
+            && self.key_a_released
+            && self.pointer_motion
+            && self.pointer_button_pressed
+            && self.pointer_button_released
+            && self.pointer_axis;
+        true
+    }
+
+    fn accept(&mut self, frame: Frame<'_>) -> bool {
+        let mut arguments = ArgumentReader::new(frame.payload);
+        let valid = match (frame.header.object_id, frame.header.opcode) {
+            (KEYBOARD, 1) => {
+                let valid = arguments.uint().is_ok()
+                    && arguments.object().ok() == Some(SURFACE)
+                    && arguments.array().is_ok();
+                if valid {
+                    self.keyboard_focused = true;
+                }
+                valid
+            }
+            (KEYBOARD, 2) => {
+                let valid = arguments.uint().is_ok() && arguments.object().ok() == Some(SURFACE);
+                if valid {
+                    self.keyboard_focused = false;
+                }
+                valid
+            }
+            (KEYBOARD, 3) => {
+                let serial = arguments.uint().ok();
+                let time = arguments.uint().ok();
+                let key = arguments.uint().ok();
+                let state = arguments.uint().ok();
+                let valid = self.keyboard_focused
+                    && serial.is_some_and(|value| value != 0)
+                    && time.is_some()
+                    && key.is_some()
+                    && state.is_some_and(|value| value <= 1);
+                if valid && key == Some(30) && state == Some(1) {
+                    self.key_a_pressed = true;
+                }
+                if valid && key == Some(30) && state == Some(0) && self.key_a_pressed {
+                    self.key_a_released = true;
+                }
+                valid
+            }
+            (KEYBOARD, 4) => {
+                arguments.uint().is_ok()
+                    && arguments.uint().is_ok()
+                    && arguments.uint().is_ok()
+                    && arguments.uint().is_ok()
+                    && arguments.uint().is_ok()
+            }
+            (POINTER, 0) => {
+                let valid = arguments.uint().is_ok()
+                    && arguments.object().ok() == Some(SURFACE)
+                    && arguments.fixed().is_ok()
+                    && arguments.fixed().is_ok();
+                if valid {
+                    self.pointer_focused = true;
+                }
+                valid
+            }
+            (POINTER, 1) => {
+                let valid = arguments.uint().is_ok() && arguments.object().ok() == Some(SURFACE);
+                if valid {
+                    self.pointer_focused = false;
+                }
+                valid
+            }
+            (POINTER, 2) => {
+                let valid = self.pointer_focused
+                    && arguments.uint().is_ok()
+                    && arguments.fixed().is_ok()
+                    && arguments.fixed().is_ok();
+                self.pointer_motion |= valid;
+                valid
+            }
+            (POINTER, 3) => {
+                let serial = arguments.uint().ok();
+                let time = arguments.uint().ok();
+                let button = arguments.uint().ok();
+                let state = arguments.uint().ok();
+                let valid = self.pointer_focused
+                    && serial.is_some_and(|value| value != 0)
+                    && time.is_some()
+                    && matches!(button, Some(0x110..=0x112))
+                    && state.is_some_and(|value| value <= 1);
+                self.pointer_button_pressed |= valid && state == Some(1);
+                self.pointer_button_released |=
+                    valid && state == Some(0) && self.pointer_button_pressed;
+                valid
+            }
+            (POINTER, 4) => {
+                let valid = self.pointer_focused
+                    && arguments.uint().is_ok()
+                    && arguments.uint().ok().is_some_and(|axis| axis <= 1)
+                    && arguments.fixed().ok().is_some_and(|value| value != 0);
+                self.pointer_axis |= valid;
+                valid
+            }
+            (POINTER, 5) => true,
+            _ => false,
+        };
+        valid && arguments.finish().is_ok()
+    }
 }
 
 fn take_event<'a>(wire: &mut &'a [u8], object_id: u32, opcode: u16) -> Option<ArgumentReader<'a>> {
@@ -790,6 +1017,22 @@ fn wait_for_event(kind: u16, after_generation: u64) -> Option<u64> {
     }
     let event = DesktopServiceEvent::decode(&event_bytes).ok()?;
     (event.kind == kind && event.generation > after_generation).then_some(event.generation)
+}
+
+fn read_config_event(fd: i64, after_generation: u64) -> Option<u64> {
+    let mut event_bytes = [0u8; EVENT_SIZE];
+    if syscall3(
+        SYS_READ,
+        fd as u64,
+        event_bytes.as_mut_ptr() as u64,
+        event_bytes.len() as u64,
+    ) != event_bytes.len() as i64
+    {
+        return None;
+    }
+    let event = DesktopServiceEvent::decode(&event_bytes).ok()?;
+    (event.kind == EVENT_CONFIG_APPLIED && event.generation > after_generation)
+        .then_some(event.generation)
 }
 
 fn open(path: &[u8]) -> i64 {

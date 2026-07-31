@@ -161,7 +161,7 @@ grep -Fq \
     "SLOPOS-WAYLAND-SERVER: commit accepted pid=2 generation=1 transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle=registry/configure/ack-configure objects=registry/compositor/shm/seat/pointer/keyboard/output/xdg_toplevel surface=6 buffer=8 callback=11 seat=12 pointer=14 keyboard=15 output=13 geometry=32x24 stride=128 format=1 title=\"SlopOS Userspace\" app_id=slopos-system wire_bytes=148 pixel_bytes=3072" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-WAYLAND-SERVER: commit acknowledged generation=1 renderer=desktop active_bank=0 event_sequence=3 events=wl_pointer.enter/wl_keyboard.enter/wl_buffer.release/wl_callback.done/wl_display.delete_id callback_data=1" \
+    "SLOPOS-WAYLAND-SERVER: commit acknowledged generation=1 renderer=desktop active_bank=0 event_sequence=3 events=wl_buffer.release/wl_callback.done/wl_display.delete_id callback_data=1" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-WAYLAND-COMPOSITOR: surface rendered generation=1 owner_pid=2 app_id=slopos-system title=\"SlopOS Userspace\" geometry=32x24 destination=system-window scale=3 buffer_format=xrgb8888 frame_callback=11" \
@@ -185,10 +185,10 @@ grep -Fq \
     "${replay_serial}"
 grep -Fq "SLOPOS-VFS: process close complete pid=1 fd=3 inode=31 async=false" "${replay_serial}"
 grep -Fq \
-    "SLOPOS-PROCESS: userspace runtime parked init=wait4 desktop=config-applied after_generation=0 resources=retained" \
+    "SLOPOS-PROCESS: userspace runtime parked reason=userspace-start init=wait4 desktop=config-applied after_generation=0 resources=retained" \
     "${replay_serial}"
 grep -Fq \
-    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=1 init=wait4 resources=retained" \
+    "SLOPOS-PROCESS: userspace runtime parked reason=desktop-event init=wait4 desktop=poll pid=2 resources=retained" \
     "${replay_serial}"
 grep -Fq \
     "SLOPOS-EXT4: journal recovery replayed sequence=1 start=1 tags=5 first_target_block=0 escaped=false home_readback=true next_sequence=2 records_cleared=true recovery=false" \

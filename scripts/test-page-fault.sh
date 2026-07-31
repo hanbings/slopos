@@ -80,10 +80,10 @@ grep -Fq \
     "${serial_log}"
 grep -Fq "SLOPOS-VFS: process close complete pid=1 fd=3 inode=31 async=false" "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: userspace runtime parked init=wait4 desktop=config-applied after_generation=0 resources=retained" \
+    "SLOPOS-PROCESS: userspace runtime parked reason=userspace-start init=wait4 desktop=config-applied after_generation=0 resources=retained" \
     "${serial_log}"
 grep -Fq \
-    "SLOPOS-PROCESS: desktop service parked event=config-applied after_generation=1 init=wait4 resources=retained" \
+    "SLOPOS-PROCESS: userspace runtime parked reason=desktop-event init=wait4 desktop=poll pid=2 resources=retained" \
     "${serial_log}"
 grep -Fq "SLOPOS-EXCEPTION: injecting page fault at 0x40000000" "${serial_log}"
 grep -Fq "SLOPOS-EXCEPTION: vector=14" "${serial_log}"
