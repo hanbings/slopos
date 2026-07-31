@@ -9,15 +9,18 @@ use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
     BarButton, BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers,
     ColumnDisplay, CropGravity, ImgRequest, MAX_NIRI_BINDINGS, NiriAction, NiriBinding,
-    NiriShellConfig, PpmImage, ResizeMode, ResolvedWaybarStyle, Shadow, ShadowColor, SwwwCommand,
-    SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig, WaybarStyle,
-    WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout, parse_niri_shell_config,
-    parse_ppm, parse_swww_command, parse_swww_environment, parse_waybar_config, parse_waybar_style,
-    transition_eased_progress, transition_pixel_with_options,
+    NiriShellConfig, PpmImage, ResizeFilter, ResizeMode, ResolvedWaybarStyle, Shadow, ShadowColor,
+    SwwwCommand, SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig,
+    WaybarStyle, WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout,
+    parse_niri_shell_config, parse_ppm, parse_swww_command, parse_swww_environment,
+    parse_waybar_config, parse_waybar_style, resize_filter_sample, transition_eased_progress,
+    transition_pixel_with_options,
 };
 
 const WINDOW_COUNT: usize = 3;
 const WORKSPACE_CAPACITY: usize = 4;
+const MAX_FILTER_PIXELS: usize = 2_048;
+const FILTER_SAMPLE_BLOCK: i32 = 4;
 const TITLE_HEIGHT: i32 = 30;
 const BAR_LEFT_START_X: i32 = 47;
 const NIRI_CONFIG: &str = include_str!("../../assets/niri-config.kdl");
@@ -514,6 +517,14 @@ impl Desktop {
             self.screen_width,
             self.screen_height,
         );
+        if transition.filter != ResizeFilter::Nearest
+            && transition.resize != ResizeMode::No
+            && (destination.width != i32::from(current.width())
+                || destination.height != i32::from(current.height()))
+        {
+            self.render_filtered_wallpaper(framebuffer, transition, current, previous, destination);
+            return;
+        }
         let mut old_pixels = previous.pixels();
         let mut new_pixels = current.pixels();
         for y in 0..current.height() {
@@ -541,6 +552,76 @@ impl Desktop {
         }
     }
 
+    fn render_filtered_wallpaper(
+        &self,
+        framebuffer: &mut Framebuffer,
+        transition: slopos_shell::TransitionOptions,
+        current: PpmImage<'_>,
+        previous: PpmImage<'_>,
+        destination: WallpaperDestination,
+    ) {
+        let pixel_count = usize::from(current.width()) * usize::from(current.height());
+        if pixel_count > MAX_FILTER_PIXELS {
+            crate::fatal("swww filtered image exceeds bounded pixel buffer");
+        }
+        let mut old_pixels = [0u32; MAX_FILTER_PIXELS];
+        let mut new_pixels = [0u32; MAX_FILTER_PIXELS];
+        for (index, color) in previous.pixels().enumerate() {
+            old_pixels[index] = color;
+        }
+        for (index, color) in current.pixels().enumerate() {
+            new_pixels[index] = color;
+        }
+        let left = destination.x.max(0);
+        let top = destination.y.max(0);
+        let right = destination
+            .x
+            .saturating_add(destination.width)
+            .min(self.screen_width);
+        let bottom = destination
+            .y
+            .saturating_add(destination.height)
+            .min(self.screen_height);
+        for y in (top..bottom).step_by(FILTER_SAMPLE_BLOCK as usize) {
+            for x in (left..right).step_by(FILTER_SAMPLE_BLOCK as usize) {
+                let block_width = (right - x).min(FILTER_SAMPLE_BLOCK);
+                let block_height = (bottom - y).min(FILTER_SAMPLE_BLOCK);
+                let sample_x = x + block_width / 2;
+                let sample_y = y + block_height / 2;
+                let position = (
+                    (sample_x - destination.x) as u32,
+                    (sample_y - destination.y) as u32,
+                );
+                let dimensions = (destination.width as u32, destination.height as u32);
+                let old = resize_filter_sample(
+                    transition.filter,
+                    &old_pixels[..pixel_count],
+                    (current.width(), current.height()),
+                    position,
+                    dimensions,
+                )
+                .unwrap_or_else(|| crate::fatal("swww old image filter sample failed"));
+                let new = resize_filter_sample(
+                    transition.filter,
+                    &new_pixels[..pixel_count],
+                    (current.width(), current.height()),
+                    position,
+                    dimensions,
+                )
+                .unwrap_or_else(|| crate::fatal("swww new image filter sample failed"));
+                let color = transition_pixel_with_options(
+                    transition,
+                    self.wallpaper.progress(),
+                    (sample_x, sample_y),
+                    (self.screen_width as u16, self.screen_height as u16),
+                    old,
+                    new,
+                );
+                framebuffer.rect(x, y, block_width, block_height, color);
+            }
+        }
+    }
+
     fn log_wallpaper_geometry(&self, source: &str) {
         let Some(image) = self.wallpaper_current_image else {
             return;
@@ -554,7 +635,7 @@ impl Desktop {
             self.screen_height,
         );
         serialln(format_args!(
-            "SLOPOS-SWWW: geometry resize={} x={} y={} width={} height={} crop_gravity={} fill={:06X} source={}",
+            "SLOPOS-SWWW: geometry resize={} x={} y={} width={} height={} crop_gravity={} fill={:06X} source={} filter={}",
             transition.resize.name(),
             destination.x,
             destination.y,
@@ -562,7 +643,8 @@ impl Desktop {
             destination.height,
             transition.crop_gravity.name(),
             transition.fill_color,
-            source
+            source,
+            transition.filter.name()
         ));
     }
 

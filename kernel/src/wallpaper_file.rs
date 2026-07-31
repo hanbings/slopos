@@ -3,8 +3,8 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use slopos_shell::{
-    CropGravity, ImgRequest, MAX_WALLPAPER_PATH, ResizeMode, TransitionBezier, TransitionOptions,
-    TransitionPosition, TransitionType, TransitionWave, parse_ppm,
+    CropGravity, ImgRequest, MAX_WALLPAPER_PATH, ResizeFilter, ResizeMode, TransitionBezier,
+    TransitionOptions, TransitionPosition, TransitionType, TransitionWave, parse_ppm,
 };
 
 pub const WALLPAPER_FILE_CAPACITY: usize = 8 * 1024;
@@ -122,6 +122,7 @@ impl WallpaperFileRequest {
                 bezier: TransitionBezier::swww_default(),
                 wave: TransitionWave::swww_default(),
                 resize: ResizeMode::Crop,
+                filter: ResizeFilter::Nearest,
                 crop_gravity: CropGravity::Center,
                 fill_color: 0,
             },

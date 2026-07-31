@@ -187,6 +187,12 @@ qmp_wheel_burst() {
     sleep 3
     echo "screendump ${repo_dir}/evidence/wallpaper-stretched.ppm"
     sleep 1
+    monitor_type "img aurora.ppm -t none --resize stretch -f bilinear"
+    sleep 8
+    echo "screendump ${repo_dir}/evidence/wallpaper-bilinear.ppm"
+    sleep 1
+    monitor_type "clear"
+    sleep 20
     monitor_type "img sunset.ppm -t none --resize crop"
     sleep 3
     echo "sendkey meta_l-comma 50"
@@ -621,6 +627,7 @@ grep -Fq "SLOPOS-SWWW: transition complete type=wave step=90 fps=30 duration_ms=
 grep -Fq "SLOPOS-SWWW: geometry resize=fit x=0 y=43 width=1024 height=682 crop_gravity=center fill=123456 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=crop x=-128 y=0 width=1152 height=768 crop_gravity=right fill=000000 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=Bilinear" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
@@ -806,6 +813,7 @@ test -s "${repo_dir}/evidence/wallpaper-wave.ppm"
 test -s "${repo_dir}/evidence/wallpaper-fit-fill.ppm"
 test -s "${repo_dir}/evidence/wallpaper-crop-right.ppm"
 test -s "${repo_dir}/evidence/wallpaper-stretched.ppm"
+test -s "${repo_dir}/evidence/wallpaper-bilinear.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-target.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-returned.ppm"
 test -s "${repo_dir}/evidence/niri-column-workspace-target.ppm"
@@ -886,6 +894,10 @@ if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-stretched.ppm" 512 767)" 
     echo "swww stretch did not map the image to the complete output" >&2
     exit 1
 fi
+if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-bilinear.ppm" 512 300)" != "2bc5ce" ]]; then
+    echo "swww Bilinear filter did not interpolate source pixels" >&2
+    exit 1
+fi
 
 if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; then
     echo "persistent userspace reached an unexpected exit or fatal path" >&2
@@ -912,6 +924,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-crop-right.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-stretched.ppm" \
         >"${repo_dir}/evidence/wallpaper-stretched.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-bilinear.ppm" \
+        >"${repo_dir}/evidence/wallpaper-bilinear.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-target.ppm" \
         >"${repo_dir}/evidence/niri-window-workspace-target.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-returned.ppm" \

@@ -57,6 +57,33 @@ pub enum ResizeMode {
     Stretch,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResizeFilter {
+    Nearest,
+    Bilinear,
+    CatmullRom,
+    Mitchell,
+    Lanczos3,
+}
+
+impl ResizeFilter {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Nearest => "Nearest",
+            Self::Bilinear => "Bilinear",
+            Self::CatmullRom => "CatmullRom",
+            Self::Mitchell => "Mitchell",
+            Self::Lanczos3 => "Lanczos3",
+        }
+    }
+}
+
+impl Default for ResizeFilter {
+    fn default() -> Self {
+        Self::Nearest
+    }
+}
+
 impl ResizeMode {
     pub const fn name(self) -> &'static str {
         match self {
@@ -201,6 +228,7 @@ pub struct TransitionOptions {
     pub bezier: TransitionBezier,
     pub wave: TransitionWave,
     pub resize: ResizeMode,
+    pub filter: ResizeFilter,
     pub crop_gravity: CropGravity,
     pub fill_color: u32,
 }
@@ -218,6 +246,7 @@ impl Default for TransitionOptions {
             bezier: TransitionBezier::default(),
             wave: TransitionWave::default(),
             resize: ResizeMode::Crop,
+            filter: ResizeFilter::default(),
             crop_gravity: CropGravity::Center,
             fill_color: 0,
         }
@@ -261,6 +290,7 @@ pub enum SwwwParseError {
     InvalidNumber,
     InvalidTransition,
     InvalidResize,
+    InvalidFilter,
     InvalidCropGravity,
     InvalidPosition,
     InvalidBezier,
@@ -383,6 +413,8 @@ fn parse_img<'a>(
                 value if equal(value, "stretch") => ResizeMode::Stretch,
                 _ => return Err(SwwwParseError::InvalidResize),
             };
+        } else if equal(argument, "-f") || equal(argument, "--filter") {
+            transition.filter = parse_filter(args.next().ok_or(SwwwParseError::MissingValue)?)?;
         } else if equal(argument, "--crop-gravity") {
             transition.crop_gravity =
                 parse_crop_gravity(args.next().ok_or(SwwwParseError::MissingValue)?)?;
@@ -465,6 +497,22 @@ fn parse_transition(value: &str) -> Result<TransitionType, SwwwParseError> {
         Ok(TransitionType::Random)
     } else {
         Err(SwwwParseError::InvalidTransition)
+    }
+}
+
+fn parse_filter(value: &str) -> Result<ResizeFilter, SwwwParseError> {
+    if equal(value, "Nearest") {
+        Ok(ResizeFilter::Nearest)
+    } else if equal(value, "Bilinear") {
+        Ok(ResizeFilter::Bilinear)
+    } else if equal(value, "CatmullRom") {
+        Ok(ResizeFilter::CatmullRom)
+    } else if equal(value, "Mitchell") {
+        Ok(ResizeFilter::Mitchell)
+    } else if equal(value, "Lanczos3") {
+        Ok(ResizeFilter::Lanczos3)
+    } else {
+        Err(SwwwParseError::InvalidFilter)
     }
 }
 
@@ -919,6 +967,7 @@ impl WallpaperDaemon {
                 bezier: TransitionBezier::swww_default(),
                 wave: TransitionWave::swww_default(),
                 resize: ResizeMode::Crop,
+                filter: ResizeFilter::Nearest,
                 crop_gravity: CropGravity::Center,
                 fill_color: 0,
             },
@@ -1380,6 +1429,83 @@ fn blend(old: u32, new: u32, progress: u8) -> u32 {
     red << 16 | green << 8 | blue
 }
 
+pub fn resize_filter_sample(
+    filter: ResizeFilter,
+    pixels: &[u32],
+    source_dimensions: (u16, u16),
+    destination_position: (u32, u32),
+    destination_dimensions: (u32, u32),
+) -> Option<u32> {
+    let source_width = usize::from(source_dimensions.0);
+    let source_height = usize::from(source_dimensions.1);
+    let destination_width = destination_dimensions.0;
+    let destination_height = destination_dimensions.1;
+    if source_width == 0
+        || source_height == 0
+        || destination_width == 0
+        || destination_height == 0
+        || destination_position.0 >= destination_width
+        || destination_position.1 >= destination_height
+        || pixels.len() < source_width.checked_mul(source_height)?
+    {
+        return None;
+    }
+    if filter == ResizeFilter::Nearest {
+        let x = ((u64::from(destination_position.0) * 2 + 1) * source_width as u64
+            / (u64::from(destination_width) * 2))
+            .min(source_width as u64 - 1) as usize;
+        let y = ((u64::from(destination_position.1) * 2 + 1) * source_height as u64
+            / (u64::from(destination_height) * 2))
+            .min(source_height as u64 - 1) as usize;
+        return pixels.get(y * source_width + x).copied();
+    }
+
+    const SAMPLE_SCALE: i64 = 1 << 16;
+    let coordinate = |position: u32, source: usize, destination: u32| {
+        (((i64::from(position) * 2 + 1) * source as i64 * SAMPLE_SCALE)
+            / (i64::from(destination) * 2))
+            - SAMPLE_SCALE / 2
+    };
+    let source_x = coordinate(destination_position.0, source_width, destination_width)
+        .clamp(0, (source_width as i64 - 1) * SAMPLE_SCALE);
+    let source_y = coordinate(destination_position.1, source_height, destination_height)
+        .clamp(0, (source_height as i64 - 1) * SAMPLE_SCALE);
+    let x0 = (source_x / SAMPLE_SCALE) as usize;
+    let y0 = (source_y / SAMPLE_SCALE) as usize;
+    let x1 = (x0 + 1).min(source_width - 1);
+    let y1 = (y0 + 1).min(source_height - 1);
+    let x_weight = source_x % SAMPLE_SCALE;
+    let y_weight = source_y % SAMPLE_SCALE;
+    Some(bilinear_color(
+        pixels[y0 * source_width + x0],
+        pixels[y0 * source_width + x1],
+        pixels[y1 * source_width + x0],
+        pixels[y1 * source_width + x1],
+        x_weight,
+        y_weight,
+        SAMPLE_SCALE,
+    ))
+}
+
+fn bilinear_color(
+    top_left: u32,
+    top_right: u32,
+    bottom_left: u32,
+    bottom_right: u32,
+    x_weight: i64,
+    y_weight: i64,
+    scale: i64,
+) -> u32 {
+    let channel = |shift: u32| {
+        let value = |color: u32| i64::from((color >> shift) & 0xffu32);
+        let top = value(top_left) * (scale - x_weight) + value(top_right) * x_weight;
+        let bottom = value(bottom_left) * (scale - x_weight) + value(bottom_right) * x_weight;
+        ((top * (scale - y_weight) + bottom * y_weight + scale * scale / 2) / (scale * scale))
+            as u32
+    };
+    channel(16) << 16 | channel(8) << 8 | channel(0)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PpmError {
     InvalidMagic,
@@ -1532,7 +1658,7 @@ mod tests {
             Ok(SwwwCommand::Daemon)
         );
         let SwwwCommand::Img(request) = parse_swww_command(
-            "swww img -o SLOPOS-1 sunset.ppm --transition-type center --transition-step 64 --transition-fps 60 --resize fit",
+            "swww img -o SLOPOS-1 sunset.ppm --transition-type center --transition-step 64 --transition-fps 60 --resize fit --filter Bilinear",
             SwwwDefaults::default(),
         )
         .unwrap()
@@ -1545,14 +1671,16 @@ mod tests {
         assert_eq!(request.transition.step, 64);
         assert_eq!(request.transition.fps, 60);
         assert_eq!(request.transition.resize, ResizeMode::Fit);
+        assert_eq!(request.transition.filter, ResizeFilter::Bilinear);
         let SwwwCommand::Img(request) = parse_swww_command(
-            "img aurora.ppm -t none --resize stretch --crop-gravity bottom-right --fill-color 1a2b3c",
+            "img aurora.ppm -t none --resize stretch --crop-gravity bottom-right --fill-color 1a2b3c -f Lanczos3",
             SwwwDefaults::default(),
         )
         .unwrap() else {
             panic!("expected image request");
         };
         assert_eq!(request.transition.resize, ResizeMode::Stretch);
+        assert_eq!(request.transition.filter, ResizeFilter::Lanczos3);
         assert_eq!(request.transition.kind, TransitionType::None);
         assert_eq!(request.transition.crop_gravity, CropGravity::BottomRight);
         assert_eq!(request.transition.fill_color, 0x1a2b3c);
@@ -1714,6 +1842,10 @@ mod tests {
         assert_eq!(
             parse_swww_command("swww img one.ppm --resize squish", SwwwDefaults::default()),
             Err(SwwwParseError::InvalidResize)
+        );
+        assert_eq!(
+            parse_swww_command("swww img one.ppm --filter blurry", SwwwDefaults::default()),
+            Err(SwwwParseError::InvalidFilter)
         );
         assert_eq!(
             parse_swww_command(
@@ -1972,6 +2104,34 @@ mod tests {
         assert_eq!(options.position.to_pixel((100, 80), false), (20, 70));
         options.invert_y = true;
         assert_eq!(options.position.to_pixel((100, 80), true), (20, 10));
+    }
+
+    #[test]
+    fn samples_nearest_and_bilinear_resize_filters() {
+        let pixels = [0xff_00_00, 0x00_ff_00, 0x00_00_ff, 0xff_ff_ff];
+        assert_eq!(
+            resize_filter_sample(ResizeFilter::Nearest, &pixels, (2, 2), (1, 1), (3, 3)),
+            Some(0xff_ff_ff)
+        );
+        for filter in [
+            ResizeFilter::Bilinear,
+            ResizeFilter::CatmullRom,
+            ResizeFilter::Mitchell,
+            ResizeFilter::Lanczos3,
+        ] {
+            assert_eq!(
+                resize_filter_sample(filter, &pixels, (2, 2), (1, 1), (3, 3)),
+                Some(0x80_80_80)
+            );
+            assert_eq!(
+                resize_filter_sample(filter, &pixels, (2, 2), (0, 0), (3, 3)),
+                Some(0xff_00_00)
+            );
+        }
+        assert_eq!(
+            resize_filter_sample(ResizeFilter::Bilinear, &pixels[..3], (2, 2), (1, 1), (3, 3)),
+            None
+        );
     }
 
     #[test]
