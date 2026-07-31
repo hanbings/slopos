@@ -1478,7 +1478,15 @@ pub fn resize_filter_sample(
             source_y,
             SAMPLE_SCALE,
         )),
-        ResizeFilter::Bilinear | ResizeFilter::Lanczos3 => {
+        ResizeFilter::Lanczos3 => Some(lanczos3_filter_color(
+            pixels,
+            source_width,
+            source_height,
+            source_x,
+            source_y,
+            SAMPLE_SCALE,
+        )),
+        ResizeFilter::Bilinear => {
             let x0 = source_x.div_euclid(SAMPLE_SCALE);
             let y0 = source_y.div_euclid(SAMPLE_SCALE);
             let x1 = x0 + 1;
@@ -1556,25 +1564,17 @@ fn cubic_filter_color(
             WEIGHT_SCALE,
         );
     }
-    let mut total_weight = 0i128;
-    let mut channels = [0i128; 3];
-    for (y, &y_weight) in y_indices.iter().zip(&y_weights) {
-        for (x, &x_weight) in x_indices.iter().zip(&x_weights) {
-            let weight = i128::from(x_weight) * i128::from(y_weight);
-            let color = pixels[*y * source_width + *x];
-            total_weight += weight;
-            channels[0] += i128::from((color >> 16) & 0xff) * weight;
-            channels[1] += i128::from((color >> 8) & 0xff) * weight;
-            channels[2] += i128::from(color & 0xff) * weight;
-        }
-    }
-    if total_weight <= 0 {
-        return pixels[base_y.clamp(0, source_height as i64 - 1) as usize * source_width
-            + base_x.clamp(0, source_width as i64 - 1) as usize];
-    }
-    let channel =
-        |value: i128| rounded_divide(value, total_weight).clamp(0, i128::from(u8::MAX)) as u32;
-    channel(channels[0]) << 16 | channel(channels[1]) << 8 | channel(channels[2])
+    let fallback = pixels[base_y.clamp(0, source_height as i64 - 1) as usize * source_width
+        + base_x.clamp(0, source_width as i64 - 1) as usize];
+    separable_filter_color(
+        pixels,
+        source_width,
+        &x_indices,
+        &y_indices,
+        &x_weights,
+        &y_weights,
+        fallback,
+    )
 }
 
 fn cubic_filter_weight(
@@ -1612,6 +1612,119 @@ fn cubic_filter_weight(
         _ => unreachable!(),
     };
     rounded_divide(numerator * i128::from(weight_scale), denominator) as i64
+}
+
+fn lanczos3_filter_color(
+    pixels: &[u32],
+    source_width: usize,
+    source_height: usize,
+    source_x: i64,
+    source_y: i64,
+    sample_scale: i64,
+) -> u32 {
+    const WEIGHT_SCALE: i64 = 1 << 16;
+
+    let base_x = source_x.div_euclid(sample_scale);
+    let base_y = source_y.div_euclid(sample_scale);
+    let mut x_indices = [0usize; 6];
+    let mut y_indices = [0usize; 6];
+    let mut x_weights = [0i64; 6];
+    let mut y_weights = [0i64; 6];
+    for (index, offset) in (-2..=3).enumerate() {
+        let tap_x = base_x + offset;
+        x_indices[index] = tap_x.clamp(0, source_width as i64 - 1) as usize;
+        x_weights[index] = lanczos3_filter_weight(
+            (tap_x * sample_scale - source_x).unsigned_abs(),
+            sample_scale,
+            WEIGHT_SCALE,
+        );
+
+        let tap_y = base_y + offset;
+        y_indices[index] = tap_y.clamp(0, source_height as i64 - 1) as usize;
+        y_weights[index] = lanczos3_filter_weight(
+            (tap_y * sample_scale - source_y).unsigned_abs(),
+            sample_scale,
+            WEIGHT_SCALE,
+        );
+    }
+    let fallback = pixels[base_y.clamp(0, source_height as i64 - 1) as usize * source_width
+        + base_x.clamp(0, source_width as i64 - 1) as usize];
+    separable_filter_color(
+        pixels,
+        source_width,
+        &x_indices,
+        &y_indices,
+        &x_weights,
+        &y_weights,
+        fallback,
+    )
+}
+
+fn lanczos3_filter_weight(distance: u64, sample_scale: i64, weight_scale: i64) -> i64 {
+    const PI_Q16: i128 = 205_887;
+
+    if distance == 0 {
+        return weight_scale;
+    }
+    if distance >= (sample_scale * 3) as u64 {
+        return 0;
+    }
+    let sine = i128::from(sin_pi_fixed(distance, sample_scale));
+    let window_sine = i128::from(sin_pi_fixed(distance / 3, sample_scale));
+    let scale = i128::from(sample_scale);
+    let distance = i128::from(distance);
+    let numerator = 3 * sine * window_sine * scale * scale * i128::from(weight_scale);
+    let denominator = PI_Q16 * PI_Q16 * distance * distance;
+    rounded_divide(numerator, denominator) as i64
+}
+
+fn sin_pi_fixed(argument: u64, sample_scale: i64) -> i64 {
+    const TABLE: [i64; 33] = [
+        0, 6_424, 12_785, 19_024, 25_080, 30_893, 36_410, 41_576, 46_341, 50_660, 54_491, 57_798,
+        60_547, 62_714, 64_277, 65_220, 65_536, 65_220, 64_277, 62_714, 60_547, 57_798, 54_491,
+        50_660, 46_341, 41_576, 36_410, 30_893, 25_080, 19_024, 12_785, 6_424, 0,
+    ];
+    const STEPS: u64 = 32;
+
+    let sample_scale = sample_scale as u64;
+    let whole = argument / sample_scale;
+    let scaled_fraction = argument % sample_scale * STEPS;
+    let index = (scaled_fraction / sample_scale) as usize;
+    let remainder = (scaled_fraction % sample_scale) as i64;
+    let value = (TABLE[index] * (sample_scale as i64 - remainder)
+        + TABLE[index + 1] * remainder
+        + sample_scale as i64 / 2)
+        / sample_scale as i64;
+    if whole % 2 == 0 { value } else { -value }
+}
+
+fn separable_filter_color<const TAPS: usize>(
+    pixels: &[u32],
+    source_width: usize,
+    x_indices: &[usize; TAPS],
+    y_indices: &[usize; TAPS],
+    x_weights: &[i64; TAPS],
+    y_weights: &[i64; TAPS],
+    fallback: u32,
+) -> u32 {
+    let mut total_weight = 0i128;
+    let mut channels = [0i128; 3];
+    for (y, &y_weight) in y_indices.iter().zip(y_weights) {
+        for (x, &x_weight) in x_indices.iter().zip(x_weights) {
+            let weight = i128::from(x_weight) * i128::from(y_weight);
+            let color = pixels[*y * source_width + *x];
+            total_weight += weight;
+            channels[0] += i128::from((color >> 16) & 0xff) * weight;
+            channels[1] += i128::from((color >> 8) & 0xff) * weight;
+            channels[2] += i128::from(color & 0xff) * weight;
+        }
+    }
+    if total_weight <= 0 {
+        return fallback;
+    }
+    let channel =
+        |value: i128| rounded_divide(value, total_weight).clamp(0, i128::from(u8::MAX)) as u32;
+    channel(channels[0]) << 16 | channel(channels[1]) << 8 | channel(channels[2])
 }
 
 fn rounded_divide(numerator: i128, denominator: i128) -> i128 {
@@ -2224,6 +2337,11 @@ mod tests {
 
     #[test]
     fn samples_distinct_resize_filters() {
+        assert_eq!(lanczos3_filter_weight(0, 1 << 16, 1 << 16), 1 << 16);
+        assert_eq!(lanczos3_filter_weight(1 << 16, 1 << 16, 1 << 16), 0);
+        assert_eq!(lanczos3_filter_weight(2 << 16, 1 << 16, 1 << 16), 0);
+        assert_eq!(lanczos3_filter_weight(3 << 16, 1 << 16, 1 << 16), 0);
+
         let pixels = [0xff_00_00, 0x00_ff_00, 0x00_00_ff, 0xff_ff_ff];
         assert_eq!(
             resize_filter_sample(ResizeFilter::Nearest, &pixels, (2, 2), (1, 1), (3, 3)),
@@ -2266,6 +2384,10 @@ mod tests {
             resize_filter_sample(ResizeFilter::Mitchell, &detail, (4, 4), (2, 3), (7, 9)),
             Some(0x40_3a_3c)
         );
+        assert_eq!(
+            resize_filter_sample(ResizeFilter::Lanczos3, &detail, (4, 4), (2, 3), (7, 9)),
+            Some(0x1d_23_23)
+        );
 
         let aurora = parse_ppm(include_str!("../../../assets/wallpapers/aurora.ppm")).unwrap();
         let mut aurora_pixels = [0u32; 96];
@@ -2291,6 +2413,16 @@ mod tests {
                 (1024, 768)
             ),
             Some(0x27_d2_d4)
+        );
+        assert_eq!(
+            resize_filter_sample(
+                ResizeFilter::Lanczos3,
+                &aurora_pixels,
+                (aurora.width(), aurora.height()),
+                (514, 302),
+                (1024, 768)
+            ),
+            Some(0x25_d5_d6)
         );
     }
 

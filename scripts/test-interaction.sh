@@ -199,8 +199,14 @@ qmp_wheel_burst() {
     sleep 1
     monitor_type "clear"
     sleep 20
-    monitor_type "img sunset.ppm -t none"
+    monitor_type "img aurora.ppm -t none --resize stretch -f lanczos3"
+    sleep 20
+    echo "screendump ${repo_dir}/evidence/wallpaper-lanczos3.ppm"
+    sleep 1
+    monitor_type "clear"
     sleep 30
+    monitor_type "img sunset.ppm -t none"
+    sleep 45
     echo "sendkey meta_l-comma 50"
     sleep 1
     echo "sendkey meta_l-ctrl-shift-2 50"
@@ -635,6 +641,7 @@ grep -Fq "SLOPOS-SWWW: geometry resize=crop x=-128 y=0 width=1152 height=768 cro
 grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=Bilinear" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=CatmullRom" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=Lanczos3" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
@@ -822,6 +829,7 @@ test -s "${repo_dir}/evidence/wallpaper-crop-right.ppm"
 test -s "${repo_dir}/evidence/wallpaper-stretched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-bilinear.ppm"
 test -s "${repo_dir}/evidence/wallpaper-catmullrom.ppm"
+test -s "${repo_dir}/evidence/wallpaper-lanczos3.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-target.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-returned.ppm"
 test -s "${repo_dir}/evidence/niri-column-workspace-target.ppm"
@@ -910,6 +918,10 @@ if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-catmullrom.ppm" 512 300)"
     echo "swww CatmullRom filter did not use its cubic convolution kernel" >&2
     exit 1
 fi
+if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-lanczos3.ppm" 512 300)" != "25d5d6" ]]; then
+    echo "swww Lanczos3 filter did not use its windowed-sinc convolution kernel" >&2
+    exit 1
+fi
 for image in niri-window-workspace-target niri-window-workspace-returned; do
     if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/${image}.ppm" 10 10)" != "6558f5" ]] \
         || [[ "$(ppm_pixel_hex "${repo_dir}/evidence/${image}.ppm" 100 100)" != "171c2b" ]] \
@@ -948,6 +960,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-bilinear.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-catmullrom.ppm" \
         >"${repo_dir}/evidence/wallpaper-catmullrom.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-lanczos3.ppm" \
+        >"${repo_dir}/evidence/wallpaper-lanczos3.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-target.ppm" \
         >"${repo_dir}/evidence/niri-window-workspace-target.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-returned.ppm" \
