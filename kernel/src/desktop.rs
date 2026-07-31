@@ -27,6 +27,8 @@ const NIRI_CONFIG: &str = include_str!("../../assets/niri-config.kdl");
 const WAYBAR_CONFIG: &str = include_str!("../../assets/waybar-config.jsonc");
 const WAYBAR_STYLE: &str = include_str!("../../assets/waybar-style.css");
 const SWWW_ENVIRONMENT: &str = include_str!("../../assets/swww.env");
+const WAYBAR_OUTPUT_NAME: &str = "SLOPOS-1";
+const WAYBAR_OUTPUT_IDENTIFIER: &str = "SlopOS Virtual Display 0x00000001";
 const AURORA_PPM: &str = include_str!("../../assets/wallpapers/aurora.ppm");
 const SUNSET_PPM: &str = include_str!("../../assets/wallpapers/sunset.ppm");
 const AURORA_PATH: &str = "/usr/share/backgrounds/slopos-aurora.ppm";
@@ -89,8 +91,9 @@ impl Desktop {
             .unwrap_or_else(|_| crate::fatal("niri layout config failed validation"));
         let niri = parse_niri_shell_config(NIRI_CONFIG)
             .unwrap_or_else(|_| crate::fatal("niri shell config failed validation"));
-        let bar = parse_waybar_config(WAYBAR_CONFIG)
+        let mut bar = parse_waybar_config(WAYBAR_CONFIG)
             .unwrap_or_else(|_| crate::fatal("Waybar JSONC config failed validation"));
+        bar.select_output(WAYBAR_OUTPUT_NAME, WAYBAR_OUTPUT_IDENTIFIER);
         let bar_style = parse_waybar_style(WAYBAR_STYLE)
             .unwrap_or_else(|_| crate::fatal("Waybar CSS failed validation"));
         let swww_defaults = parse_swww_environment(SWWW_ENVIRONMENT)
@@ -696,9 +699,11 @@ impl Desktop {
     fn render_bar(&self, framebuffer: &mut Framebuffer) {
         let (bar_x, bar_y, bar_width, bar_height) = self.bar_rect();
         let baseline = bar_y.saturating_add(((bar_height - 7) / 2).max(2));
-        let bar_style = self
-            .bar_style
-            .resolve_bar(self.bar.name, ResolvedWaybarStyle::new(WHITE, Some(PANEL)));
+        let bar_style = self.bar_style.resolve_bar(
+            self.bar.name,
+            WAYBAR_OUTPUT_NAME,
+            ResolvedWaybarStyle::new(WHITE, Some(PANEL)),
+        );
         if let Some(background) = bar_style.background {
             framebuffer.rect(bar_x, bar_y, bar_width, bar_height, background);
         }
@@ -1004,8 +1009,9 @@ impl Desktop {
             .unwrap_or_else(|_| crate::fatal("published niri layout became invalid"));
         let niri = parse_niri_shell_config(sources.niri)
             .unwrap_or_else(|_| crate::fatal("published niri shell config became invalid"));
-        let bar = parse_waybar_config(sources.waybar)
+        let mut bar = parse_waybar_config(sources.waybar)
             .unwrap_or_else(|_| crate::fatal("published Waybar config became invalid"));
+        bar.select_output(WAYBAR_OUTPUT_NAME, WAYBAR_OUTPUT_IDENTIFIER);
         let bar_style = parse_waybar_style(sources.waybar_style)
             .unwrap_or_else(|_| crate::fatal("published Waybar style became invalid"));
         let swww_defaults = parse_swww_environment(sources.swww)
@@ -1357,6 +1363,14 @@ impl Desktop {
             self.bar.expand_right,
             self.bar.name.unwrap_or("-"),
             self.bar.namespace()
+        ));
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: output name={} identifier=\"{}\" selector={} entries={} selected={} source={source}",
+            WAYBAR_OUTPUT_NAME,
+            WAYBAR_OUTPUT_IDENTIFIER,
+            self.bar.output.form_name(),
+            self.bar.output.len(),
+            self.bar.output_selected()
         ));
     }
 

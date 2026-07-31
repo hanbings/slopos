@@ -117,12 +117,14 @@ impl<'a> WaybarStyle<'a> {
     pub fn resolve_bar(
         self,
         name: Option<&str>,
+        output_name: &str,
         mut defaults: ResolvedWaybarStyle,
     ) -> ResolvedWaybarStyle {
         for rule in self.rules[..self.length].iter().flatten() {
             if rule.selector == "*"
                 || rule.selector == "window#waybar"
                 || name.is_some_and(|name| bar_class_selector_matches(rule.selector, name))
+                || bar_class_selector_matches(rule.selector, output_name)
             {
                 defaults.apply(rule.patch);
             }
@@ -451,14 +453,36 @@ mod tests {
             "#,
         )
         .unwrap();
-        let unnamed = style.resolve_bar(None, ResolvedWaybarStyle::new(0, None));
+        let unnamed = style.resolve_bar(None, "SLOPOS-1", ResolvedWaybarStyle::new(0, None));
         assert_eq!(unnamed.background, Some(0x101010));
         assert_eq!(unnamed.foreground, 0);
-        let named = style.resolve_bar(Some("slop-main"), ResolvedWaybarStyle::new(0, None));
+        let named = style.resolve_bar(
+            Some("slop-main"),
+            "SLOPOS-1",
+            ResolvedWaybarStyle::new(0, None),
+        );
         assert_eq!(named.background, Some(0x202640));
         assert_eq!(named.foreground, 0xeeeeee);
         assert_eq!(named.border_bottom_width, 1);
         assert_eq!(named.border_bottom_color, 0x123456);
+    }
+
+    #[test]
+    fn resolves_the_output_name_as_a_window_class() {
+        let style = parse_waybar_style(
+            r#"
+            window#waybar { background: #101010; }
+            .SLOPOS-1 { color: #eeeeee; }
+            window.SLOPOS-1 { border-bottom: 1px solid #123456; }
+            window#waybar.SLOPOS-1 { background: #202640; }
+            "#,
+        )
+        .unwrap();
+        let resolved = style.resolve_bar(None, "SLOPOS-1", ResolvedWaybarStyle::new(0, None));
+        assert_eq!(resolved.background, Some(0x202640));
+        assert_eq!(resolved.foreground, 0xeeeeee);
+        assert_eq!(resolved.border_bottom_width, 1);
+        assert_eq!(resolved.border_bottom_color, 0x123456);
     }
 
     #[test]

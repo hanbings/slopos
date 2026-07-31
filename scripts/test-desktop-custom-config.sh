@@ -25,6 +25,10 @@ overlay_debug_log="${repo_dir}/evidence/waybar-overlay-uefi-debugcon.log"
 overlay_qemu_log="${repo_dir}/evidence/waybar-overlay-qemu.log"
 overlay_screenshot="${repo_dir}/evidence/waybar-overlay-passthrough.ppm"
 overlay_clicked_screenshot="${repo_dir}/evidence/waybar-overlay-click-through.ppm"
+excluded_serial_log="${repo_dir}/evidence/waybar-output-excluded-serial.log"
+excluded_debug_log="${repo_dir}/evidence/waybar-output-excluded-uefi-debugcon.log"
+excluded_qemu_log="${repo_dir}/evidence/waybar-output-excluded-qemu.log"
+excluded_screenshot="${repo_dir}/evidence/waybar-output-excluded.ppm"
 runtime_dir="$(mktemp -d /tmp/slopos-custom-config.XXXXXX)"
 runtime_esp="${runtime_dir}/slopos-esp.img"
 runtime_root="${runtime_dir}/slopos-root.ext4"
@@ -33,6 +37,7 @@ custom_niri="${runtime_dir}/niri.kdl"
 custom_waybar="${runtime_dir}/waybar.jsonc"
 custom_waybar_style="${runtime_dir}/waybar.css"
 overlay_waybar="${runtime_dir}/waybar-overlay.jsonc"
+excluded_waybar="${runtime_dir}/waybar-output-excluded.jsonc"
 fsck_log="${runtime_dir}/fsck.log"
 debugfs=/usr/sbin/debugfs
 e2fsck=/usr/sbin/e2fsck
@@ -46,6 +51,7 @@ cleanup() {
         "${custom_waybar}" \
         "${custom_waybar_style}" \
         "${overlay_waybar}" \
+        "${excluded_waybar}" \
         "${fsck_log}"
     do
         unlink "${temporary_file}" 2>/dev/null || true
@@ -97,7 +103,7 @@ if (( custom_niri_bytes <= default_niri_bytes || custom_niri_bytes > 4096 )); th
 fi
 sed \
     -e '1i// user override accepted by the SlopOS desktop service' \
-    -e '/"spacing": 10,/a\    "name": "slop-main",\n    "margin": "4 12",\n    "fixed-center": false,\n    "expand-left": true,\n    "expand-center": true,\n    "expand-right": true,\n    "layer": "top",\n    "exclusive": true,' \
+    -e '/"spacing": 10,/a\    "output": ["!HDMI-A-1", "SLOPOS-1", "*"],\n    "name": "slop-main",\n    "margin": "4 12",\n    "fixed-center": false,\n    "expand-left": true,\n    "expand-center": true,\n    "expand-right": true,\n    "layer": "top",\n    "exclusive": true,' \
     -e '/"modules-left":/,/]/ s/"niri\/workspaces"/"niri\/window"/' \
     -e '/"modules-center":/,/]/ s/"niri\/window"/"niri\/workspaces"/' \
     -e '/"clock": {/a\        "on-click": "status",' \
@@ -114,6 +120,8 @@ if (( custom_bytes <= 904 || custom_bytes > 4096 )); then
 fi
 sed '$a\
 \
+window#waybar.SLOPOS-1 { border-bottom: 2px solid #ff79c6; }\
+\
 window#waybar.slop-main { background-color: #202640; }' \
     "${repo_dir}/assets/waybar-style.css" >"${custom_waybar_style}"
 default_style_bytes="$(wc -c <"${repo_dir}/assets/waybar-style.css")"
@@ -124,11 +132,20 @@ if (( custom_style_bytes <= default_style_bytes || custom_style_bytes > 4096 ));
 fi
 sed \
     -e '1i// Waybar custom overlay mode and pointer passthrough integration fixture' \
-    -e '/"spacing": 10,/a\    "width": 800,\n    "no-center": true,\n    "mode": "slop-overlay",\n    "modes": {\n        "slop-overlay": {\n            "layer": "overlay",\n            "exclusive": false,\n            "passthrough": true,\n            "visible": true\n        }\n    },' \
+    -e '/"spacing": 10,/a\    "output": "SLOPOS-1",\n    "width": 800,\n    "no-center": true,\n    "mode": "slop-overlay",\n    "modes": {\n        "slop-overlay": {\n            "layer": "overlay",\n            "exclusive": false,\n            "passthrough": true,\n            "visible": true\n        }\n    },' \
     "${repo_dir}/assets/waybar-config.jsonc" >"${overlay_waybar}"
 overlay_bytes="$(wc -c <"${overlay_waybar}")"
 if (( overlay_bytes <= 904 || overlay_bytes > 4096 )); then
     echo "overlay Waybar fixture has unexpected size: ${overlay_bytes}" >&2
+    exit 1
+fi
+sed \
+    -e '1i// Waybar ordered output exclusion integration fixture' \
+    -e '/"spacing": 10,/a\    "output": ["!SLOPOS-1", "*"],' \
+    "${repo_dir}/assets/waybar-config.jsonc" >"${excluded_waybar}"
+excluded_bytes="$(wc -c <"${excluded_waybar}")"
+if (( excluded_bytes <= 904 || excluded_bytes > 4096 )); then
+    echo "excluded-output Waybar fixture has unexpected size: ${excluded_bytes}" >&2
     exit 1
 fi
 
@@ -309,6 +326,9 @@ grep -Fq \
     "SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=true/true/true name=slop-main namespace=slop-main source=config" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-WAYBAR: output name=SLOPOS-1 identifier=\"SlopOS Virtual Display 0x00000001\" selector=array entries=3 selected=true source=config" \
+    "${serial_log}"
+grep -Fq \
     "SLOPOS-WAYBAR: surface clicked button=left consumed=true layer=top passthrough=false" \
     "${serial_log}"
 grep -Fq \
@@ -440,8 +460,9 @@ fi
 if [[ "$(ppm_pixel_hex "${column_width_screenshot}" 0 20)" != "111144" ]] \
     || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 12 20)" != "202640" ]] \
     || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 20 2)" != "111144" ]] \
-    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 20 4)" != "202640" ]]; then
-    echo "custom Waybar margins or name class style did not constrain the rendered bar surface" >&2
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 20 4)" != "202640" ]] \
+    || [[ "$(ppm_pixel_hex "${column_width_screenshot}" 20 43)" != "ff79c6" ]]; then
+    echo "custom Waybar margins or name/output class styles did not constrain the rendered bar surface" >&2
     exit 1
 fi
 if [[ "$(ppm_pixel_hex "${format_restored_screenshot}" 331 20)" != "f4f4f8" ]]; then
@@ -525,6 +546,9 @@ grep -Fq \
     "SLOPOS-WAYBAR: layout configured_width=800 no_center=true expand=false/false/false name=- namespace=waybar source=config" \
     "${overlay_serial_log}"
 grep -Fq \
+    "SLOPOS-WAYBAR: output name=SLOPOS-1 identifier=\"SlopOS Virtual Display 0x00000001\" selector=string entries=1 selected=true source=config" \
+    "${overlay_serial_log}"
+grep -Fq \
     "SLOPOS-DESKTOP: window closed kind=TERMINAL workspace=1" \
     "${overlay_serial_log}"
 if grep -Fq "SLOPOS-WAYBAR: module clicked name=clock button=left" "${overlay_serial_log}"; then
@@ -557,6 +581,64 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/waybar-overlay-click-through.png"
 fi
 
+cp --reflink=auto --sparse=always "${root_image}" "${runtime_root}"
+cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
+"${debugfs}" -w -R "rm /etc/slopos/waybar.jsonc" "${runtime_root}" >/dev/null 2>&1
+"${debugfs}" \
+    -w \
+    -R "write ${excluded_waybar} /etc/slopos/waybar.jsonc" \
+    "${runtime_root}" >/dev/null 2>&1
+
+set +e
+{
+    sleep 7
+    echo "screendump ${excluded_screenshot}"
+    echo "quit"
+} | timeout 12s qemu-system-x86_64 \
+    -machine q35,accel=tcg \
+    -cpu qemu64 \
+    -m 256M \
+    -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd" \
+    -drive "if=pflash,format=raw,file=${runtime_vars}" \
+    -drive "if=virtio,format=raw,file=${runtime_esp}" \
+    -drive "if=virtio,format=raw,file=${runtime_root}" \
+    -serial "file:${excluded_serial_log}" \
+    -debugcon "file:${excluded_debug_log}" \
+    -global isa-debugcon.iobase=0x402 \
+    -display none \
+    -monitor stdio \
+    -no-reboot >"${excluded_qemu_log}" 2>&1
+excluded_qemu_status=$?
+set -e
+
+if [[ ${excluded_qemu_status} -ne 0 && ${excluded_qemu_status} -ne 124 ]]; then
+    echo "Waybar excluded-output QEMU failed with status ${excluded_qemu_status}" >&2
+    exit "${excluded_qemu_status}"
+fi
+sed -i 's/\r$//' "${excluded_serial_log}" "${excluded_debug_log}" "${excluded_qemu_log}"
+grep -Fq \
+    "bytes=${excluded_bytes} access=readonly async=true path=/etc/slopos/waybar.jsonc" \
+    "${excluded_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=default exclusive=true passthrough=false visible=false reserved_top=0 source=config" \
+    "${excluded_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: output name=SLOPOS-1 identifier=\"SlopOS Virtual Display 0x00000001\" selector=array entries=2 selected=false source=config" \
+    "${excluded_serial_log}"
+if grep -Fq "FATAL" "${excluded_serial_log}" || grep -Fq "state=exited" "${excluded_serial_log}"; then
+    echo "Waybar excluded-output integration reached an unexpected exit or fatal path" >&2
+    exit 1
+fi
+test -s "${excluded_screenshot}"
+if [[ "$(ppm_pixel_hex "${excluded_screenshot}" 100 10)" != "111144" ]]; then
+    echo "Waybar excluded output still rendered a bar surface" >&2
+    exit 1
+fi
+if command -v pnmtopng >/dev/null 2>&1; then
+    pnmtopng "${excluded_screenshot}" \
+        >"${repo_dir}/evidence/waybar-output-excluded.png"
+fi
+
 set +e
 "${e2fsck}" -fn "${runtime_root}" >"${fsck_log}" 2>&1
 fsck_status=$?
@@ -566,4 +648,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded niri/Waybar override, geometry, expand/fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"
+echo "SlopOS bounded niri/Waybar override, output selection, geometry, expand/fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"

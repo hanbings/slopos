@@ -6,6 +6,8 @@ pub const MAX_BAR_TEXT: usize = 96;
 pub const MAX_BAR_MODES: usize = 8;
 pub const MAX_BAR_MODE_NAME: usize = 32;
 pub const MAX_BAR_NAME: usize = 32;
+pub const MAX_BAR_OUTPUTS: usize = 8;
+pub const MAX_BAR_OUTPUT_NAME: usize = 96;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BarPosition {
@@ -100,6 +102,120 @@ impl BarSignalAction {
             _ => None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BarOutputList<'a> {
+    outputs: [&'a str; MAX_BAR_OUTPUTS],
+    length: usize,
+    configured: bool,
+    array: bool,
+}
+
+impl<'a> BarOutputList<'a> {
+    const fn any() -> Self {
+        Self {
+            outputs: [""; MAX_BAR_OUTPUTS],
+            length: 0,
+            configured: false,
+            array: false,
+        }
+    }
+
+    const fn string(output: &'a str) -> Self {
+        let mut outputs = [""; MAX_BAR_OUTPUTS];
+        outputs[0] = output;
+        Self {
+            outputs,
+            length: 1,
+            configured: true,
+            array: false,
+        }
+    }
+
+    const fn array() -> Self {
+        Self {
+            outputs: [""; MAX_BAR_OUTPUTS],
+            length: 0,
+            configured: true,
+            array: true,
+        }
+    }
+
+    pub const fn len(self) -> usize {
+        self.length
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.length == 0
+    }
+
+    pub const fn is_configured(self) -> bool {
+        self.configured
+    }
+
+    pub const fn is_array(self) -> bool {
+        self.array
+    }
+
+    pub const fn form_name(self) -> &'static str {
+        if !self.configured {
+            "any"
+        } else if self.array {
+            "array"
+        } else {
+            "string"
+        }
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = &'a str> {
+        self.outputs.into_iter().take(self.length)
+    }
+
+    pub fn matches(self, name: &str, identifier: &str) -> bool {
+        if !self.configured {
+            return true;
+        }
+        if !self.array {
+            let output = self.outputs[0];
+            if output.is_empty() {
+                return true;
+            }
+            if let Some(excluded) = output.strip_prefix('!') {
+                return !output_matches(excluded, name, identifier);
+            }
+            return output_matches(output, name, identifier);
+        }
+        for output in self.iter() {
+            if let Some(excluded) = output.strip_prefix('!') {
+                if output_matches(excluded, name, identifier) {
+                    return false;
+                }
+                continue;
+            }
+            if output_matches(output, name, identifier) {
+                return true;
+            }
+            if output.starts_with('*') {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn push(&mut self, output: &'a str) -> Result<(), BarConfigError> {
+        validate_output_name(output)?;
+        if self.length == self.outputs.len() {
+            return Err(BarConfigError::TooManyOutputs);
+        }
+        self.outputs[self.length] = output;
+        self.length += 1;
+        Ok(())
+    }
+}
+
+fn output_matches(output: &str, name: &str, identifier: &str) -> bool {
+    output == name || output == identifier
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -372,6 +488,7 @@ impl<'a> BarModuleConfigList<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WaybarConfig<'a> {
     pub name: Option<&'a str>,
+    pub output: BarOutputList<'a>,
     pub position: BarPosition,
     pub height: u16,
     pub width: u16,
@@ -400,6 +517,7 @@ pub struct WaybarConfig<'a> {
     shown_mode: BarModeState<'a>,
     hidden_mode: BarModeState<'a>,
     visibility_state: bool,
+    output_selected: bool,
 }
 
 impl Default for WaybarConfig<'_> {
@@ -408,6 +526,7 @@ impl Default for WaybarConfig<'_> {
         let hidden_mode = BarModeState::preset("invisible");
         Self {
             name: None,
+            output: BarOutputList::any(),
             position: BarPosition::Top,
             height: 30,
             width: 0,
@@ -436,6 +555,7 @@ impl Default for WaybarConfig<'_> {
             shown_mode,
             hidden_mode,
             visibility_state: true,
+            output_selected: true,
         }
     }
 }
@@ -443,6 +563,20 @@ impl Default for WaybarConfig<'_> {
 impl<'a> WaybarConfig<'a> {
     pub fn namespace(self) -> &'a str {
         self.name.unwrap_or("waybar")
+    }
+
+    pub const fn output_selected(self) -> bool {
+        self.output_selected
+    }
+
+    pub fn select_output(&mut self, name: &str, identifier: &str) -> bool {
+        self.output_selected = self.output.matches(name, identifier);
+        self.apply_mode_state(if self.visibility_state {
+            self.shown_mode
+        } else {
+            self.hidden_mode
+        });
+        self.output_selected
     }
 
     pub fn reserved_top(self) -> u16 {
@@ -531,7 +665,7 @@ impl<'a> WaybarConfig<'a> {
         self.layer = state.options.layer;
         self.exclusive = state.options.exclusive;
         self.passthrough = state.options.passthrough;
-        self.visible = state.options.visible;
+        self.visible = state.options.visible && self.output_selected;
     }
 }
 
@@ -547,6 +681,8 @@ pub enum BarConfigError {
     TooManyModules,
     TooManyModuleConfigs,
     InvalidName,
+    InvalidOutput,
+    TooManyOutputs,
     InvalidMode,
     TooManyModes,
 }
@@ -844,6 +980,7 @@ impl<'a> JsonParser<'a> {
     const EXPAND_CENTER: u32 = 1 << 24;
     const EXPAND_RIGHT: u32 = 1 << 25;
     const NAME: u32 = 1 << 26;
+    const OUTPUT: u32 = 1 << 27;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -873,6 +1010,11 @@ impl<'a> JsonParser<'a> {
                         "name" => {
                             mark_once(&mut fields, Self::NAME)?;
                             config.name = Some(self.bar_name_value()?);
+                        }
+                        "output" => {
+                            mark_once(&mut fields, Self::OUTPUT)?;
+                            config.output = self.output_value()?;
+                            config.output_selected = false;
                         }
                         "position" => {
                             mark_once(&mut fields, Self::POSITION)?;
@@ -1196,6 +1338,36 @@ impl<'a> JsonParser<'a> {
         valid_bar_name(value)
             .then_some(value)
             .ok_or(BarConfigError::InvalidName)
+    }
+
+    fn output_value(&mut self) -> Result<BarOutputList<'a>, BarConfigError> {
+        match self.next() {
+            Token::String(output) => {
+                validate_output_name(output)?;
+                Ok(BarOutputList::string(output))
+            }
+            Token::LeftBracket => {
+                let mut outputs = BarOutputList::array();
+                loop {
+                    match self.next() {
+                        Token::RightBracket => return Ok(outputs),
+                        Token::String(output) => {
+                            outputs.push(output)?;
+                            match self.next() {
+                                Token::Comma => {}
+                                Token::RightBracket => return Ok(outputs),
+                                Token::End => return Err(BarConfigError::UnexpectedEnd),
+                                _ => return Err(BarConfigError::InvalidOutput),
+                            }
+                        }
+                        Token::End => return Err(BarConfigError::UnexpectedEnd),
+                        _ => return Err(BarConfigError::InvalidOutput),
+                    }
+                }
+            }
+            Token::End => Err(BarConfigError::UnexpectedEnd),
+            _ => Err(BarConfigError::InvalidOutput),
+        }
     }
 
     fn mode_bool_value(&mut self) -> Result<bool, BarConfigError> {
@@ -1525,6 +1697,14 @@ fn valid_bar_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+fn validate_output_name(value: &str) -> Result<(), BarConfigError> {
+    if value.len() <= MAX_BAR_OUTPUT_NAME {
+        Ok(())
+    } else {
+        Err(BarConfigError::InvalidOutput)
+    }
+}
+
 fn parse_usize(value: &str) -> Option<usize> {
     if value.is_empty() {
         return None;
@@ -1684,6 +1864,10 @@ mod tests {
         .unwrap();
         assert_eq!(config.name, None);
         assert_eq!(config.namespace(), "waybar");
+        assert!(!config.output.is_configured());
+        assert_eq!(config.output.form_name(), "any");
+        assert!(config.output.matches("SLOPOS-1", "SlopOS Display"));
+        assert!(config.output_selected());
         assert_eq!(config.position, BarPosition::Top);
         assert_eq!(config.height, 30);
         assert_eq!(config.width, 0);
@@ -1726,9 +1910,81 @@ mod tests {
     }
 
     #[test]
+    fn selects_waybar_output_strings_and_ordered_arrays() {
+        let mut array = parse_waybar_config(
+            r#"{
+                "output": ["!HDMI-A-1", "SLOPOS-1", "*"],
+                "layer": "top"
+            }"#,
+        )
+        .unwrap();
+        assert!(array.output.is_configured());
+        assert!(array.output.is_array());
+        assert_eq!(array.output.form_name(), "array");
+        assert_eq!(array.output.len(), 3);
+        let mut outputs = array.output.iter();
+        assert_eq!(outputs.next(), Some("!HDMI-A-1"));
+        assert_eq!(outputs.next(), Some("SLOPOS-1"));
+        assert_eq!(outputs.next(), Some("*"));
+        assert_eq!(outputs.next(), None);
+        assert!(!array.output.matches("HDMI-A-1", "Other Display"));
+        assert!(array.output.matches("SLOPOS-1", "Other Display"));
+        assert!(array.output.matches("DP-2", "Other Display"));
+        assert!(!array.output_selected());
+        assert!(!array.visible);
+        assert!(array.select_output("SLOPOS-1", "SlopOS Virtual Display 0x00000001"));
+        assert!(array.output_selected());
+        assert!(array.visible);
+        assert_eq!(array.reserved_top(), 30);
+
+        let identifier =
+            parse_waybar_config(r#"{ "output": "SlopOS Virtual Display 0x00000001" }"#).unwrap();
+        assert!(
+            identifier
+                .output
+                .matches("OTHER-1", "SlopOS Virtual Display 0x00000001")
+        );
+        assert!(!identifier.output.matches("OTHER-1", "Other Display"));
+
+        let excluded = parse_waybar_config(r#"{ "output": "!SLOPOS-1" }"#).unwrap();
+        assert!(!excluded.output.matches("SLOPOS-1", "Other Display"));
+        assert!(excluded.output.matches("DP-2", "Other Display"));
+
+        let wildcard_string = parse_waybar_config(r#"{ "output": "*" }"#).unwrap();
+        assert!(!wildcard_string.output.matches("SLOPOS-1", "Other Display"));
+        let empty_string = parse_waybar_config(r#"{ "output": "" }"#).unwrap();
+        assert!(empty_string.output.matches("SLOPOS-1", "Other Display"));
+        let empty_array = parse_waybar_config(r#"{ "output": [] }"#).unwrap();
+        assert!(!empty_array.output.matches("SLOPOS-1", "Other Display"));
+
+        let ordered_positive =
+            parse_waybar_config(r#"{ "output": ["SLOPOS-1", "!SLOPOS-1"] }"#).unwrap();
+        assert!(ordered_positive.output.matches("SLOPOS-1", "Other Display"));
+        let ordered_exclusion = parse_waybar_config(r#"{ "output": ["!SLOPOS-1", "*"] }"#).unwrap();
+        assert!(
+            !ordered_exclusion
+                .output
+                .matches("SLOPOS-1", "Other Display")
+        );
+        assert!(ordered_exclusion.output.matches("DP-2", "Other Display"));
+
+        let mut gated = parse_waybar_config(r#"{ "output": "SLOPOS-1" }"#).unwrap();
+        assert!(!gated.select_output("DP-2", "Other Display"));
+        gated.toggle_visibility();
+        assert!(gated.set_visibility(true));
+        assert!(!gated.visible);
+        assert!(gated.select_output("SLOPOS-1", "Other Display"));
+        assert!(gated.visible);
+    }
+
+    #[test]
     fn rejects_duplicate_invalid_and_overfull_fields() {
         assert_eq!(
             parse_waybar_config(r#"{ "height": 30, "height": 31 }"#),
+            Err(BarConfigError::DuplicateField)
+        );
+        assert_eq!(
+            parse_waybar_config(r#"{ "output": "a", "output": "b" }"#),
             Err(BarConfigError::DuplicateField)
         );
         assert_eq!(
@@ -1740,6 +1996,11 @@ mod tests {
             r#"{ "name": "bad name" }"#,
             r#"{ "name": "waybar.main" }"#,
             r#"{ "name": 1 }"#,
+            r#"{ "output": 1 }"#,
+            r#"{ "output": ["SLOPOS-1", 1] }"#,
+            r#"{ "output": [
+                "a", "b", "c", "d", "e", "f", "g", "h", "i"
+            ] }"#,
             r#"{ "margin": "" }"#,
             r#"{ "margin": "1 2 3 4 5" }"#,
             r#"{ "margin": "1px" }"#,
@@ -1770,6 +2031,11 @@ mod tests {
         ] {
             assert!(parse_waybar_config(input).is_err());
         }
+        let overlong_output = [b'a'; MAX_BAR_OUTPUT_NAME + 1];
+        assert_eq!(
+            validate_output_name(core::str::from_utf8(&overlong_output).unwrap()),
+            Err(BarConfigError::InvalidOutput)
+        );
         let individual_margin = parse_waybar_config(
             r#"{
                 "margin": "10 20 30 40",
