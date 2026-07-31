@@ -112,7 +112,12 @@ impl Desktop {
                 .workspace_for(app_id)
                 .and_then(|name| niri.workspaces.index_of(name))
                 .unwrap_or(0);
-            let floating = niri.window_rules.floating_for(app_id).unwrap_or(false);
+            let maximized_to_edges = niri
+                .window_rules
+                .maximized_to_edges_for(app_id)
+                .unwrap_or(false);
+            let floating =
+                niri.window_rules.floating_for(app_id).unwrap_or(false) && !maximized_to_edges;
             let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
             let column_width = niri.window_rules.column_width_for(app_id);
             let window_height = niri.window_rules.window_height_for(app_id);
@@ -152,6 +157,23 @@ impl Desktop {
                         .unwrap_or_else(|_| crate::fatal("niri maximize geometry failed"));
                     serialln(format_args!(
                         "SLOPOS-NIRI: window rule app_id={} property=open-maximized value=true applied=true workspace={} x={} y={} width={} height={} mode=maximized-column source=config",
+                        app_id,
+                        workspace + 1,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height
+                    ));
+                }
+                if maximized_to_edges {
+                    workspaces
+                        .set_window_maximized_to_edges(workspace, window as u32, true)
+                        .unwrap_or_else(|_| crate::fatal("niri edge maximize seed failed"));
+                    let rect = workspaces
+                        .window_rect_in_workspace(workspace, window as u32)
+                        .unwrap_or_else(|_| crate::fatal("niri edge maximize geometry failed"));
+                    serialln(format_args!(
+                        "SLOPOS-NIRI: window rule app_id={} property=open-maximized-to-edges value=true applied=true workspace={} x={} y={} width={} height={} mode=maximized-to-edges source=config",
                         app_id,
                         workspace + 1,
                         rect.x,
@@ -697,10 +719,15 @@ impl Desktop {
                 .workspace_for(app_id)
                 .and_then(|name| niri.workspaces.index_of(name))
                 .unwrap_or(0);
+            let maximized_to_edges = niri
+                .window_rules
+                .maximized_to_edges_for(app_id)
+                .unwrap_or(false);
             let floating = niri
                 .window_rules
                 .floating_for(app_id)
-                .unwrap_or_else(|| self.workspaces.window_is_floating_anywhere(window as u32));
+                .unwrap_or_else(|| self.workspaces.window_is_floating_anywhere(window as u32))
+                && !maximized_to_edges;
             let maximized = niri.window_rules.maximized_for(app_id).unwrap_or(false);
             let column_width = niri.window_rules.column_width_for(app_id);
             let window_height = niri.window_rules.window_height_for(app_id);
@@ -742,6 +769,27 @@ impl Desktop {
                         });
                     serialln(format_args!(
                         "SLOPOS-NIRI: window rule app_id={} property=open-maximized value=true applied=true workspace={} x={} y={} width={} height={} mode=maximized-column source=config",
+                        app_id,
+                        workspace + 1,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height
+                    ));
+                }
+                if maximized_to_edges {
+                    workspaces
+                        .set_window_maximized_to_edges(workspace, window as u32, true)
+                        .unwrap_or_else(|_| {
+                            crate::fatal("published niri edge maximize seed failed")
+                        });
+                    let rect = workspaces
+                        .window_rect_in_workspace(workspace, window as u32)
+                        .unwrap_or_else(|_| {
+                            crate::fatal("published niri edge maximize geometry failed")
+                        });
+                    serialln(format_args!(
+                        "SLOPOS-NIRI: window rule app_id={} property=open-maximized-to-edges value=true applied=true workspace={} x={} y={} width={} height={} mode=maximized-to-edges source=config",
                         app_id,
                         workspace + 1,
                         rect.x,

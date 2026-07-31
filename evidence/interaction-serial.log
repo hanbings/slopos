@@ -4,7 +4,7 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=571168
+SLOPOS-UEFI: kernel file loaded bytes=571552
 SLOPOS-UEFI: kernel mapped 0x4000000..0x4077000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: user ELF loaded bytes=26344 base=0xdf47000
@@ -49,12 +49,6 @@ SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_y
 SLOPOS-SCHED: cooperative switch from=2 to=1 next_state=Runnable independent_cr3=true
 SLOPOS-SCHED: timer preempt from=1 to=2 tick=4 preemptions=1 next_state=Runnable independent_cr3=true
 SLOPOS-SCHED: timer preempt from=2 to=1 tick=5 preemptions=1 next_state=Runnable independent_cr3=true
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path=/etc/slopos/waybar.jsonc origin=cpl3
-SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
-SLOPOS-VFS: process open complete pid=2 fd=3 inode=20 bytes=904 access=readonly async=true path=/etc/slopos/waybar.jsonc
-SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
-SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
-SLOPOS-SCHED: cooperative switch from=2 to=1 next_state=Runnable independent_cr3=true
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path=/etc/slopos/system.conf origin=cpl3
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-VFS: process open complete pid=1 fd=3 inode=18 bytes=76 access=readonly async=true path=/etc/slopos/system.conf
@@ -74,6 +68,13 @@ SLOPOS-VFS: process open complete pid=1 fd=3 inode=31 bytes=4096 access=readwrit
 SLOPOS-SCHED: pid=1 state=blocked->runnable reason=io-complete
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
 SLOPOS-SCHED: cooperative switch from=1 to=2 next_state=Runnable independent_cr3=true
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path=/etc/slopos/waybar.jsonc origin=cpl3
+SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
+SLOPOS-VFS: process open complete pid=2 fd=3 inode=20 bytes=904 access=readonly async=true path=/etc/slopos/waybar.jsonc
+SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
+SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
+SLOPOS-SCHED: cooperative switch from=2 to=1 next_state=Runnable independent_cr3=true
+SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=0 read fd=3 requested=256 user_pages=1 origin=cpl3
 SLOPOS-VFS: process read complete pid=2 fd=3 inode=20 offset=0 requested=256 bytes=256 user_pages=1 cross_page=false async=true
 SLOPOS-SCHED: pid=2 state=blocked->runnable reason=io-complete
@@ -115,7 +116,6 @@ SLOPOS-SCHED: pid=2 state=blocked->runnable reason=desktop-event event=policy-ap
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=sysretq nr=1 write fd=1 bytes=28 origin=cpl3 result=28
 SLOPOS-SYSCALL: pid=2 abi=slopos-desktop-v1 entry=syscall return=kernel nr=1397489666 wait_event=config-applied after_generation=0 event_bytes=32 state=blocked origin=cpl3
 SLOPOS-SCHED: cooperative switch from=2 to=1 next_state=Runnable independent_cr3=true
-SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=sysretq nr=8 lseek fd=3 offset=123 whence=0 async=false
 SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=suspended nr=1 write fd=3 requested=64 user_pages=2 origin=cpl3
 SLOPOS-VFS: process write complete pid=1 fd=3 inode=31 offset=123 requested=64 bytes=64 user_pages=2 cross_page=true async=true flushed=true
 SLOPOS-SCHED: pid=1 state=blocked->runnable reason=io-complete
@@ -307,7 +307,7 @@ SLOPOS-ASYNC: timer future completed tick=2101 input_dropped=0 virtio_interrupts
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=30 source=embedded
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE CENTER --TRANSITION-STEP 64
 SLOPOS-SWWW: transition complete type=center step=64 fps=30 frames=5
-SLOPOS-ASYNC: timer future completed tick=3008 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-ASYNC: timer future completed tick=3012 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-ASYNC: timer future completed tick=3101 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-ASYNC: timer future completed tick=3601 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-ASYNC: timer future completed tick=4101 input_dropped=0 virtio_interrupts=532/532
@@ -315,8 +315,8 @@ SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM
 SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-SWWW-VFS: load requested generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM output=* transition=center step=64 fps=30 async=true
 SLOPOS-TERMINAL: command=SWWW IMG /USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM --TRANSITION-TYPE CENTER --TRANSITION-STEP 64
-SLOPOS-ASYNC: timer future completed tick=5144 input_dropped=0 virtio_interrupts=532/532
-SLOPOS-ASYNC: timer future completed tick=5144 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-ASYNC: timer future completed tick=5148 input_dropped=0 virtio_interrupts=532/532
+SLOPOS-ASYNC: timer future completed tick=5148 input_dropped=0 virtio_interrupts=532/532
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -333,7 +333,7 @@ SLOPOS-SWWW-VFS: load requested generation=2 request=/USR/SHARE/SLOPOS/MISSING.P
 SLOPOS-TERMINAL: command=SWWW IMG /USR/SHARE/SLOPOS/MISSING.PPM --TRANSITION-TYPE NONE
 SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM
 SLOPOS-TERMINAL: command=SWWW QUERY
-SLOPOS-ASYNC: timer future completed tick=7026 input_dropped=0 virtio_interrupts=539/539
+SLOPOS-ASYNC: timer future completed tick=7033 input_dropped=0 virtio_interrupts=539/539
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
@@ -343,7 +343,7 @@ SLOPOS-SWWW-VFS: result acknowledged generation=2 renderer=desktop active_image=
 SLOPOS-ASYNC: timer future completed tick=7101 input_dropped=0 virtio_interrupts=546/546
 SLOPOS-SWWW-VFS: load requested generation=3 request=/ETC/SLOPOS/SYSTEM.CONF output=* transition=none step=255 fps=30 async=true
 SLOPOS-TERMINAL: command=SWWW IMG /ETC/SLOPOS/SYSTEM.CONF --TRANSITION-TYPE NONE
-SLOPOS-ASYNC: timer future completed tick=7712 input_dropped=0 virtio_interrupts=546/546
+SLOPOS-ASYNC: timer future completed tick=7719 input_dropped=0 virtio_interrupts=546/546
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-SWWW-VFS: load rejected generation=3 request=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf error=invalid-ppm retained=previous
 SLOPOS-SWWW: image=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf source=vfs applied=false error=invalid-ppm
@@ -355,10 +355,10 @@ SLOPOS-SWWW: daemon stopped
 SLOPOS-TERMINAL: command=SWWW KILL
 SLOPOS-SWWW: daemon started
 SLOPOS-TERMINAL: command=SWWW-DAEMON
-SLOPOS-ASYNC: timer future completed tick=8603 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=8607 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE NONE
-SLOPOS-ASYNC: timer future completed tick=9155 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=9161 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-ASYNC: timer future completed tick=9601 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-SWWW: clear color=1A2B3C output=*
 SLOPOS-TERMINAL: command=SWWW CLEAR 1A2B3C
@@ -367,7 +367,7 @@ SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=0x1A2B3C
 SLOPOS-TERMINAL: command=SWWW QUERY
 SLOPOS-SWWW: image=SUNSET.PPM output=* transition=none step=255 fps=30 source=embedded
 SLOPOS-TERMINAL: command=SWWW IMG SUNSET.PPM --TRANSITION-TYPE NONE
-SLOPOS-ASYNC: timer future completed tick=10757 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=10760 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1
 SLOPOS-ASYNC: timer future completed tick=11101 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri
@@ -380,7 +380,7 @@ SLOPOS-NIRI: binding action=move-window-to-workspace changed=true workspace=1 na
 SLOPOS-NIRI: workspace target action=move-window-to-workspace kind=name value=main
 SLOPOS-NIRI: binding action=focus-column-left changed=true workspace=1 name=main focused=0
 SLOPOS-NIRI: binding action=consume-window-into-column changed=true workspace=1 name=main focused=1
-SLOPOS-ASYNC: timer future completed tick=11601 input_dropped=0 virtio_interrupts=549/549
+SLOPOS-ASYNC: timer future completed tick=11605 input_dropped=0 virtio_interrupts=549/549
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=TERMINAL workspace=2 name=config x=520 y=56 width=488 height=340 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=SYSTEM workspace=2 name=config x=520 y=412 width=488 height=340 layout=niri
 SLOPOS-DESKTOP: workspace transfer scope=column action=move-column-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri

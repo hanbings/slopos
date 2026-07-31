@@ -65,12 +65,14 @@ cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
 sed \
     -e '1i// user overrides' \
     -e 's/open-maximized false/open-maximized true/' \
+    -e 's/open-maximized-to-edges false/open-maximized-to-edges true/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 0\.5/proportion 0.667/' \
     -e '/match app-id="slopos-config"/,/^}/ s/proportion 1\.0/proportion 0.5/' \
     -e '/match app-id="slopos-config"/,/^}/ s/default-column-display "normal"/default-column-display "tabbed"/' \
     "${repo_dir}/assets/niri-config.kdl" >"${custom_niri}"
+default_niri_bytes="$(wc -c <"${repo_dir}/assets/niri-config.kdl")"
 custom_niri_bytes="$(wc -c <"${custom_niri}")"
-if (( custom_niri_bytes <= 4045 || custom_niri_bytes > 4096 )); then
+if (( custom_niri_bytes <= default_niri_bytes || custom_niri_bytes > 4096 )); then
     echo "custom niri fixture has unexpected size: ${custom_niri_bytes}" >&2
     exit 1
 fi
@@ -110,6 +112,8 @@ set +e
     echo "mouse_button 0"
     sleep 1
     echo "screendump ${workspace_screenshot}"
+    echo "sendkey meta_l-m 50"
+    sleep 1
     echo "sendkey meta_l-f 50"
     sleep 1
     echo "screendump ${column_width_screenshot}"
@@ -219,10 +223,19 @@ grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized value=true applied=true workspace=2 x=16 y=56 width=992 height=340 mode=maximized-column source=config" \
     "${serial_log}"
 grep -Fq \
+    "SLOPOS-NIRI: window rule app_id=slopos-config property=open-maximized-to-edges value=true applied=true workspace=2 x=0 y=40 width=1024 height=728 mode=maximized-to-edges source=config" \
+    "${serial_log}"
+grep -Fq \
     "SLOPOS-NIRI: window rule app_id=slopos-config property=default-column-display value=tabbed applied=true workspace=2 source=config" \
     "${serial_log}"
 grep -Fq \
     "SLOPOS-DESKTOP: window resized kind=CONFIG width=656 layout=scrolling" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-NIRI: binding action=maximize-window-to-edges changed=true workspace=2 name=config focused=2" \
+    "${serial_log}"
+grep -Fq \
+    "SLOPOS-DESKTOP: window edge maximize toggled kind=CONFIG x=16 y=56 width=992 height=340 layout=scrolling" \
     "${serial_log}"
 if [[ "$(grep -Fc "SLOPOS-NIRI: binding action=maximize-column changed=true workspace=2 name=config focused=2" "${serial_log}")" -ne 2 ]]; then
     echo "custom niri default-column-width did not survive one maximize restore cycle" >&2

@@ -226,6 +226,7 @@ pub struct NiriWindowRule<'a> {
     pub open_on_workspace: Option<&'a str>,
     pub open_floating: Option<bool>,
     pub open_maximized: Option<bool>,
+    pub open_maximized_to_edges: Option<bool>,
     pub default_column_width: Option<ColumnWidth>,
     pub default_window_height: Option<ColumnWidth>,
     pub default_column_display: Option<ColumnDisplay>,
@@ -282,6 +283,18 @@ impl<'a> NiriWindowRuleList<'a> {
         for rule in self.entries[..self.length].iter().flatten() {
             if rule.app_id.is_none() || rule.app_id == Some(app_id) {
                 if let Some(value) = rule.open_maximized {
+                    maximized = Some(value);
+                }
+            }
+        }
+        maximized
+    }
+
+    pub fn maximized_to_edges_for(self, app_id: &str) -> Option<bool> {
+        let mut maximized = None;
+        for rule in self.entries[..self.length].iter().flatten() {
+            if rule.app_id.is_none() || rule.app_id == Some(app_id) {
+                if let Some(value) = rule.open_maximized_to_edges {
                     maximized = Some(value);
                 }
             }
@@ -520,6 +533,7 @@ impl<'a> ShellConfigParser<'a> {
             open_on_workspace: None,
             open_floating: None,
             open_maximized: None,
+            open_maximized_to_edges: None,
             default_column_width: None,
             default_window_height: None,
             default_column_display: None,
@@ -563,6 +577,14 @@ impl<'a> ShellConfigParser<'a> {
                 }
                 KdlToken::Word("open-maximized") => {
                     rule.open_maximized = Some(match self.next() {
+                        KdlToken::Word("true") => true,
+                        KdlToken::Word("false") => false,
+                        _ => return Err(NiriConfigError::InvalidWindowRule),
+                    });
+                    self.finish_node()?;
+                }
+                KdlToken::Word("open-maximized-to-edges") => {
+                    rule.open_maximized_to_edges = Some(match self.next() {
                         KdlToken::Word("true") => true,
                         KdlToken::Word("false") => false,
                         _ => return Err(NiriConfigError::InvalidWindowRule),
@@ -1512,6 +1534,20 @@ impl<const WORKSPACES: usize, const COLUMNS: usize, const WINDOWS: usize>
             .map_err(WorkspaceError::Layout)
     }
 
+    pub fn set_window_maximized_to_edges(
+        &mut self,
+        workspace: usize,
+        window: u32,
+        maximized: bool,
+    ) -> Result<bool, WorkspaceError> {
+        self.layouts
+            .get_mut(workspace)
+            .filter(|_| workspace < self.count)
+            .ok_or(WorkspaceError::InvalidWorkspace)?
+            .set_window_maximized_to_edges(window, maximized)
+            .map_err(WorkspaceError::Layout)
+    }
+
     pub fn open_floating_window(
         &mut self,
         workspace: usize,
@@ -2374,6 +2410,7 @@ mod tests {
             }
             window-rule {
                 open-maximized true
+                open-maximized-to-edges true
                 default-column-width { fixed 600; }
                 default-window-height { fixed 400; }
                 default-column-display "normal"
@@ -2383,6 +2420,7 @@ mod tests {
                 open-on-workspace "main"
                 open-floating true
                 open-maximized true
+                open-maximized-to-edges true
                 default-column-width { proportion 0.333; }
                 default-window-height { proportion 0.333; }
                 default-column-display "normal"
@@ -2392,6 +2430,7 @@ mod tests {
                 open-on-workspace "config"
                 open-floating false
                 open-maximized false
+                open-maximized-to-edges false
                 default-column-width { proportion 0.667; }
                 default-window-height { proportion 0.5; }
                 default-column-display "tabbed"
@@ -2839,6 +2878,16 @@ mod tests {
             config.window_rules.column_display_for("slopos-config"),
             Some(ColumnDisplay::Tabbed)
         );
+        assert_eq!(
+            config
+                .window_rules
+                .maximized_to_edges_for("slopos-terminal"),
+            Some(true)
+        );
+        assert_eq!(
+            config.window_rules.maximized_to_edges_for("slopos-config"),
+            Some(false)
+        );
     }
 
     #[test]
@@ -2861,6 +2910,10 @@ mod tests {
         );
         assert_eq!(
             parse_niri_shell_config("window-rule { open-maximized maybe; }"),
+            Err(NiriConfigError::InvalidWindowRule)
+        );
+        assert_eq!(
+            parse_niri_shell_config("window-rule { open-maximized-to-edges maybe; }"),
             Err(NiriConfigError::InvalidWindowRule)
         );
         for input in [

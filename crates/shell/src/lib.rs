@@ -947,6 +947,18 @@ impl<const COLUMNS: usize, const WINDOWS: usize> ScrollLayout<COLUMNS, WINDOWS> 
         Ok(changed)
     }
 
+    pub fn set_window_maximized_to_edges(
+        &mut self,
+        window: u32,
+        maximized: bool,
+    ) -> Result<bool, LayoutError> {
+        let (column_index, _) = self.find_window(window).ok_or(LayoutError::UnknownWindow)?;
+        let changed = self.columns[column_index].maximized_to_edges != maximized;
+        self.columns[column_index].maximized_to_edges = maximized;
+        self.ensure_focused_visible();
+        Ok(changed)
+    }
+
     pub fn toggle_maximize_focused_window_to_edges(&mut self) -> bool {
         self.toggle_maximize_focused_window_to_edges_with_display(None)
     }
@@ -2354,11 +2366,29 @@ mod tests {
         assert_eq!(layout.tile_rect(1).unwrap().width, 968);
         assert_eq!(layout.tile_rect(1).unwrap().height, 311);
         assert!(!layout.set_window_maximized(1, true).unwrap());
+        assert!(layout.set_window_maximized_to_edges(1, true).unwrap());
+        assert_eq!(
+            layout.tile_rect(1).unwrap(),
+            Rect {
+                x: 0,
+                y: 30,
+                width: 1000,
+                height: 670,
+            }
+        );
+        assert_eq!(layout.focused_window(), Some(2));
+        assert!(!layout.set_window_maximized_to_edges(1, true).unwrap());
+        assert!(layout.set_window_maximized_to_edges(1, false).unwrap());
+        assert_eq!(layout.tile_rect(1).unwrap().width, 968);
         assert!(layout.set_window_maximized(1, false).unwrap());
         assert_eq!(layout.tile_rect(1).unwrap().width, 640);
         assert_eq!(layout.tile_rect(1).unwrap().height, 311);
         assert_eq!(
             layout.set_window_maximized(99, true),
+            Err(LayoutError::UnknownWindow)
+        );
+        assert_eq!(
+            layout.set_window_maximized_to_edges(99, true),
             Err(LayoutError::UnknownWindow)
         );
     }

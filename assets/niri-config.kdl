@@ -1,4 +1,3 @@
-// SlopOS niri-compatible layout seed.
 workspace "main"
 workspace "config" {
     open-on-output "SLOPOS-1"
@@ -83,6 +82,7 @@ window-rule {
     open-on-workspace "config"
     open-floating false
     open-maximized false
+    open-maximized-to-edges false
     default-column-width { proportion 0.5; }
     default-window-height { proportion 1.0; }
     default-column-display "normal"
