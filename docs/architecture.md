@@ -93,6 +93,8 @@ VFS create probe 复用相同 engine，把 blocks 0/1/36/38/105 作为一个原�
 
 `crates/vfs` 是无分配、无标准库的 namespace 状态机：绝对路径最多 16 个 component，mount table 采用最长 component-prefix，fd table 从 3 开始分配并维护 vnode、size、offset 与 read/write access mode，并可在 owner exit 后执行有界 `close_all`。内核把 ext4 注册为 filesystem 1 并挂到 `/`；启动验证先经 path walker 跨七块读取 inode 23 的 `/sbin/slop-init`。PID 1 随后用 Linux `openat/read/close` 异步读出 inode 18 的 76 bytes，再用 `O_RDWR openat`、lseek、异步 write/read 对 inode 31 的 offset 123 执行跨两页的可逆 64-byte patch并显式 close。PID 2 在每代 config event 后重开并关闭 Waybar/swww 文件。kernel probe 的独立 block-task table 还会以五个 chunk/seek 读取 inode 18，并对 inode 31 写入/恢复 73 bytes；桌面配置候选与 swww path image loader 也复用同一 ext4 walker，后者已实测跨 inode 30 的两个 block 读齐并解码 6144-byte PNG。进程 fd 已接入有界读写 syscall，但 mount table、`Ext4File` backing slots 与其他 probe fd 仍由单一 block task 专用，不是并发全局 POSIX VFS。
 
+`crates/ipc` 提供独立、无分配的具名 local byte-stream core。固定 socket table 以 generation handle 防止 slot 复用后的 stale reference；listener 保存有界 FIFO backlog，每条 accepted connection 由成对 endpoint 和各自 receive ring 构成。`send` 只复制到 peer ring 的可用部分并以 `WouldBlock` 表示 backpressure，`recv` 在 peer close 后排空尾部再返回 EOF。4 项宿主测试覆盖双向分段读取、backlog saturation、满 ring/恢复 writable、close/EOF、duplicate path 与 stale handle。它仍未进入 process descriptor 或 executor，不能被当前用户进程调用。
+
 `executor.rs` 当前固定运行 input、timer、block 三个 pinned future，以原子 ready mask 作为 task queue，以 RawWaker 标识 task，并在空闲时执行 race-free `cli` 检查和 `sti; hlt`。它仍缺动态 task arena、timer wheel、cancellation、async lock 和 SMP。
 
 `ebpf` 是与内核分离的 `no_std` crate。它把标准 little-endian 8-byte instruction 解码成固定布局，以前向数据流交集跟踪已初始化寄存器，拒绝 backward jump、越界分支、对 frame pointer 的写入、越界 stack access、未知 helper 和没有可达 `EXIT` 的路径。解释器拥有 11 个 64-bit 寄存器和 512-byte stack；启动路径验证并执行一段 ALU/stack 程序，要求结果为 42。具体指令和未实现边界见 [ebpf.md](ebpf.md)。

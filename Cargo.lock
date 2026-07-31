@@ -53,6 +53,10 @@ name = "slopos-init"
 version = "0.1.0"
 
 [[package]]
+name = "slopos-ipc"
+version = "0.1.0"
+
+[[package]]
 name = "slopos-kernel"
 version = "0.1.0"
 dependencies = [

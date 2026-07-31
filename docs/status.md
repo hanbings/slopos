@@ -20,7 +20,7 @@
 | eBPF | 部分实现 | 独立 `no_std` crate 提供 8-byte instruction decode、无分配 verifier、ALU64/前向 branch/512-byte stack/helper 子集解释器；10 项宿主测试与内核返回 42 均已验证。没有 ELF loader、map、program type、attach point、权限模型或 JIT。 |
 | AMD SVM VMM | 尚未实现 | 尚未进行 SVM capability detection 或 `VMRUN`。 |
 | Linux x86-64 ABI | 部分实现 | root VFS 中两个独立 Rust ELF64 `ET_EXEC` CPL3 进程使用 Linux x86-64 initial stack/register/syscall number，真实解析各自 `argc/argv/envp/auxv` 并执行 `openat/read/write/lseek/close/sched_yield/wait4`；同步 fast return 使用 `SYSRETQ`，异步 I/O 与 timer saved frame 经 `IRETQ` 恢复完整 GPR。PID 1 当前停在 blocked wait4，PID 2 由 SlopOS 私有 commit/event ABI 跨 reload 恢复；exit/reap 与 immediate child lookup 由 6 项 process 宿主测试继续覆盖。10 项 ELF 测试和 QEMU 实测还覆盖 syscall/interrupt 两种 frame 的 CR3 switch、同号 fd isolation与跨两页 copy-user。尚无任意路径/多 segment exec、通用页表/demand-page copy、广泛 syscall surface、proxy 或 guest agent。 |
-| 网络与 IPC | 尚未实现 | Ethernet/ARP/IP/TCP/UDP/DHCP/DNS 尚未实现；desktop event 与 Wayland bootstrap 已证明固定 lifecycle channel和有界大消息 copy，但不是通用 pipe/local socket/Unix ancillary FD/shared memory/event object/message queue。 |
+| 网络与 IPC | 部分实现 | 独立 `no_std` local-stream core 支持固定容量具名 bind/listen/connect/accept、全双工 receive ring、backlog/backpressure、readiness、close/EOF 与 generation handle；4 项宿主测试已执行。它尚未接入 process fd、Linux socket syscall或 executor，因此还不能作为 Wayland transport；网络协议、pipe、ancillary FD、shared memory、event object与 message queue仍未实现。 |
 | 许可证 | 已实现并验证（当前代码范围） | 原创源码为 0BSD；锁定的三个第三方 crate 均为 MIT OR Apache-2.0。 |
 | 可重复构建与证据 | 已实现并验证（当前里程碑） | 工具链、镜像脚本、QEMU 命令、串口日志、debugcon、截图及交互测试均已保留。 |
 
@@ -45,10 +45,11 @@
 - 最后成功 virtio 单元测试：2026-07-30，`make test-virtio`，4 项。
 - 最后成功 ext4 单元测试：2026-07-30，`make test-ext4`，28 项。
 - 最后成功 VFS 单元测试：2026-07-30，`make test-vfs`，5 项。
+- 最后成功 IPC 单元测试：2026-07-31，`make test-ipc`，4 项。
 - 已验证的 kernel entry：`0x04000000`。
 - 已验证 GOP mode：1024×768，stride 1024。
 - 当前 bootstrap image：186 bytes，临时 SlopOS 文本格式。
 
 ## 下一项最高价值工作
 
-下一阶段以已验证的 configure 与重复 buffer presentation lifecycle 为基础，建立 Unix-domain/local socket、真实 FD/shared mapping 和多 client object ownership，再把固定两帧 bootstrap 扩为持续 event loop；之后才逐步把固定 placement、bar/wallpaper mechanism 移出 kernel。通用进程主线仍需任意路径/多 `PT_LOAD` exec、mmap、通用 wait/signal、独立线程/kernel stack 与 SMP run queue。
+下一阶段把已验证的 local-stream core 纳入通用 descriptor object，接入 Linux `socket/connect/accept/read/write/close` 的异步 suspend/resume，并将 PID 2 Wayland wire 迁到 `/run/slopos/wayland-0`；随后加入真实 FD/shared mapping 和多 client object ownership。通用进程主线仍需任意路径/多 `PT_LOAD` exec、mmap、通用 wait/signal、独立线程/kernel stack 与 SMP run queue。

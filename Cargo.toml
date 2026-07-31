@@ -7,6 +7,7 @@ members = [
     "crates/desktop-protocol",
     "crates/elf",
     "crates/ext4",
+    "crates/ipc",
     "crates/pci",
     "crates/process",
     "crates/shell",
