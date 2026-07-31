@@ -157,6 +157,15 @@ grep -Fq \
 grep -Fq \
     "SLOPOS-WAYLAND-COMPOSITOR: surface rendered generation=1 owner_pid=2 app_id=slopos-system title=\"SlopOS Userspace\" geometry=32x24 destination=system-window scale=3 buffer_format=xrgb8888 frame_callback=11" \
     "${replay_serial}"
+grep -Fq \
+    "SLOPOS-WAYLAND-SERVER: commit accepted pid=2 generation=2 transport=syscall-bootstrap-v1 lifecycle=configured-buffer-reuse objects=registry/compositor/shm/xdg_toplevel surface=6 buffer=8 callback=11 geometry=32x24 stride=128 format=1 title=\"SlopOS Userspace\" app_id=slopos-system wire_bytes=64 pixel_bytes=3072" \
+    "${replay_serial}"
+grep -Fq \
+    "SLOPOS-WAYLAND-SERVER: commit acknowledged generation=2 renderer=desktop active_bank=1 event_sequence=4 events=wl_buffer.release/wl_callback.done/wl_display.delete_id callback_data=2" \
+    "${replay_serial}"
+grep -Fq \
+    "SLOPOS-WAYLAND-COMPOSITOR: surface rendered generation=2 owner_pid=2 app_id=slopos-system title=\"SlopOS Userspace\" geometry=32x24 destination=system-window scale=3 buffer_format=xrgb8888 frame_callback=11" \
+    "${replay_serial}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=1 to=2" "${replay_serial}"
 grep -Fq "SLOPOS-SCHED: timer preempt from=2 to=1" "${replay_serial}"
 grep -Fq \
@@ -241,7 +250,7 @@ sed -i 's/\r$//' \
 restore_clean_artifacts
 trap - EXIT
 clean_hash="$(sha256sum "${root_image}" | awk '{print $1}')"
-if [[ "${clean_hash}" != "42e927083a024c72b46c43c03e761d862364e5ebeff68e03eca0532a93a0d1fd" ]]; then
+if [[ "${clean_hash}" != "46f9bf4cfd8ef8ab2f4981b7e4a94bb7e6dddb457ff23c7b7f172701f4c05bc6" ]]; then
     echo "journal replay cleanup did not restore the reproducible root image" >&2
     exit 1
 fi

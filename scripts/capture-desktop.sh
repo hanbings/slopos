@@ -57,11 +57,11 @@ ppm_pixel_hex() {
         | tr -d ' \n'
 }
 
-if [[ "$(ppm_pixel_hex 900 123)" != "00d4ff" ]] \
-    || [[ "$(ppm_pixel_hex 948 123)" != "ff79c6" ]] \
-    || [[ "$(ppm_pixel_hex 900 159)" != "50fa7b" ]] \
-    || [[ "$(ppm_pixel_hex 948 159)" != "f1fa8c" ]]; then
-    echo "PID 2 Wayland surface pixels were not composited into the System window" >&2
+if [[ "$(ppm_pixel_hex 900 123)" != "8be9fd" ]] \
+    || [[ "$(ppm_pixel_hex 948 123)" != "ff5555" ]] \
+    || [[ "$(ppm_pixel_hex 900 159)" != "bd93f9" ]] \
+    || [[ "$(ppm_pixel_hex 948 159)" != "ffb86c" ]]; then
+    echo "PID 2 repeated Wayland surface frame was not composited into the System window" >&2
     exit 1
 fi
 

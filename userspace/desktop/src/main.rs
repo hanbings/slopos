@@ -57,6 +57,9 @@ const BUFFER: u32 = 8;
 const XDG_SURFACE: u32 = 9;
 const TOPLEVEL: u32 = 10;
 const FRAME_CALLBACK: u32 = 11;
+const SURFACE_WIDTH: usize = 32;
+const SURFACE_HEIGHT: usize = 24;
+const SURFACE_PIXEL_LENGTH: usize = SURFACE_WIDTH * SURFACE_HEIGHT * 4;
 static MESSAGE: &[u8; 28] = b"SLOPOS desktop policy ready\n";
 static WAYBAR_PATH: &[u8; 25] = b"/etc/slopos/waybar.jsonc\0";
 static SWWW_PATH: &[u8; 21] = b"/etc/slopos/swww.env\0";
@@ -144,7 +147,9 @@ fn submit_wayland_surface() {
     let (configure_sequence, configure_serial) =
         wait_configure(registry_sequence).unwrap_or_else(|| exit(16));
     submit_configured_surface(configure_serial);
-    wait_presented(configure_sequence).unwrap_or_else(|| exit(17));
+    let first_presentation = wait_presented(configure_sequence, 1).unwrap_or_else(|| exit(17));
+    submit_repeated_surface();
+    wait_presented(first_presentation, 2).unwrap_or_else(|| exit(18));
 }
 
 fn submit_wire_only(wire: &[u8]) {
@@ -159,46 +164,78 @@ fn submit_wire_only(wire: &[u8]) {
         pixel_start as u64,
     ) != 0
     {
-        exit(18);
+        exit(19);
     }
 }
 
 fn submit_configured_surface(configure_serial: u32) {
-    const WIDTH: usize = 32;
-    const HEIGHT: usize = 24;
-    const PIXEL_LENGTH: usize = WIDTH * HEIGHT * 4;
     let mut envelope = [0u8; WAYLAND_SURFACE_MAX_SIZE];
     let wire_length = build_configured_surface_wire(
         &mut envelope[WAYLAND_SURFACE_HEADER_SIZE
             ..WAYLAND_SURFACE_HEADER_SIZE + WAYLAND_SURFACE_MAX_WIRE_SIZE],
         configure_serial,
-        WIDTH as i32,
-        HEIGHT as i32,
-        PIXEL_LENGTH as i32,
+        SURFACE_WIDTH as i32,
+        SURFACE_HEIGHT as i32,
+        SURFACE_PIXEL_LENGTH as i32,
     )
-    .unwrap_or_else(|| exit(19));
+    .unwrap_or_else(|| exit(20));
     let pixel_start = WAYLAND_SURFACE_HEADER_SIZE + wire_length;
-    let pixel_end = pixel_start + PIXEL_LENGTH;
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let color: u32 = if x == 0 || y == 0 || x + 1 == WIDTH || y + 1 == HEIGHT {
-                0x0010_131f
-            } else if x == 15 || x == 16 || y == 11 || y == 12 {
-                0x00f8_f8f2
-            } else if y < HEIGHT / 2 && x < WIDTH / 2 {
-                0x0000_d4ff
-            } else if y < HEIGHT / 2 {
-                0x00ff_79c6
-            } else if x < WIDTH / 2 {
-                0x0050_fa7b
-            } else {
-                0x00f1_fa8c
-            };
-            let offset = pixel_start + (y * WIDTH + x) * 4;
+    submit_pixel_surface(&mut envelope, wire_length, pixel_start, false);
+}
+
+fn submit_repeated_surface() {
+    let mut envelope = [0u8; WAYLAND_SURFACE_MAX_SIZE];
+    let wire_length = build_repeated_surface_wire(
+        &mut envelope[WAYLAND_SURFACE_HEADER_SIZE
+            ..WAYLAND_SURFACE_HEADER_SIZE + WAYLAND_SURFACE_MAX_WIRE_SIZE],
+    )
+    .unwrap_or_else(|| exit(21));
+    let pixel_start = WAYLAND_SURFACE_HEADER_SIZE + wire_length;
+    submit_pixel_surface(&mut envelope, wire_length, pixel_start, true);
+}
+
+fn submit_pixel_surface(
+    envelope: &mut [u8; WAYLAND_SURFACE_MAX_SIZE],
+    wire_length: usize,
+    pixel_start: usize,
+    second_frame: bool,
+) {
+    let pixel_end = pixel_start + SURFACE_PIXEL_LENGTH;
+    for y in 0..SURFACE_HEIGHT {
+        for x in 0..SURFACE_WIDTH {
+            let color: u32 =
+                if x == 0 || y == 0 || x + 1 == SURFACE_WIDTH || y + 1 == SURFACE_HEIGHT {
+                    0x0010_131f
+                } else if x == 15 || x == 16 || y == 11 || y == 12 {
+                    0x00f8_f8f2
+                } else if y < SURFACE_HEIGHT / 2 && x < SURFACE_WIDTH / 2 {
+                    if second_frame {
+                        0x008b_e9fd
+                    } else {
+                        0x0000_d4ff
+                    }
+                } else if y < SURFACE_HEIGHT / 2 {
+                    if second_frame {
+                        0x00ff_5555
+                    } else {
+                        0x00ff_79c6
+                    }
+                } else if x < SURFACE_WIDTH / 2 {
+                    if second_frame {
+                        0x00bd_93f9
+                    } else {
+                        0x0050_fa7b
+                    }
+                } else if second_frame {
+                    0x00ff_b86c
+                } else {
+                    0x00f1_fa8c
+                };
+            let offset = pixel_start + (y * SURFACE_WIDTH + x) * 4;
             envelope[offset..offset + 4].copy_from_slice(&color.to_le_bytes());
         }
     }
-    let header = WaylandSurfaceHeader::new(wire_length as u32, PIXEL_LENGTH as u32);
+    let header = WaylandSurfaceHeader::new(wire_length as u32, SURFACE_PIXEL_LENGTH as u32);
     envelope[..WAYLAND_SURFACE_HEADER_SIZE].copy_from_slice(&header.encode());
     if syscall2(
         WAYLAND_SURFACE_SYSCALL,
@@ -206,7 +243,7 @@ fn submit_configured_surface(configure_serial: u32) {
         pixel_end as u64,
     ) != 0
     {
-        exit(20);
+        exit(22);
     }
 }
 
@@ -304,6 +341,29 @@ fn build_configured_surface_wire(
     Some(cursor)
 }
 
+fn build_repeated_surface_wire(wire: &mut [u8]) -> Option<usize> {
+    let mut cursor = 0;
+    append_message(wire, &mut cursor, SURFACE, 1, |message| {
+        message.object(BUFFER)?;
+        message.int(0)?;
+        message.int(0)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, SURFACE, 9, |message| {
+        message.int(0)?;
+        message.int(0)?;
+        message.int(SURFACE_WIDTH as i32)?;
+        message.int(SURFACE_HEIGHT as i32)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, SURFACE, 3, |message| {
+        message.object(FRAME_CALLBACK)
+    })
+    .ok()?;
+    append_message(wire, &mut cursor, SURFACE, 6, |_| Ok(())).ok()?;
+    Some(cursor)
+}
+
 fn wait_registry(after_sequence: u64) -> Option<u64> {
     let mut event_bytes = [0; WAYLAND_EVENT_MAX_SIZE];
     let event = receive_wayland_event(&mut event_bytes, WAYLAND_EVENT_REGISTRY, after_sequence)?;
@@ -367,7 +427,7 @@ fn wait_configure(after_sequence: u64) -> Option<(u64, u32)> {
     Some((event.header.sequence, serial))
 }
 
-fn wait_presented(after_sequence: u64) -> Option<u64> {
+fn wait_presented(after_sequence: u64, callback_data: u32) -> Option<u64> {
     let mut event_bytes = [0; WAYLAND_EVENT_MAX_SIZE];
     let event = receive_wayland_event(&mut event_bytes, WAYLAND_EVENT_PRESENTED, after_sequence)?;
     let (release, wire) = Frame::decode(event.wire).ok()?;
@@ -380,7 +440,7 @@ fn wait_presented(after_sequence: u64) -> Option<u64> {
         || !release.payload.is_empty()
         || done.header.object_id != FRAME_CALLBACK
         || done.header.opcode != 0
-        || done_arguments.uint().ok()? != 1
+        || done_arguments.uint().ok()? != callback_data
         || done_arguments.finish().is_err()
         || delete_id.header.object_id != DISPLAY_OBJECT_ID
         || delete_id.header.opcode != 1

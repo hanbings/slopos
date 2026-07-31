@@ -237,11 +237,16 @@ fn publish_surface(
     let next_generation = generation
         .checked_add(1)
         .ok_or(WaylandServiceError::CommitPending)?;
+    let lifecycle = if generation == 0 {
+        "registry/configure/ack-configure"
+    } else {
+        "configured-buffer-reuse"
+    };
     PUBLISHED_BANK.store(bank_index, Ordering::Relaxed);
     GENERATION.store(next_generation, Ordering::Release);
     crate::executor::wake_task(crate::executor::INPUT_TASK);
     crate::serial::serialln(format_args!(
-        "SLOPOS-WAYLAND-SERVER: commit accepted pid={pid} generation={next_generation} transport=syscall-bootstrap-v1 lifecycle=registry/configure/ack-configure objects=registry/compositor/shm/xdg_toplevel surface={} buffer={} callback={} geometry={}x{} stride={} format={} title=\"{}\" app_id={} wire_bytes={} pixel_bytes={}",
+        "SLOPOS-WAYLAND-SERVER: commit accepted pid={pid} generation={next_generation} transport=syscall-bootstrap-v1 lifecycle={lifecycle} objects=registry/compositor/shm/xdg_toplevel surface={} buffer={} callback={} geometry={}x{} stride={} format={} title=\"{}\" app_id={} wire_bytes={} pixel_bytes={}",
         metadata.surface,
         metadata.buffer,
         metadata.frame_callback,

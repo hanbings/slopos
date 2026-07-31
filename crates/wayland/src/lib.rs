@@ -1453,7 +1453,6 @@ enum SurfacePhase {
     AwaitInitialCommit,
     AwaitConfiguredCommit,
     Committed,
-    Presented,
 }
 
 /// A strict, staged bootstrap server for one `xdg_toplevel` backed by one
@@ -1461,7 +1460,9 @@ enum SurfacePhase {
 ///
 /// The server requires `get_registry`, an initial bufferless role commit,
 /// `xdg_surface.configure` acknowledgement, and only then a damaged buffer
-/// commit. Transport of the one file descriptor and its storage is deliberately
+/// commit. After presentation it permits further attach/damage/frame/commit
+/// cycles against the configured buffer and releases each callback ID for
+/// reuse. Transport of the one file descriptor and its storage is deliberately
 /// left to the caller; SlopOS currently supplies those through its versioned
 /// bootstrap syscall rather than a Unix-domain socket with `SCM_RIGHTS`.
 #[derive(Clone)]
@@ -1535,10 +1536,7 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
         pixel_length: usize,
     ) -> Result<SurfaceSessionEvent, SurfaceError> {
         if wire.is_empty()
-            || matches!(
-                self.phase,
-                SurfacePhase::Committed | SurfacePhase::Presented
-            )
+            || matches!(self.phase, SurfacePhase::Committed)
             || (matches!(self.phase, SurfacePhase::AwaitConfiguredCommit)
                 != (inline_file_descriptor.is_some() && pixel_length != 0))
             || (!matches!(self.phase, SurfacePhase::AwaitConfiguredCommit)
@@ -1598,9 +1596,7 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                 self.phase = SurfacePhase::Committed;
                 Ok(SurfaceSessionEvent::Committed(self.snapshot()?))
             }
-            SurfacePhase::Committed | SurfacePhase::Presented => {
-                Err(SurfaceError::UnexpectedRequest)
-            }
+            SurfacePhase::Committed => Err(SurfaceError::UnexpectedRequest),
         }
     }
 
@@ -1792,8 +1788,18 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
             (SurfacePhase::AwaitConfiguredCommit, Request::SurfaceCommit { surface })
                 if self.surface == Some(surface) =>
             {
+                let buffer = self.buffer.ok_or(SurfaceError::IncompleteLifecycle)?;
+                let expected_pixel_length = usize::try_from(
+                    buffer
+                        .stride
+                        .checked_mul(buffer.height)
+                        .ok_or(SurfaceError::InvalidBuffer)?,
+                )
+                .map_err(|_| SurfaceError::InvalidBuffer)?;
+                if expected_pixel_length != pixel_length {
+                    return Err(SurfaceError::InvalidBuffer);
+                }
                 if !self.configure_acked
-                    || self.buffer.is_none()
                     || !self.attached
                     || !self.damaged
                     || !self.window_geometry
@@ -1821,7 +1827,14 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
         self.connection
             .objects
             .retire(presentation.frame_callback)?;
-        self.phase = SurfacePhase::Presented;
+        self.connection
+            .objects
+            .delete_id_sent(presentation.frame_callback)?;
+        self.attached = false;
+        self.damaged = false;
+        self.frame_callback = None;
+        self.committed = false;
+        self.phase = SurfacePhase::AwaitConfiguredCommit;
         Ok(presentation)
     }
 
@@ -2277,6 +2290,33 @@ mod tests {
         (bytes, cursor)
     }
 
+    fn repeated_surface_batch(include_commit: bool) -> ([u8; 768], usize) {
+        const SURFACE: u32 = 6;
+        const BUFFER: u32 = 8;
+        const CALLBACK: u32 = 11;
+
+        let mut bytes = [0; 768];
+        let mut cursor = 0;
+        append_message(&mut bytes, &mut cursor, SURFACE, 1, |message| {
+            message.object(BUFFER).unwrap();
+            message.int(0).unwrap();
+            message.int(0).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, SURFACE, 9, |message| {
+            message.int(0).unwrap();
+            message.int(0).unwrap();
+            message.int(32).unwrap();
+            message.int(24).unwrap();
+        });
+        append_message(&mut bytes, &mut cursor, SURFACE, 3, |message| {
+            message.object(CALLBACK).unwrap();
+        });
+        if include_commit {
+            append_message(&mut bytes, &mut cursor, SURFACE, 6, |_| {});
+        }
+        (bytes, cursor)
+    }
+
     fn advance_to_configure(
         session: &mut SingleSurfaceSession<16>,
         title: &str,
@@ -2291,7 +2331,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_configured_single_xdg_toplevel_commit() {
+    fn accepts_configured_and_repeated_xdg_toplevel_commits() {
         let mut session = SingleSurfaceSession::<16>::new(41).unwrap();
         assert_eq!(
             advance_to_configure(&mut session, "Userspace Surface"),
@@ -2319,6 +2359,23 @@ mod tests {
         assert_eq!(surface.format, 1);
         assert_eq!(surface.title.as_str(), "Userspace Surface");
         assert_eq!(surface.app_id.as_str(), "slopos-system");
+        assert_eq!(
+            session.present().unwrap(),
+            PresentedSurface {
+                buffer: 8,
+                frame_callback: 11,
+            }
+        );
+
+        let (wire, length) = repeated_surface_batch(true);
+        let SurfaceSessionEvent::Committed(surface) = session
+            .accept_batch(&wire[..length], Some(0x534c), 3_072)
+            .unwrap()
+        else {
+            panic!("repeated configured commit did not publish a surface");
+        };
+        assert_eq!(surface.buffer, 8);
+        assert_eq!(surface.frame_callback, 11);
         assert_eq!(
             session.present().unwrap(),
             PresentedSurface {
@@ -2367,6 +2424,19 @@ mod tests {
         assert_eq!(
             session.accept_batch(&wire[..length], None, 0),
             Err(SurfaceError::InvalidMetadata)
+        );
+
+        let mut session = SingleSurfaceSession::<16>::new(41).unwrap();
+        advance_to_configure(&mut session, "Userspace Surface");
+        let (wire, length) = configured_surface_batch(128, 41, true);
+        session
+            .accept_batch(&wire[..length], Some(0x534c), 3_072)
+            .unwrap();
+        session.present().unwrap();
+        let (wire, length) = repeated_surface_batch(true);
+        assert_eq!(
+            session.accept_batch(&wire[..length], Some(0x534c), 3_068),
+            Err(SurfaceError::InvalidBuffer)
         );
     }
 
