@@ -4,8 +4,8 @@ SLOPOS-UEFI: loader entered
 SLOPOS-UEFI: raw protocol layer initialized
 SLOPOS-UEFI: ACPI RSDP=0xf77e014
 SLOPOS-UEFI: GOP 1024x768 stride=1024 base=0x80000000
-SLOPOS-UEFI: kernel file loaded bytes=721152
-SLOPOS-UEFI: kernel mapped 0x4000000..0x4097000 entry=0x4000000
+SLOPOS-UEFI: kernel file loaded bytes=724928
+SLOPOS-UEFI: kernel mapped 0x4000000..0x4098000 entry=0x4000000
 SLOPOS-UEFI: initrd loaded bytes=186 base=0xe612000
 SLOPOS-UEFI: user ELF loaded bytes=26344 base=0xdf47000
 SLOPOS-UEFI: Boot Services exited descriptors=118
@@ -17,7 +17,7 @@ SLOPOS-KERNEL: initrd available base=0xe612000 bytes=186
 SLOPOS-KERNEL: user ELF available base=0xdf47000 bytes=26344
 SLOPOS-PCI: mechanism1 devices=8 virtio=2 esp=00:03.0 root=00:04.0 id=1001 caps=0x1e irq=10
 SLOPOS-PCI: bars=00006001/81085000/00000000/00000000/0000400c/000000c0 regions=0xc000004000/0xc000007000/0xc000005000/0xc000006000
-SLOPOS-MM: frame allocator initialized regions=8 free_frames=52875 probe=0x100000
+SLOPOS-MM: frame allocator initialized regions=8 free_frames=52874 probe=0x100000
 SLOPOS-MM: CR3 switched root=0x101000 table_frames=7 huge_pages=517
 SLOPOS-MM: kernel heap initialized base=0x108000 bytes=1048576 probe=0x108000
 SLOPOS-EBPF: verifier accepted instructions=5 interpreter_result=42
@@ -30,6 +30,7 @@ SLOPOS-WAYBAR: formats active workspace={value} window={title} cpu="CPU {usage}%
 SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=default exclusive=true passthrough=false visible=true reserved_top=40 source=embedded
 SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=false/false/false name=- namespace=waybar source=embedded
 SLOPOS-WAYBAR: output name=SLOPOS-1 identifier="SlopOS Virtual Display 0x00000001" selector=any entries=0 selected=true source=embedded
+SLOPOS-WAYBAR: output-dimensions width=1024 height=768 selector=any entries=0 selected=true source=embedded
 SLOPOS-SWWW: daemon=running output=SLOPOS-1 geometry=1024x768 image=awaiting-user-policy transition=simple step=2 fps=30 policy_owner=user-service
 SLOPOS-DESKTOP: interactive compositor loop entered windows=3
 SLOPOS-DESKTOP: terminal, system monitor, and configuration windows ready
@@ -51,8 +52,8 @@ SLOPOS-SYSCALL: pid=1 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_y
 SLOPOS-SCHED: cooperative switch from=1 to=2 next_state=Ready independent_cr3=true
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=kernel nr=24 sched_yield state=runnable origin=cpl3
 SLOPOS-SCHED: cooperative switch from=2 to=1 next_state=Runnable independent_cr3=true
-SLOPOS-SCHED: timer preempt from=1 to=2 tick=3 preemptions=1 next_state=Runnable independent_cr3=true
-SLOPOS-SCHED: timer preempt from=2 to=1 tick=4 preemptions=1 next_state=Runnable independent_cr3=true
+SLOPOS-SCHED: timer preempt from=1 to=2 tick=4 preemptions=1 next_state=Runnable independent_cr3=true
+SLOPOS-SCHED: timer preempt from=2 to=1 tick=5 preemptions=1 next_state=Runnable independent_cr3=true
 SLOPOS-SYSCALL: pid=2 abi=linux-x86_64 entry=syscall return=suspended nr=257 openat dirfd=-100 flags=0 path=/etc/slopos/waybar.jsonc origin=cpl3
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38
 SLOPOS-VFS: process open complete pid=2 fd=3 inode=20 bytes=1541 access=readonly async=true path=/etc/slopos/waybar.jsonc
@@ -169,6 +170,7 @@ SLOPOS-NIRI: window rule app_id=slopos-config property=open-focused value=true a
 SLOPOS-WAYBAR: geometry position=top x=12 y=4 width=1000 height=40 margin=4/12/4/12 spacing=10 fixed_center=false layer=top mode=default exclusive=true passthrough=false visible=true reserved_top=44 source=config
 SLOPOS-WAYBAR: layout configured_width=0 no_center=false expand=true/true/true name=slop-main namespace=slop-main source=config
 SLOPOS-WAYBAR: output name=SLOPOS-1 identifier="SlopOS Virtual Display 0x00000001" selector=array entries=3 selected=true source=config
+SLOPOS-WAYBAR: output-dimensions width=1024 height=768 selector=any entries=0 selected=true source=config
 SLOPOS-DESKTOP-SERVICE: config acknowledged generation=1 event=config-applied wake=block-task
 SLOPOS-CONFIG: reload applied generation=1 atomic=true niri=/etc/slopos/niri.kdl waybar=/etc/slopos/waybar.jsonc style=/etc/slopos/waybar.css swww=/etc/slopos/swww.env workspaces=3 module_configs=6 css_rules=14
 SLOPOS-EXT4: group descriptor valid group=1 inode_table=38

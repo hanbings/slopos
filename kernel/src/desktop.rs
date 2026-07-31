@@ -93,7 +93,7 @@ impl Desktop {
             .unwrap_or_else(|_| crate::fatal("niri shell config failed validation"));
         let mut bar = parse_waybar_config(WAYBAR_CONFIG)
             .unwrap_or_else(|_| crate::fatal("Waybar JSONC config failed validation"));
-        bar.select_output(WAYBAR_OUTPUT_NAME, WAYBAR_OUTPUT_IDENTIFIER);
+        bar.select_output(WAYBAR_OUTPUT_NAME, WAYBAR_OUTPUT_IDENTIFIER, width, height);
         let bar_style = parse_waybar_style(WAYBAR_STYLE)
             .unwrap_or_else(|_| crate::fatal("Waybar CSS failed validation"));
         let swww_defaults = parse_swww_environment(SWWW_ENVIRONMENT)
@@ -1011,7 +1011,12 @@ impl Desktop {
             .unwrap_or_else(|_| crate::fatal("published niri shell config became invalid"));
         let mut bar = parse_waybar_config(sources.waybar)
             .unwrap_or_else(|_| crate::fatal("published Waybar config became invalid"));
-        bar.select_output(WAYBAR_OUTPUT_NAME, WAYBAR_OUTPUT_IDENTIFIER);
+        bar.select_output(
+            WAYBAR_OUTPUT_NAME,
+            WAYBAR_OUTPUT_IDENTIFIER,
+            self.screen_width,
+            self.screen_height,
+        );
         let bar_style = parse_waybar_style(sources.waybar_style)
             .unwrap_or_else(|_| crate::fatal("published Waybar style became invalid"));
         let swww_defaults = parse_swww_environment(sources.swww)
@@ -1370,6 +1375,14 @@ impl Desktop {
             WAYBAR_OUTPUT_IDENTIFIER,
             self.bar.output.form_name(),
             self.bar.output.len(),
+            self.bar.output_selected()
+        ));
+        serialln(format_args!(
+            "SLOPOS-WAYBAR: output-dimensions width={} height={} selector={} entries={} selected={} source={source}",
+            self.screen_width,
+            self.screen_height,
+            self.bar.output_dimensions.form_name(),
+            self.bar.output_dimensions.len(),
             self.bar.output_selected()
         ));
     }

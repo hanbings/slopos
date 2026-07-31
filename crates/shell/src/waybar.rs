@@ -8,6 +8,7 @@ pub const MAX_BAR_MODE_NAME: usize = 32;
 pub const MAX_BAR_NAME: usize = 32;
 pub const MAX_BAR_OUTPUTS: usize = 8;
 pub const MAX_BAR_OUTPUT_NAME: usize = 96;
+pub const MAX_BAR_OUTPUT_DIMENSIONS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BarPosition {
@@ -203,6 +204,10 @@ impl<'a> BarOutputList<'a> {
         false
     }
 
+    const fn takes_precedence(self) -> bool {
+        self.configured && (self.array || !self.outputs[0].is_empty())
+    }
+
     fn push(&mut self, output: &'a str) -> Result<(), BarConfigError> {
         validate_output_name(output)?;
         if self.length == self.outputs.len() {
@@ -216,6 +221,127 @@ impl<'a> BarOutputList<'a> {
 
 fn output_matches(output: &str, name: &str, identifier: &str) -> bool {
     output == name || output == identifier
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarOutputDimension {
+    WidthLess(i32),
+    WidthGreater(i32),
+    HeightLess(i32),
+    HeightGreater(i32),
+}
+
+impl BarOutputDimension {
+    const fn matches(self, width: i32, height: i32) -> bool {
+        match self {
+            Self::WidthLess(value) => width < value,
+            Self::WidthGreater(value) => width > value,
+            Self::HeightLess(value) => height < value,
+            Self::HeightGreater(value) => height > value,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BarOutputDimensionList {
+    dimensions: [Option<BarOutputDimension>; MAX_BAR_OUTPUT_DIMENSIONS],
+    length: usize,
+    configured: bool,
+    array: bool,
+}
+
+impl BarOutputDimensionList {
+    const fn any() -> Self {
+        Self {
+            dimensions: [None; MAX_BAR_OUTPUT_DIMENSIONS],
+            length: 0,
+            configured: false,
+            array: false,
+        }
+    }
+
+    const fn string() -> Self {
+        Self {
+            dimensions: [None; MAX_BAR_OUTPUT_DIMENSIONS],
+            length: 0,
+            configured: true,
+            array: false,
+        }
+    }
+
+    const fn array() -> Self {
+        Self {
+            dimensions: [None; MAX_BAR_OUTPUT_DIMENSIONS],
+            length: 0,
+            configured: true,
+            array: true,
+        }
+    }
+
+    pub const fn len(self) -> usize {
+        self.length
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.length == 0
+    }
+
+    pub const fn is_configured(self) -> bool {
+        self.configured
+    }
+
+    pub const fn is_array(self) -> bool {
+        self.array
+    }
+
+    pub const fn form_name(self) -> &'static str {
+        if !self.configured {
+            "any"
+        } else if self.array {
+            "array"
+        } else {
+            "string"
+        }
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = BarOutputDimension> {
+        self.dimensions.into_iter().take(self.length).flatten()
+    }
+
+    pub fn matches(self, width: i32, height: i32) -> bool {
+        self.iter()
+            .all(|dimension| dimension.matches(width, height))
+    }
+
+    fn push_text(&mut self, text: &str) -> Result<(), BarConfigError> {
+        validate_output_name(text)?;
+        let Some(dimension) = parse_output_dimension(text) else {
+            return Ok(());
+        };
+        if self.length == self.dimensions.len() {
+            return Err(BarConfigError::TooManyOutputDimensions);
+        }
+        self.dimensions[self.length] = Some(dimension);
+        self.length += 1;
+        Ok(())
+    }
+}
+
+fn parse_output_dimension(text: &str) -> Option<BarOutputDimension> {
+    let mut fields = text.split_ascii_whitespace();
+    let dimension = fields.next()?;
+    let comparator = fields.next()?;
+    let value = parse_i32(fields.next()?)?;
+    if fields.next().is_some() {
+        return None;
+    }
+    match (dimension.as_bytes(), comparator.as_bytes()) {
+        (b"width", b"<") => Some(BarOutputDimension::WidthLess(value)),
+        (b"width", b">") => Some(BarOutputDimension::WidthGreater(value)),
+        (b"height", b"<") => Some(BarOutputDimension::HeightLess(value)),
+        (b"height", b">") => Some(BarOutputDimension::HeightGreater(value)),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -489,6 +615,7 @@ impl<'a> BarModuleConfigList<'a> {
 pub struct WaybarConfig<'a> {
     pub name: Option<&'a str>,
     pub output: BarOutputList<'a>,
+    pub output_dimensions: BarOutputDimensionList,
     pub position: BarPosition,
     pub height: u16,
     pub width: u16,
@@ -527,6 +654,7 @@ impl Default for WaybarConfig<'_> {
         Self {
             name: None,
             output: BarOutputList::any(),
+            output_dimensions: BarOutputDimensionList::any(),
             position: BarPosition::Top,
             height: 30,
             width: 0,
@@ -569,8 +697,12 @@ impl<'a> WaybarConfig<'a> {
         self.output_selected
     }
 
-    pub fn select_output(&mut self, name: &str, identifier: &str) -> bool {
-        self.output_selected = self.output.matches(name, identifier);
+    pub fn select_output(&mut self, name: &str, identifier: &str, width: i32, height: i32) -> bool {
+        self.output_selected = if self.output.takes_precedence() {
+            self.output.matches(name, identifier)
+        } else {
+            self.output_dimensions.matches(width, height)
+        };
         self.apply_mode_state(if self.visibility_state {
             self.shown_mode
         } else {
@@ -683,6 +815,7 @@ pub enum BarConfigError {
     InvalidName,
     InvalidOutput,
     TooManyOutputs,
+    TooManyOutputDimensions,
     InvalidMode,
     TooManyModes,
 }
@@ -981,6 +1114,7 @@ impl<'a> JsonParser<'a> {
     const EXPAND_RIGHT: u32 = 1 << 25;
     const NAME: u32 = 1 << 26;
     const OUTPUT: u32 = 1 << 27;
+    const OUTPUT_DIMENSIONS: u32 = 1 << 28;
 
     const fn new(input: &'a str) -> Self {
         Self {
@@ -1014,6 +1148,11 @@ impl<'a> JsonParser<'a> {
                         "output" => {
                             mark_once(&mut fields, Self::OUTPUT)?;
                             config.output = self.output_value()?;
+                            config.output_selected = false;
+                        }
+                        "output-dimensions" => {
+                            mark_once(&mut fields, Self::OUTPUT_DIMENSIONS)?;
+                            config.output_dimensions = self.output_dimensions_value()?;
                             config.output_selected = false;
                         }
                         "position" => {
@@ -1360,6 +1499,39 @@ impl<'a> JsonParser<'a> {
                                 _ => return Err(BarConfigError::InvalidOutput),
                             }
                         }
+                        Token::End => return Err(BarConfigError::UnexpectedEnd),
+                        _ => return Err(BarConfigError::InvalidOutput),
+                    }
+                }
+            }
+            Token::End => Err(BarConfigError::UnexpectedEnd),
+            _ => Err(BarConfigError::InvalidOutput),
+        }
+    }
+
+    fn output_dimensions_value(&mut self) -> Result<BarOutputDimensionList, BarConfigError> {
+        match self.next() {
+            Token::String(text) => {
+                let mut dimensions = BarOutputDimensionList::string();
+                dimensions.push_text(text)?;
+                Ok(dimensions)
+            }
+            Token::LeftBracket => {
+                let mut dimensions = BarOutputDimensionList::array();
+                loop {
+                    let token = self.next();
+                    match token {
+                        Token::RightBracket => return Ok(dimensions),
+                        Token::String(text) => dimensions.push_text(text)?,
+                        Token::End => return Err(BarConfigError::UnexpectedEnd),
+                        token => {
+                            self.push(token);
+                            self.skip_value()?;
+                        }
+                    }
+                    match self.next() {
+                        Token::Comma => {}
+                        Token::RightBracket => return Ok(dimensions),
                         Token::End => return Err(BarConfigError::UnexpectedEnd),
                         _ => return Err(BarConfigError::InvalidOutput),
                     }
@@ -1932,7 +2104,7 @@ mod tests {
         assert!(array.output.matches("DP-2", "Other Display"));
         assert!(!array.output_selected());
         assert!(!array.visible);
-        assert!(array.select_output("SLOPOS-1", "SlopOS Virtual Display 0x00000001"));
+        assert!(array.select_output("SLOPOS-1", "SlopOS Virtual Display 0x00000001", 1024, 768));
         assert!(array.output_selected());
         assert!(array.visible);
         assert_eq!(array.reserved_top(), 30);
@@ -1969,12 +2141,110 @@ mod tests {
         assert!(ordered_exclusion.output.matches("DP-2", "Other Display"));
 
         let mut gated = parse_waybar_config(r#"{ "output": "SLOPOS-1" }"#).unwrap();
-        assert!(!gated.select_output("DP-2", "Other Display"));
+        assert!(!gated.select_output("DP-2", "Other Display", 1024, 768));
         gated.toggle_visibility();
         assert!(gated.set_visibility(true));
         assert!(!gated.visible);
-        assert!(gated.select_output("SLOPOS-1", "Other Display"));
+        assert!(gated.select_output("SLOPOS-1", "Other Display", 1024, 768));
         assert!(gated.visible);
+    }
+
+    #[test]
+    fn selects_waybar_output_dimensions_when_output_is_absent() {
+        let mut dimensions = parse_waybar_config(
+            r#"{
+                "output-dimensions": [
+                    "width > 800",
+                    "height > 700",
+                    "malformed",
+                    17
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert!(dimensions.output_dimensions.is_configured());
+        assert!(dimensions.output_dimensions.is_array());
+        assert_eq!(dimensions.output_dimensions.form_name(), "array");
+        assert_eq!(dimensions.output_dimensions.len(), 2);
+        let mut conditions = dimensions.output_dimensions.iter();
+        assert_eq!(
+            conditions.next(),
+            Some(BarOutputDimension::WidthGreater(800))
+        );
+        assert_eq!(
+            conditions.next(),
+            Some(BarOutputDimension::HeightGreater(700))
+        );
+        assert_eq!(conditions.next(), None);
+        assert!(dimensions.output_dimensions.matches(1024, 768));
+        assert!(!dimensions.output_dimensions.matches(800, 768));
+        assert!(!dimensions.output_dimensions.matches(1024, 700));
+        assert!(!dimensions.output_selected());
+        assert!(dimensions.select_output("SLOPOS-1", "Other Display", 1024, 768));
+        assert!(dimensions.visible);
+        assert!(!dimensions.select_output("SLOPOS-1", "Other Display", 800, 768));
+        assert!(!dimensions.visible);
+        dimensions.toggle_visibility();
+        assert!(!dimensions.visible);
+        assert!(dimensions.set_visibility(true));
+        assert!(!dimensions.visible);
+
+        let mut string = parse_waybar_config(r#"{ "output-dimensions": "width < 1200" }"#).unwrap();
+        assert!(string.output_dimensions.is_configured());
+        assert!(!string.output_dimensions.is_array());
+        assert_eq!(string.output_dimensions.form_name(), "string");
+        assert_eq!(string.output_dimensions.len(), 1);
+        assert!(string.select_output("SLOPOS-1", "Other Display", 1024, 768));
+        assert!(!string.select_output("SLOPOS-1", "Other Display", 1200, 768));
+
+        let mut any = parse_waybar_config("{}").unwrap();
+        assert!(any.select_output("SLOPOS-1", "Other Display", 1024, 768));
+        for input in [
+            r#"{ "output-dimensions": [] }"#,
+            r#"{ "output-dimensions": "" }"#,
+            r#"{ "output-dimensions": ["unknown = 3", null, false] }"#,
+        ] {
+            let mut config = parse_waybar_config(input).unwrap();
+            assert!(config.select_output("SLOPOS-1", "Other Display", 1024, 768));
+        }
+
+        let mut output_wins = parse_waybar_config(
+            r#"{
+                "output": "SLOPOS-1",
+                "output-dimensions": "width > 2000"
+            }"#,
+        )
+        .unwrap();
+        assert!(output_wins.select_output("SLOPOS-1", "Other Display", 1024, 768));
+        let mut empty_string_falls_through = parse_waybar_config(
+            r#"{
+                "output": "",
+                "output-dimensions": "width > 2000"
+            }"#,
+        )
+        .unwrap();
+        assert!(!empty_string_falls_through.select_output("SLOPOS-1", "Other Display", 1024, 768));
+        let mut empty_array_wins = parse_waybar_config(
+            r#"{
+                "output": [],
+                "output-dimensions": "width < 2000"
+            }"#,
+        )
+        .unwrap();
+        assert!(!empty_array_wins.select_output("SLOPOS-1", "Other Display", 1024, 768));
+
+        assert_eq!(
+            parse_waybar_config(
+                r#"{
+                    "output-dimensions": [
+                        "width > 0", "width > 1", "width > 2",
+                        "width > 3", "width > 4", "width > 5",
+                        "width > 6", "width > 7", "width > 8"
+                    ]
+                }"#,
+            ),
+            Err(BarConfigError::TooManyOutputDimensions)
+        );
     }
 
     #[test]
@@ -1998,6 +2268,7 @@ mod tests {
             r#"{ "name": 1 }"#,
             r#"{ "output": 1 }"#,
             r#"{ "output": ["SLOPOS-1", 1] }"#,
+            r#"{ "output-dimensions": 1 }"#,
             r#"{ "output": [
                 "a", "b", "c", "d", "e", "f", "g", "h", "i"
             ] }"#,

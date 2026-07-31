@@ -29,6 +29,10 @@ excluded_serial_log="${repo_dir}/evidence/waybar-output-excluded-serial.log"
 excluded_debug_log="${repo_dir}/evidence/waybar-output-excluded-uefi-debugcon.log"
 excluded_qemu_log="${repo_dir}/evidence/waybar-output-excluded-qemu.log"
 excluded_screenshot="${repo_dir}/evidence/waybar-output-excluded.ppm"
+dimensions_serial_log="${repo_dir}/evidence/waybar-dimensions-rejected-serial.log"
+dimensions_debug_log="${repo_dir}/evidence/waybar-dimensions-rejected-uefi-debugcon.log"
+dimensions_qemu_log="${repo_dir}/evidence/waybar-dimensions-rejected-qemu.log"
+dimensions_screenshot="${repo_dir}/evidence/waybar-dimensions-rejected.ppm"
 runtime_dir="$(mktemp -d /tmp/slopos-custom-config.XXXXXX)"
 runtime_esp="${runtime_dir}/slopos-esp.img"
 runtime_root="${runtime_dir}/slopos-root.ext4"
@@ -38,6 +42,7 @@ custom_waybar="${runtime_dir}/waybar.jsonc"
 custom_waybar_style="${runtime_dir}/waybar.css"
 overlay_waybar="${runtime_dir}/waybar-overlay.jsonc"
 excluded_waybar="${runtime_dir}/waybar-output-excluded.jsonc"
+dimensions_waybar="${runtime_dir}/waybar-dimensions-rejected.jsonc"
 fsck_log="${runtime_dir}/fsck.log"
 debugfs=/usr/sbin/debugfs
 e2fsck=/usr/sbin/e2fsck
@@ -52,6 +57,7 @@ cleanup() {
         "${custom_waybar_style}" \
         "${overlay_waybar}" \
         "${excluded_waybar}" \
+        "${dimensions_waybar}" \
         "${fsck_log}"
     do
         unlink "${temporary_file}" 2>/dev/null || true
@@ -146,6 +152,15 @@ sed \
 excluded_bytes="$(wc -c <"${excluded_waybar}")"
 if (( excluded_bytes <= 904 || excluded_bytes > 4096 )); then
     echo "excluded-output Waybar fixture has unexpected size: ${excluded_bytes}" >&2
+    exit 1
+fi
+sed \
+    -e '1i// Waybar output dimensions integration fixture' \
+    -e '/"spacing": 10,/a\    "output-dimensions": ["width > 2000", "height > 700"],' \
+    "${repo_dir}/assets/waybar-config.jsonc" >"${dimensions_waybar}"
+dimensions_bytes="$(wc -c <"${dimensions_waybar}")"
+if (( dimensions_bytes <= 904 || dimensions_bytes > 4096 )); then
+    echo "output-dimensions Waybar fixture has unexpected size: ${dimensions_bytes}" >&2
     exit 1
 fi
 
@@ -639,6 +654,67 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/waybar-output-excluded.png"
 fi
 
+cp --reflink=auto --sparse=always "${root_image}" "${runtime_root}"
+cp /usr/share/OVMF/OVMF_VARS_4M.fd "${runtime_vars}"
+"${debugfs}" -w -R "rm /etc/slopos/waybar.jsonc" "${runtime_root}" >/dev/null 2>&1
+"${debugfs}" \
+    -w \
+    -R "write ${dimensions_waybar} /etc/slopos/waybar.jsonc" \
+    "${runtime_root}" >/dev/null 2>&1
+
+set +e
+{
+    sleep 7
+    echo "screendump ${dimensions_screenshot}"
+    echo "quit"
+} | timeout 12s qemu-system-x86_64 \
+    -machine q35,accel=tcg \
+    -cpu qemu64 \
+    -m 256M \
+    -drive "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd" \
+    -drive "if=pflash,format=raw,file=${runtime_vars}" \
+    -drive "if=virtio,format=raw,file=${runtime_esp}" \
+    -drive "if=virtio,format=raw,file=${runtime_root}" \
+    -serial "file:${dimensions_serial_log}" \
+    -debugcon "file:${dimensions_debug_log}" \
+    -global isa-debugcon.iobase=0x402 \
+    -display none \
+    -monitor stdio \
+    -no-reboot >"${dimensions_qemu_log}" 2>&1
+dimensions_qemu_status=$?
+set -e
+
+if [[ ${dimensions_qemu_status} -ne 0 && ${dimensions_qemu_status} -ne 124 ]]; then
+    echo "Waybar output-dimensions QEMU failed with status ${dimensions_qemu_status}" >&2
+    exit "${dimensions_qemu_status}"
+fi
+sed -i 's/\r$//' "${dimensions_serial_log}" "${dimensions_debug_log}" "${dimensions_qemu_log}"
+grep -Fq \
+    "bytes=${dimensions_bytes} access=readonly async=true path=/etc/slopos/waybar.jsonc" \
+    "${dimensions_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: geometry position=top x=0 y=0 width=1024 height=40 margin=0/0/0/0 spacing=10 fixed_center=true layer=bottom mode=default exclusive=true passthrough=false visible=false reserved_top=0 source=config" \
+    "${dimensions_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: output name=SLOPOS-1 identifier=\"SlopOS Virtual Display 0x00000001\" selector=any entries=0 selected=false source=config" \
+    "${dimensions_serial_log}"
+grep -Fq \
+    "SLOPOS-WAYBAR: output-dimensions width=1024 height=768 selector=array entries=2 selected=false source=config" \
+    "${dimensions_serial_log}"
+if grep -Fq "FATAL" "${dimensions_serial_log}" || grep -Fq "state=exited" "${dimensions_serial_log}"; then
+    echo "Waybar output-dimensions integration reached an unexpected exit or fatal path" >&2
+    exit 1
+fi
+test -s "${dimensions_screenshot}"
+if [[ "$(ppm_pixel_hex "${dimensions_screenshot}" 100 10)" != "111144" ]]; then
+    echo "Waybar rejected output dimensions still rendered a bar surface" >&2
+    exit 1
+fi
+if command -v pnmtopng >/dev/null 2>&1; then
+    pnmtopng "${dimensions_screenshot}" \
+        >"${repo_dir}/evidence/waybar-dimensions-rejected.png"
+fi
+
 set +e
 "${e2fsck}" -fn "${runtime_root}" >"${fsck_log}" 2>&1
 fsck_status=$?
@@ -648,4 +724,4 @@ if (( fsck_status > 1 )); then
     exit "${fsck_status}"
 fi
 
-echo "SlopOS bounded niri/Waybar override, output selection, geometry, expand/fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"
+echo "SlopOS bounded niri/Waybar override, output and output-dimensions selection, geometry, expand/fixed width/no-center, layer/mode, passthrough, actions, and alternate format verified"
