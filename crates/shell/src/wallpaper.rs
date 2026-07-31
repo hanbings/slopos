@@ -1466,25 +1466,39 @@ pub fn resize_filter_sample(
             / (i64::from(destination) * 2))
             - SAMPLE_SCALE / 2
     };
-    let source_x = coordinate(destination_position.0, source_width, destination_width)
-        .clamp(0, (source_width as i64 - 1) * SAMPLE_SCALE);
-    let source_y = coordinate(destination_position.1, source_height, destination_height)
-        .clamp(0, (source_height as i64 - 1) * SAMPLE_SCALE);
-    let x0 = (source_x / SAMPLE_SCALE) as usize;
-    let y0 = (source_y / SAMPLE_SCALE) as usize;
-    let x1 = (x0 + 1).min(source_width - 1);
-    let y1 = (y0 + 1).min(source_height - 1);
-    let x_weight = source_x % SAMPLE_SCALE;
-    let y_weight = source_y % SAMPLE_SCALE;
-    Some(bilinear_color(
-        pixels[y0 * source_width + x0],
-        pixels[y0 * source_width + x1],
-        pixels[y1 * source_width + x0],
-        pixels[y1 * source_width + x1],
-        x_weight,
-        y_weight,
-        SAMPLE_SCALE,
-    ))
+    let source_x = coordinate(destination_position.0, source_width, destination_width);
+    let source_y = coordinate(destination_position.1, source_height, destination_height);
+    match filter {
+        ResizeFilter::CatmullRom | ResizeFilter::Mitchell => Some(cubic_filter_color(
+            filter,
+            pixels,
+            source_width,
+            source_height,
+            source_x,
+            source_y,
+            SAMPLE_SCALE,
+        )),
+        ResizeFilter::Bilinear | ResizeFilter::Lanczos3 => {
+            let x0 = source_x.div_euclid(SAMPLE_SCALE);
+            let y0 = source_y.div_euclid(SAMPLE_SCALE);
+            let x1 = x0 + 1;
+            let y1 = y0 + 1;
+            let clamp_x = |x: i64| x.clamp(0, source_width as i64 - 1) as usize;
+            let clamp_y = |y: i64| y.clamp(0, source_height as i64 - 1) as usize;
+            let x_weight = source_x.rem_euclid(SAMPLE_SCALE);
+            let y_weight = source_y.rem_euclid(SAMPLE_SCALE);
+            Some(bilinear_color(
+                pixels[clamp_y(y0) * source_width + clamp_x(x0)],
+                pixels[clamp_y(y0) * source_width + clamp_x(x1)],
+                pixels[clamp_y(y1) * source_width + clamp_x(x0)],
+                pixels[clamp_y(y1) * source_width + clamp_x(x1)],
+                x_weight,
+                y_weight,
+                SAMPLE_SCALE,
+            ))
+        }
+        ResizeFilter::Nearest => unreachable!(),
+    }
 }
 
 fn bilinear_color(
@@ -1504,6 +1518,108 @@ fn bilinear_color(
             as u32
     };
     channel(16) << 16 | channel(8) << 8 | channel(0)
+}
+
+fn cubic_filter_color(
+    filter: ResizeFilter,
+    pixels: &[u32],
+    source_width: usize,
+    source_height: usize,
+    source_x: i64,
+    source_y: i64,
+    sample_scale: i64,
+) -> u32 {
+    const WEIGHT_SCALE: i64 = 1 << 16;
+
+    let base_x = source_x.div_euclid(sample_scale);
+    let base_y = source_y.div_euclid(sample_scale);
+    let mut x_indices = [0usize; 4];
+    let mut y_indices = [0usize; 4];
+    let mut x_weights = [0i64; 4];
+    let mut y_weights = [0i64; 4];
+    for (index, offset) in (-1..=2).enumerate() {
+        let tap_x = base_x + offset;
+        x_indices[index] = tap_x.clamp(0, source_width as i64 - 1) as usize;
+        x_weights[index] = cubic_filter_weight(
+            filter,
+            (tap_x * sample_scale - source_x).unsigned_abs(),
+            sample_scale,
+            WEIGHT_SCALE,
+        );
+
+        let tap_y = base_y + offset;
+        y_indices[index] = tap_y.clamp(0, source_height as i64 - 1) as usize;
+        y_weights[index] = cubic_filter_weight(
+            filter,
+            (tap_y * sample_scale - source_y).unsigned_abs(),
+            sample_scale,
+            WEIGHT_SCALE,
+        );
+    }
+    let mut total_weight = 0i128;
+    let mut channels = [0i128; 3];
+    for (y, &y_weight) in y_indices.iter().zip(&y_weights) {
+        for (x, &x_weight) in x_indices.iter().zip(&x_weights) {
+            let weight = i128::from(x_weight) * i128::from(y_weight);
+            let color = pixels[*y * source_width + *x];
+            total_weight += weight;
+            channels[0] += i128::from((color >> 16) & 0xff) * weight;
+            channels[1] += i128::from((color >> 8) & 0xff) * weight;
+            channels[2] += i128::from(color & 0xff) * weight;
+        }
+    }
+    if total_weight <= 0 {
+        return pixels[base_y.clamp(0, source_height as i64 - 1) as usize * source_width
+            + base_x.clamp(0, source_width as i64 - 1) as usize];
+    }
+    let channel =
+        |value: i128| rounded_divide(value, total_weight).clamp(0, i128::from(u8::MAX)) as u32;
+    channel(channels[0]) << 16 | channel(channels[1]) << 8 | channel(channels[2])
+}
+
+fn cubic_filter_weight(
+    filter: ResizeFilter,
+    distance: u64,
+    sample_scale: i64,
+    weight_scale: i64,
+) -> i64 {
+    let x = i128::from(distance);
+    let scale = i128::from(sample_scale);
+    if x >= scale * 2 {
+        return 0;
+    }
+    let x_squared = x * x;
+    let x_cubed = x_squared * x;
+    let scale_squared = scale * scale;
+    let scale_cubed = scale_squared * scale;
+    let (numerator, denominator) = match (filter, x < scale) {
+        (ResizeFilter::CatmullRom, true) => (
+            3 * x_cubed - 5 * x_squared * scale + 2 * scale_cubed,
+            2 * scale_cubed,
+        ),
+        (ResizeFilter::CatmullRom, false) => (
+            -x_cubed + 5 * x_squared * scale - 8 * x * scale_squared + 4 * scale_cubed,
+            2 * scale_cubed,
+        ),
+        (ResizeFilter::Mitchell, true) => (
+            21 * x_cubed - 36 * x_squared * scale + 16 * scale_cubed,
+            18 * scale_cubed,
+        ),
+        (ResizeFilter::Mitchell, false) => (
+            -7 * x_cubed + 36 * x_squared * scale - 60 * x * scale_squared + 32 * scale_cubed,
+            18 * scale_cubed,
+        ),
+        _ => unreachable!(),
+    };
+    rounded_divide(numerator * i128::from(weight_scale), denominator) as i64
+}
+
+fn rounded_divide(numerator: i128, denominator: i128) -> i128 {
+    if numerator < 0 {
+        (numerator - denominator / 2) / denominator
+    } else {
+        (numerator + denominator / 2) / denominator
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2107,7 +2223,7 @@ mod tests {
     }
 
     #[test]
-    fn samples_nearest_and_bilinear_resize_filters() {
+    fn samples_distinct_resize_filters() {
         let pixels = [0xff_00_00, 0x00_ff_00, 0x00_00_ff, 0xff_ff_ff];
         assert_eq!(
             resize_filter_sample(ResizeFilter::Nearest, &pixels, (2, 2), (1, 1), (3, 3)),
@@ -2131,6 +2247,50 @@ mod tests {
         assert_eq!(
             resize_filter_sample(ResizeFilter::Bilinear, &pixels[..3], (2, 2), (1, 1), (3, 3)),
             None
+        );
+
+        let detail = [
+            0x00_00_00, 0xff_00_00, 0x00_ff_00, 0x00_00_ff, 0xff_ff_ff, 0x20_20_20, 0xe0_e0_e0,
+            0x80_80_80, 0x11_22_33, 0x44_55_66, 0x77_88_99, 0xaa_bb_cc, 0xff_00_ff, 0x00_ff_ff,
+            0xff_ff_00, 0x12_34_56,
+        ];
+        assert_eq!(
+            resize_filter_sample(ResizeFilter::Bilinear, &detail, (4, 4), (2, 3), (7, 9)),
+            Some(0x31_32_33)
+        );
+        assert_eq!(
+            resize_filter_sample(ResizeFilter::CatmullRom, &detail, (4, 4), (2, 3), (7, 9)),
+            Some(0x1f_26_26)
+        );
+        assert_eq!(
+            resize_filter_sample(ResizeFilter::Mitchell, &detail, (4, 4), (2, 3), (7, 9)),
+            Some(0x40_3a_3c)
+        );
+
+        let aurora = parse_ppm(include_str!("../../../assets/wallpapers/aurora.ppm")).unwrap();
+        let mut aurora_pixels = [0u32; 96];
+        for (index, color) in aurora.pixels().enumerate() {
+            aurora_pixels[index] = color;
+        }
+        assert_eq!(
+            resize_filter_sample(
+                ResizeFilter::Bilinear,
+                &aurora_pixels,
+                (aurora.width(), aurora.height()),
+                (514, 302),
+                (1024, 768)
+            ),
+            Some(0x2b_c5_ce)
+        );
+        assert_eq!(
+            resize_filter_sample(
+                ResizeFilter::CatmullRom,
+                &aurora_pixels,
+                (aurora.width(), aurora.height()),
+                (514, 302),
+                (1024, 768)
+            ),
+            Some(0x27_d2_d4)
         );
     }
 

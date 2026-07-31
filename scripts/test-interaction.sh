@@ -193,8 +193,14 @@ qmp_wheel_burst() {
     sleep 1
     monitor_type "clear"
     sleep 20
-    monitor_type "img sunset.ppm -t none --resize crop"
-    sleep 3
+    monitor_type "img aurora.ppm -t none --resize stretch -f catmullrom"
+    sleep 12
+    echo "screendump ${repo_dir}/evidence/wallpaper-catmullrom.ppm"
+    sleep 1
+    monitor_type "clear"
+    sleep 20
+    monitor_type "img sunset.ppm -t none"
+    sleep 30
     echo "sendkey meta_l-comma 50"
     sleep 1
     echo "sendkey meta_l-ctrl-shift-2 50"
@@ -628,6 +634,7 @@ grep -Fq "SLOPOS-SWWW: geometry resize=fit x=0 y=43 width=1024 height=682 crop_g
 grep -Fq "SLOPOS-SWWW: geometry resize=crop x=-128 y=0 width=1152 height=768 crop_gravity=right fill=000000 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=Bilinear" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: geometry resize=stretch x=0 y=0 width=1024 height=768 crop_gravity=center fill=000000 source=embedded filter=CatmullRom" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=SYSTEM workspace=2 name=config x=520 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=CONFIG workspace=2 name=config x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
 grep -Fq "SLOPOS-DESKTOP: workspace transfer scope=window action=move-window-to-workspace member=TERMINAL workspace=1 name=main x=16 y=56 width=488 height=696 layout=niri" "${serial_log}"
@@ -814,6 +821,7 @@ test -s "${repo_dir}/evidence/wallpaper-fit-fill.ppm"
 test -s "${repo_dir}/evidence/wallpaper-crop-right.ppm"
 test -s "${repo_dir}/evidence/wallpaper-stretched.ppm"
 test -s "${repo_dir}/evidence/wallpaper-bilinear.ppm"
+test -s "${repo_dir}/evidence/wallpaper-catmullrom.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-target.ppm"
 test -s "${repo_dir}/evidence/niri-window-workspace-returned.ppm"
 test -s "${repo_dir}/evidence/niri-column-workspace-target.ppm"
@@ -898,6 +906,18 @@ if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-bilinear.ppm" 512 300)" !
     echo "swww Bilinear filter did not interpolate source pixels" >&2
     exit 1
 fi
+if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/wallpaper-catmullrom.ppm" 512 300)" != "27d2d4" ]]; then
+    echo "swww CatmullRom filter did not use its cubic convolution kernel" >&2
+    exit 1
+fi
+for image in niri-window-workspace-target niri-window-workspace-returned; do
+    if [[ "$(ppm_pixel_hex "${repo_dir}/evidence/${image}.ppm" 10 10)" != "6558f5" ]] \
+        || [[ "$(ppm_pixel_hex "${repo_dir}/evidence/${image}.ppm" 100 100)" != "171c2b" ]] \
+        || [[ "$(ppm_pixel_hex "${repo_dir}/evidence/${image}.ppm" 512 700)" != "221133" ]]; then
+        echo "swww filter recovery did not restore a complete niri desktop frame" >&2
+        exit 1
+    fi
+done
 
 if grep -Fq "FATAL" "${serial_log}" || grep -Fq "state=exited" "${serial_log}"; then
     echo "persistent userspace reached an unexpected exit or fatal path" >&2
@@ -926,6 +946,8 @@ if command -v pnmtopng >/dev/null 2>&1; then
         >"${repo_dir}/evidence/wallpaper-stretched.png"
     pnmtopng "${repo_dir}/evidence/wallpaper-bilinear.ppm" \
         >"${repo_dir}/evidence/wallpaper-bilinear.png"
+    pnmtopng "${repo_dir}/evidence/wallpaper-catmullrom.ppm" \
+        >"${repo_dir}/evidence/wallpaper-catmullrom.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-target.ppm" \
         >"${repo_dir}/evidence/niri-window-workspace-target.png"
     pnmtopng "${repo_dir}/evidence/niri-window-workspace-returned.ppm" \
