@@ -20,6 +20,10 @@ if [[ ! -x "${mke2fs}" || ! -x "${debugfs}" ]]; then
     echo "missing build tools from Debian package e2fsprogs" >&2
     exit 1
 fi
+if ! command -v base64 >/dev/null 2>&1 || ! command -v gzip >/dev/null 2>&1; then
+    echo "missing base64 or gzip required to unpack the deterministic PNG fixture" >&2
+    exit 1
+fi
 if [[ ! -d "${source_dir}" ]]; then
     echo "missing root filesystem source: ${source_dir}" >&2
     exit 1
@@ -42,19 +46,14 @@ cp "${repo_dir}/assets/waybar-config.jsonc" "${staging_dir}/etc/slopos/waybar.js
 cp "${repo_dir}/assets/waybar-style.css" "${staging_dir}/etc/slopos/waybar.css"
 cp "${repo_dir}/assets/swww.env" "${staging_dir}/etc/slopos/swww.env"
 mkdir -p "${staging_dir}/usr/share/slopos"
-wallpaper_probe="${staging_dir}/usr/share/slopos/vfs-wallpaper.ppm"
-# Keep the 12x8 Aurora geometry while forcing both the P6 header and binary
-# raster through the second ext4 block. The long comment makes the complete
-# file exactly 6144 bytes; the final 288 bytes are the RGB payload.
-{
-    printf 'P6\n#'
-    dd if=/dev/zero bs=1 count=5842 status=none | tr '\000' 'P'
-    printf '\n12 8\n255\n'
-    tail -n +5 "${repo_dir}/assets/wallpapers/aurora.ppm" \
-        | awk '{ for (field = 1; field <= NF; field++) printf "%c", $field * 17 }'
-} >"${wallpaper_probe}"
+wallpaper_probe="${staging_dir}/usr/share/slopos/vfs-wallpaper.png"
+# The deterministic gzip contains a 6144-byte, 12x8 RGB PNG. A long tEXt
+# chunk forces ancillary data across both ext4 blocks; two IDAT chunks carry
+# a dynamic-Huffman zlib stream whose rows exercise PNG filters 0 through 4.
+base64 --decode "${repo_dir}/assets/wallpapers/aurora.png.gz.base64" \
+    | gzip --decompress --stdout >"${wallpaper_probe}"
 if [[ "$(stat -c '%s' "${wallpaper_probe}")" -ne 6144 ]]; then
-    echo "VFS P6 wallpaper probe has an unexpected size" >&2
+    echo "VFS PNG wallpaper probe has an unexpected size" >&2
     exit 1
 fi
 dd if=/dev/zero bs=4096 count=9 status=none \

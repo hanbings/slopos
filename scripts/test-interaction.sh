@@ -136,7 +136,7 @@ qmp_wheel_burst() {
     echo "screendump ${repo_dir}/evidence/wallpaper-switched.ppm"
     monitor_type "swww query"
     sleep 2
-    monitor_type "swww img /usr/share/slopos/vfs-wallpaper.ppm --transition-type center --transition-step 64"
+    monitor_type "swww img /usr/share/slopos/vfs-wallpaper.png --transition-type center --transition-step 64"
     sleep 8
     echo "screendump ${repo_dir}/evidence/wallpaper-vfs-loaded.ppm"
     monitor_type "swww query"
@@ -605,11 +605,11 @@ fi
 grep -Fq "SLOPOS-SWWW: image=SUNSET.PPM output=* transition=center step=64 fps=30" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: transition complete type=center step=64 fps=30 duration_ms=2000 sampled_step=16 frames=17" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=SUNSET.PPM" "${serial_log}"
-grep -Fq "SLOPOS-SWWW-VFS: load requested generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM output=* transition=center step=64 fps=30 async=true" "${serial_log}"
-grep -Fq "SLOPOS-SWWW-VFS: load published generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm inode=30 bytes=6144 blocks=2 format=P6 async=true" "${serial_log}"
-grep -Fq "SLOPOS-SWWW: image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM resolved=/usr/share/slopos/vfs-wallpaper.ppm source=vfs output=* transition=center step=64 fps=30" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: load requested generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PNG output=* transition=center step=64 fps=30 async=true" "${serial_log}"
+grep -Fq "SLOPOS-SWWW-VFS: load published generation=1 request=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PNG resolved=/usr/share/slopos/vfs-wallpaper.png inode=30 bytes=6144 blocks=2 format=PNG async=true" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PNG resolved=/usr/share/slopos/vfs-wallpaper.png source=vfs output=* transition=center step=64 fps=30 format=PNG" "${serial_log}"
 grep -Fq "SLOPOS-SWWW-VFS: result acknowledged generation=1 renderer=desktop active_image=true" "${serial_log}"
-grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM" "${serial_log}"
+grep -Fq "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PNG" "${serial_log}"
 grep -Fq "SLOPOS-SWWW-VFS: load rejected generation=2 request=/USR/SHARE/SLOPOS/MISSING.PPM resolved=/usr/share/slopos/missing.ppm error=not-found retained=previous" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=/USR/SHARE/SLOPOS/MISSING.PPM resolved=/usr/share/slopos/missing.ppm source=vfs applied=false error=not-found" "${serial_log}"
 grep -Fq "SLOPOS-SWWW-VFS: result acknowledged generation=2 renderer=desktop active_image=false" "${serial_log}"
@@ -617,7 +617,7 @@ grep -Fq "SLOPOS-SWWW-VFS: load requested generation=3 request=/ETC/SLOPOS/SYSTE
 grep -Fq "SLOPOS-SWWW-VFS: load rejected generation=3 request=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf error=invalid-ppm retained=previous" "${serial_log}"
 grep -Fq "SLOPOS-SWWW: image=/ETC/SLOPOS/SYSTEM.CONF resolved=/etc/slopos/system.conf source=vfs applied=false error=invalid-ppm" "${serial_log}"
 grep -Fq "SLOPOS-SWWW-VFS: result acknowledged generation=3 renderer=desktop active_image=false" "${serial_log}"
-if [[ "$(grep -Fc "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PPM" "${serial_log}")" -ne 3 ]]; then
+if [[ "$(grep -Fc "SLOPOS-SWWW: query output=SLOPOS-1 geometry=1024x768 image=/USR/SHARE/SLOPOS/VFS-WALLPAPER.PNG" "${serial_log}")" -ne 3 ]]; then
     echo "rejected swww VFS image did not retain the previous wallpaper" >&2
     exit 1
 fi

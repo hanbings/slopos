@@ -72,7 +72,7 @@ required_markers=(
     "SLOPOS-CONFIG: reload applied generation=1 atomic=true niri=/etc/slopos/niri.kdl waybar=/etc/slopos/waybar.jsonc style=/etc/slopos/waybar.css swww=/etc/slopos/swww.env workspaces=3 module_configs=6 css_rules=12"
     "SLOPOS-EXT4: async path read valid release_inode=21 release_bytes=40 config_inode=18 config_bytes=76 paths=/etc/slopos-release,/etc/slopos/system.conf"
     "SLOPOS-EXT4: group descriptor valid group=1 inode_table=38"
-    "SLOPOS-EXT4: multiblock file valid inode=30 inode_group=1 bytes=6144 logical_blocks=2 format=P6 binary_payload=valid path=/usr/share/slopos/vfs-wallpaper.ppm"
+    "SLOPOS-EXT4: multiblock file valid inode=30 inode_group=1 bytes=6144 logical_blocks=2 format=PNG ancillary_padding=valid path=/usr/share/slopos/vfs-wallpaper.png"
     "SLOPOS-EXT4: depth-one extent valid inode=28 leaf_block=104 logical_block=8 bytes=4096 metadata_checksum=valid path=/usr/share/slopos/deep-extent.bin"
     "SLOPOS-EXT4: sparse read valid inode=28 logical_block=7 zero_bytes=4096"
     "SLOPOS-EXT4: cross-block directory valid directory_inode=29 directory_blocks=2 entry_block=1 target_inode=21 target_bytes=40 metadata_checksums=valid path=/usr/share/slopos/large-directory/tail-29"

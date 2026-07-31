@@ -9,10 +9,10 @@ use slopos_desktop_protocol::WALLPAPER_AURORA;
 use slopos_shell::{
     BarButton, BarFormatValue, BarModuleList, BarPosition, BarText, BindingKey, BindingModifiers,
     ColumnDisplay, CropGravity, ImgRequest, MAX_NIRI_BINDINGS, NiriAction, NiriBinding,
-    NiriShellConfig, PpmImage, ResizeFilter, ResizeMode, ResolvedWaybarStyle, Shadow, ShadowColor,
-    SwwwCommand, SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon, WaybarConfig,
-    WaybarStyle, WorkspaceReference, WorkspaceSet, format_bar_text, parse_niri_layout,
-    parse_niri_shell_config, parse_ppm, parse_ppm_bytes, parse_swww_command,
+    NiriShellConfig, RasterImage, ResizeFilter, ResizeMode, ResolvedWaybarStyle, Shadow,
+    ShadowColor, SwwwCommand, SwwwDaemonError, SwwwDefaults, TransitionType, WallpaperDaemon,
+    WaybarConfig, WaybarStyle, WorkspaceReference, WorkspaceSet, format_bar_text,
+    parse_niri_layout, parse_niri_shell_config, parse_ppm, parse_swww_command,
     parse_swww_environment, parse_waybar_config, parse_waybar_style, resize_filter_sample,
     transition_eased_progress, transition_pixel_with_options,
 };
@@ -61,8 +61,8 @@ pub struct Desktop {
     bar_alternate_formats: u32,
     swww_defaults: SwwwDefaults,
     wallpaper: WallpaperDaemon,
-    wallpaper_current_image: Option<PpmImage<'static>>,
-    wallpaper_previous_image: Option<PpmImage<'static>>,
+    wallpaper_current_image: Option<RasterImage<'static>>,
+    wallpaper_previous_image: Option<RasterImage<'static>>,
     wallpaper_generation: u64,
     active: usize,
     pointer_x: i32,
@@ -556,8 +556,8 @@ impl Desktop {
         &self,
         framebuffer: &mut Framebuffer,
         transition: slopos_shell::TransitionOptions,
-        current: PpmImage<'_>,
-        previous: PpmImage<'_>,
+        current: RasterImage<'_>,
+        previous: RasterImage<'_>,
         destination: WallpaperDestination,
     ) {
         let pixel_count = usize::from(current.width()) * usize::from(current.height());
@@ -920,7 +920,7 @@ impl Desktop {
     fn apply_wallpaper_image(
         &mut self,
         mut request: ImgRequest<'_>,
-        image: PpmImage<'static>,
+        image: RasterImage<'static>,
     ) -> Result<(), SwwwDaemonError> {
         let previous = self.wallpaper_current_image;
         if previous.is_some_and(|previous| {
@@ -951,14 +951,12 @@ impl Desktop {
     ) -> (bool, bool) {
         match update {
             crate::wallpaper_file::WallpaperFileUpdate::Ready(source) => {
-                let image = parse_ppm_bytes(source.image)
-                    .unwrap_or_else(|_| crate::fatal("published swww VFS PPM became invalid"));
                 let request = ImgRequest {
                     path: source.request_path,
                     output: source.output,
                     transition: source.transition,
                 };
-                match self.apply_wallpaper_image(request, image) {
+                match self.apply_wallpaper_image(request, source.image) {
                     Ok(()) => {
                         self.set_response("SWWW VFS IMAGE APPLIED");
                         serialln(format_args!(
@@ -3340,17 +3338,17 @@ fn text_width(text: &str) -> i32 {
     i32::try_from(text.len()).unwrap_or(i32::MAX / 6) * 6
 }
 
-fn wallpaper_asset(path: &str) -> Option<PpmImage<'static>> {
+fn wallpaper_asset(path: &str) -> Option<RasterImage<'static>> {
     if path.eq_ignore_ascii_case(AURORA_PATH)
         || path.eq_ignore_ascii_case("aurora.ppm")
         || path.eq_ignore_ascii_case("slopos-aurora.ppm")
     {
-        parse_ppm(AURORA_PPM).ok()
+        parse_ppm(AURORA_PPM).ok().map(RasterImage::from_pnm)
     } else if path.eq_ignore_ascii_case(SUNSET_PATH)
         || path.eq_ignore_ascii_case("sunset.ppm")
         || path.eq_ignore_ascii_case("slopos-sunset.ppm")
     {
-        parse_ppm(SUNSET_PPM).ok()
+        parse_ppm(SUNSET_PPM).ok().map(RasterImage::from_pnm)
     } else {
         None
     }
@@ -3390,7 +3388,7 @@ fn projected_edge(origin: i32, index: i32, extent: i32, source_length: i32) -> i
 fn wallpaper_destination(
     resize: ResizeMode,
     crop_gravity: CropGravity,
-    image: PpmImage<'_>,
+    image: RasterImage<'_>,
     output_width: i32,
     output_height: i32,
 ) -> WallpaperDestination {
@@ -3499,6 +3497,7 @@ const fn wallpaper_file_error_response(
         crate::wallpaper_file::WallpaperFileError::NotFound => "SWWW VFS IMAGE NOT FOUND",
         crate::wallpaper_file::WallpaperFileError::FileTooLarge => "SWWW VFS IMAGE EXCEEDS 8K",
         crate::wallpaper_file::WallpaperFileError::InvalidPpm => "SWWW VFS IMAGE PNM IS INVALID",
+        crate::wallpaper_file::WallpaperFileError::InvalidPng => "SWWW VFS IMAGE PNG IS INVALID",
     }
 }
 
@@ -3510,5 +3509,6 @@ const fn wallpaper_file_error_name(
         crate::wallpaper_file::WallpaperFileError::NotFound => "not-found",
         crate::wallpaper_file::WallpaperFileError::FileTooLarge => "file-size",
         crate::wallpaper_file::WallpaperFileError::InvalidPpm => "invalid-ppm",
+        crate::wallpaper_file::WallpaperFileError::InvalidPng => "invalid-png",
     }
 }

@@ -1913,6 +1913,85 @@ impl Iterator for PpmPixels<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RasterPixelData<'a> {
+    Pnm(PpmImage<'a>),
+    Rgb(&'a [u8]),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RasterImage<'a> {
+    width: u16,
+    height: u16,
+    data: RasterPixelData<'a>,
+}
+
+impl<'a> RasterImage<'a> {
+    pub const fn from_pnm(image: PpmImage<'a>) -> Self {
+        Self {
+            width: image.width(),
+            height: image.height(),
+            data: RasterPixelData::Pnm(image),
+        }
+    }
+
+    pub fn from_rgb(width: u16, height: u16, bytes: &'a [u8]) -> Option<Self> {
+        let expected = usize::from(width)
+            .checked_mul(usize::from(height))?
+            .checked_mul(3)?;
+        if width == 0 || height == 0 || bytes.len() != expected {
+            return None;
+        }
+        Some(Self {
+            width,
+            height,
+            data: RasterPixelData::Rgb(bytes),
+        })
+    }
+
+    pub const fn width(self) -> u16 {
+        self.width
+    }
+
+    pub const fn height(self) -> u16 {
+        self.height
+    }
+
+    pub fn pixels(self) -> RasterPixels<'a> {
+        RasterPixels {
+            source: match self.data {
+                RasterPixelData::Pnm(image) => RasterPixelSource::Pnm(image.pixels()),
+                RasterPixelData::Rgb(bytes) => RasterPixelSource::Rgb { bytes, offset: 0 },
+            },
+        }
+    }
+}
+
+enum RasterPixelSource<'a> {
+    Pnm(PpmPixels<'a>),
+    Rgb { bytes: &'a [u8], offset: usize },
+}
+
+pub struct RasterPixels<'a> {
+    source: RasterPixelSource<'a>,
+}
+
+impl Iterator for RasterPixels<'_> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.source {
+            RasterPixelSource::Pnm(pixels) => pixels.next(),
+            RasterPixelSource::Rgb { bytes, offset } => {
+                let end = offset.checked_add(3)?;
+                let pixel = bytes.get(*offset..end)?;
+                *offset = end;
+                Some(u32::from(pixel[0]) << 16 | u32::from(pixel[1]) << 8 | u32::from(pixel[2]))
+            }
+        }
+    }
+}
+
 struct PpmTokens<'a> {
     input: &'a [u8],
     offset: usize,

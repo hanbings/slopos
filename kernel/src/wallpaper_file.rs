@@ -3,12 +3,13 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use slopos_shell::{
-    CropGravity, ImgRequest, MAX_WALLPAPER_PATH, PpmFormat, ResizeFilter, ResizeMode,
-    TransitionBezier, TransitionOptions, TransitionPosition, TransitionType, TransitionWave,
-    parse_ppm_bytes,
+    CropGravity, ImgRequest, MAX_WALLPAPER_PATH, PngError, PpmFormat, RasterImage, ResizeFilter,
+    ResizeMode, TransitionBezier, TransitionOptions, TransitionPosition, TransitionType,
+    TransitionWave, decode_png_rgb, parse_ppm_bytes,
 };
 
 pub const WALLPAPER_FILE_CAPACITY: usize = 8 * 1024;
+const MAX_DECODED_PIXELS: usize = 2_048;
 const RESULT_BANKS: usize = 2;
 const OUTPUT_CAPACITY: usize = 32;
 const NO_BANK: usize = usize::MAX;
@@ -26,6 +27,24 @@ pub enum WallpaperFileError {
     NotFound,
     FileTooLarge,
     InvalidPpm,
+    InvalidPng,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WallpaperFileFormat {
+    P3,
+    P6,
+    Png,
+}
+
+impl WallpaperFileFormat {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::P3 => "P3",
+            Self::P6 => "P6",
+            Self::Png => "PNG",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -198,7 +217,10 @@ struct WallpaperFileBank {
     request: WallpaperFileRequest,
     image: [u8; WALLPAPER_FILE_CAPACITY],
     image_length: usize,
-    format: PpmFormat,
+    decoded: [u8; WALLPAPER_FILE_CAPACITY],
+    decoded_length: usize,
+    decoded_dimensions: (u16, u16),
+    format: WallpaperFileFormat,
     result: Result<(), WallpaperFileError>,
 }
 
@@ -208,7 +230,10 @@ impl WallpaperFileBank {
             request: WallpaperFileRequest::empty(),
             image: [0; WALLPAPER_FILE_CAPACITY],
             image_length: 0,
-            format: PpmFormat::Plain,
+            decoded: [0; WALLPAPER_FILE_CAPACITY],
+            decoded_length: 0,
+            decoded_dimensions: (0, 0),
+            format: WallpaperFileFormat::P3,
             result: Ok(()),
         }
     }
@@ -244,6 +269,9 @@ pub fn begin_result(request: WallpaperFileRequest) -> WallpaperFileWriter {
     output.request = request;
     output.image.fill(0);
     output.image_length = 0;
+    output.decoded.fill(0);
+    output.decoded_length = 0;
+    output.decoded_dimensions = (0, 0);
     output.result = Ok(());
     WallpaperFileWriter { bank, length: 0 }
 }
@@ -268,11 +296,34 @@ impl WallpaperFileWriter {
             // SAFETY: this writer has exclusive access to its unpublished bank.
             let bank = unsafe { &mut (*BANKS.0.get())[self.bank] };
             bank.image_length = self.length;
-            parse_ppm_bytes(&bank.image[..self.length])
-                .map(|image| {
-                    bank.format = image.format();
-                })
-                .map_err(|_| WallpaperFileError::InvalidPpm)
+            if bank.image[..self.length].starts_with(b"\x89PNG\r\n\x1a\n") {
+                match decode_png_rgb(
+                    &mut bank.image[..self.length],
+                    &mut bank.decoded[..WALLPAPER_FILE_CAPACITY],
+                ) {
+                    Ok(decoded)
+                        if usize::from(decoded.width())
+                            .checked_mul(usize::from(decoded.height()))
+                            .is_some_and(|pixels| pixels <= MAX_DECODED_PIXELS) =>
+                    {
+                        bank.decoded_length = decoded.rgb_length();
+                        bank.decoded_dimensions = (decoded.width(), decoded.height());
+                        bank.format = WallpaperFileFormat::Png;
+                        Ok(())
+                    }
+                    Ok(_) | Err(PngError::OutputTooLarge) => Err(WallpaperFileError::FileTooLarge),
+                    Err(_) => Err(WallpaperFileError::InvalidPng),
+                }
+            } else {
+                parse_ppm_bytes(&bank.image[..self.length])
+                    .map(|image| {
+                        bank.format = match image.format() {
+                            PpmFormat::Plain => WallpaperFileFormat::P3,
+                            PpmFormat::Binary => WallpaperFileFormat::P6,
+                        };
+                    })
+                    .map_err(|_| WallpaperFileError::InvalidPpm)
+            }
         };
         if let Err(error) = validation {
             self.publish_error(error);
@@ -299,7 +350,7 @@ impl WallpaperFileWriter {
 #[derive(Clone, Copy)]
 pub struct WallpaperFilePublication {
     generation: u64,
-    format: PpmFormat,
+    format: WallpaperFileFormat,
 }
 
 impl WallpaperFilePublication {
@@ -307,7 +358,7 @@ impl WallpaperFilePublication {
         self.generation
     }
 
-    pub const fn format(self) -> PpmFormat {
+    pub const fn format(self) -> WallpaperFileFormat {
         self.format
     }
 }
@@ -329,8 +380,8 @@ pub struct WallpaperFileSource {
     pub resolved_path: &'static str,
     pub output: Option<&'static str>,
     pub transition: TransitionOptions,
-    pub format: PpmFormat,
-    pub image: &'static [u8],
+    pub format: WallpaperFileFormat,
+    pub image: RasterImage<'static>,
 }
 
 #[derive(Clone, Copy)]
@@ -369,7 +420,18 @@ pub fn latest_after(generation: u64) -> Option<WallpaperFileUpdate> {
     let resolved_path = bank.request.resolved_path.as_str();
     Some(match bank.result {
         Ok(()) => {
-            let image = &bank.image[..bank.image_length];
+            let image = match bank.format {
+                WallpaperFileFormat::P3 | WallpaperFileFormat::P6 => RasterImage::from_pnm(
+                    parse_ppm_bytes(&bank.image[..bank.image_length])
+                        .unwrap_or_else(|_| crate::fatal("published PNM bank became invalid")),
+                ),
+                WallpaperFileFormat::Png => RasterImage::from_rgb(
+                    bank.decoded_dimensions.0,
+                    bank.decoded_dimensions.1,
+                    &bank.decoded[..bank.decoded_length],
+                )
+                .unwrap_or_else(|| crate::fatal("published PNG bank became invalid")),
+            };
             WallpaperFileUpdate::Ready(WallpaperFileSource {
                 generation: current,
                 request_path,

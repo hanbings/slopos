@@ -47,7 +47,7 @@ const EXPECTED_RELEASE: &[u8] = include_bytes!("../../rootfs/etc/slopos-release"
 const EXPECTED_SYSTEM_CONFIGURATION: &[u8] = include_bytes!("../../rootfs/etc/slopos/system.conf");
 const RELEASE_PATH: [&[u8]; 2] = [b"etc", b"slopos-release"];
 const CONFIGURATION_PATH: [&[u8]; 3] = [b"etc", b"slopos", b"system.conf"];
-const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"vfs-wallpaper.ppm"];
+const MULTIBLOCK_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"vfs-wallpaper.png"];
 const DEEP_EXTENT_PATH: [&[u8]; 4] = [b"usr", b"share", b"slopos", b"deep-extent.bin"];
 const CROSS_BLOCK_PATH: [&[u8]; 5] = [b"usr", b"share", b"slopos", b"large-directory", b"tail-29"];
 const SYMLINK_PATH: [&[u8]; 2] = [b"etc", b"current-release"];
@@ -311,22 +311,18 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
         .await;
     let first_wallpaper_block = mount.read_file_block(&mut device, &multiblock, 0).await;
     if first_wallpaper_block.len() != BLOCK_SIZE
-        || !first_wallpaper_block.starts_with(b"P6\n#")
-        || first_wallpaper_block[4..].iter().any(|byte| *byte != b'P')
+        || !first_wallpaper_block.starts_with(b"\x89PNG\r\n\x1a\n")
+        || &first_wallpaper_block[12..16] != b"IHDR"
     {
-        device.fail("ext4 multiblock P6 wallpaper first block mismatch");
+        device.fail("ext4 multiblock PNG wallpaper first block mismatch");
     }
     let first_wallpaper_block_length = first_wallpaper_block.len();
     let second_wallpaper_block = mount.read_file_block(&mut device, &multiblock, 1).await;
     if second_wallpaper_block.len() != 2048
-        || second_wallpaper_block[..1750]
-            .iter()
-            .any(|byte| *byte != b'P')
-        || &second_wallpaper_block[1750..1760] != b"\n12 8\n255\n"
-        || &second_wallpaper_block[1760..1763] != b"\x11\x11\x44"
-        || &second_wallpaper_block[2045..2048] != b"\x11\x11\x33"
+        || &second_wallpaper_block[second_wallpaper_block.len() - 12..]
+            != b"\x00\x00\x00\x00IEND\xae\x42\x60\x82"
     {
-        device.fail("ext4 multiblock P6 wallpaper second block mismatch");
+        device.fail("ext4 multiblock PNG wallpaper second block mismatch");
     }
     let multiblock_bytes = first_wallpaper_block_length + second_wallpaper_block.len();
     let multiblock_group = mount
@@ -334,7 +330,7 @@ pub async fn mount_task(mut device: BlockDevice, boot_user_image: &'static [u8])
         .inode_group(multiblock.inode.number)
         .unwrap_or_else(|_| device.fail("ext4 multiblock inode group is invalid"));
     crate::serial::serialln(format_args!(
-        "SLOPOS-EXT4: multiblock file valid inode={} inode_group={multiblock_group} bytes={multiblock_bytes} logical_blocks=2 format=P6 binary_payload=valid path=/usr/share/slopos/vfs-wallpaper.ppm",
+        "SLOPOS-EXT4: multiblock file valid inode={} inode_group={multiblock_group} bytes={multiblock_bytes} logical_blocks=2 format=PNG ancillary_padding=valid path=/usr/share/slopos/vfs-wallpaper.png",
         multiblock.inode.number,
     ));
 
@@ -1362,6 +1358,7 @@ const fn wallpaper_file_error_name(
         crate::wallpaper_file::WallpaperFileError::NotFound => "not-found",
         crate::wallpaper_file::WallpaperFileError::FileTooLarge => "file-size",
         crate::wallpaper_file::WallpaperFileError::InvalidPpm => "invalid-ppm",
+        crate::wallpaper_file::WallpaperFileError::InvalidPng => "invalid-png",
     }
 }
 
