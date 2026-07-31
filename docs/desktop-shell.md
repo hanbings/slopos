@@ -12,9 +12,9 @@ root image 把第二个 Rust `no_std` ELF 安装为 inode 24 `/sbin/slop-shell`�
 
 `/sbin/slop-shell` 现在是跨 reload 常驻的 service：初次提交 policy generation 1 并收到确认后，它等待 config generation 1；收到后重新读取 Waybar/swww、提交 policy generation 2，再等待下一代 config。交互回归中的有效 `RELOAD` 发布 config generation 2，令 PID 2 再读文件并提交 policy generation 3；`RELOAD BAD` 保持 config generation 2，所以 PID 2 继续休眠且没有 policy generation 4。PID 1 在关闭自己的最后一个 fd 后常驻 `wait4` 作为 supervisor，block task 持有两者的 process/VFS runtime。
 
-首代 `policy-applied` 后，PID 2 调用 Linux `socket(AF_UNIX, SOCK_STREAM, 0)` 与 `connect`，把 fd 3 连到 `/run/slopos/wayland-0`。12-byte `get_registry` 与216-byte role batch经普通异步 `write` 进入有界stream；156-byte registry与56-byte configure经普通异步 `read` 返回。PID 2随后用 `memfd_create("slopos-wayland-shm", 0)`、`ftruncate(3072)` 与单页 `mmap(MAP_SHARED)` 建立XRGB8888 backing，填好pixels后以 Linux `sendmsg` 的 `SCM_RIGHTS` control message把fd 4和148-byte configured batch一同发送。kernel的 `slopos-wayland` dispatcher和持久session校验 frame/argument/object map、批次顺序、configure serial与首次pool descriptor，未ack的buffer commit不能进入双bank。desktop task合成后发布 `wl_buffer.release`、`wl_callback.done(1)` 与 `wl_display.delete_id(11)`；PID 2解析后覆写同一共享页，再以普通64-byte `write` 复用buffer 8与callback ID 11且不重复传fd，第二次合成发布generation/callback data 2，最后关闭memfd descriptor。私有 `0x534c0005` staging syscall已移除。2026-07-31重新生成的 `evidence/desktop.png` 中，System窗口的四色surface来自第二帧共享页；`capture-desktop.sh` 同时读取 `(900,123)`、`(948,123)`、`(900,159)`、`(948,159)` 四点验证backing，而不是只接受一张目视截图。
+首代 `policy-applied` 后，PID 2 调用 Linux `socket(AF_UNIX, SOCK_STREAM, 0)` 与 `connect`，把 fd 3 连到 `/run/slopos/wayland-0`。12-byte `get_registry` 先换回156-byte registry；随后296-byte role/device batch绑定compositor/shm/xdg/seat/output并创建pointer，以256+40两次普通异步`write`进入同一有界stream。服务端返回256-byte device/configure event：pointer capability、seat name、1024×768@60 Hz output geometry/mode/scale/name/description/done、shm formats与xdg configure。PID 2随后用 `memfd_create("slopos-wayland-shm", 0)`、`ftruncate(3072)` 与单页 `mmap(MAP_SHARED)` 建立XRGB8888 backing，填好pixels后以 Linux `sendmsg` 的 `SCM_RIGHTS` control message把fd 4和148-byte configured batch一同发送。kernel的 `slopos-wayland` dispatcher和持久session校验 frame/argument/object map、seat/pointer/output ownership、批次顺序、configure serial与首次pool descriptor，未ack的buffer commit不能进入双bank。desktop task首次合成后发布`wl_pointer.enter(pointer=14,surface=6,x=16,y=12)`、`wl_buffer.release`、`wl_callback.done(1)` 与 `wl_display.delete_id(11)`；PID 2解析后覆写同一共享页，再以普通64-byte `write` 复用buffer 8与callback ID 11且不重复传fd，第二次合成发布generation/callback data 2，最后关闭memfd descriptor。私有 `0x534c0005` staging syscall已移除。2026-07-31重新生成的 `evidence/desktop.png` 中，System窗口的四色surface来自第二帧共享页；`capture-desktop.sh` 同时读取 `(900,123)`、`(948,123)`、`(900,159)`、`(948,159)` 四点验证backing，而不是只接受一张目视截图。
 
-这仍不是完整的用户态桌面。PS/2 输入、四份配置的发现与 parse bank、niri 状态机、swww daemon/transition、placement、GOP renderer 与 composition 仍在 kernel。Wayland wire 已是 AF_UNIX byte stream且首个pool已用真实 `SCM_RIGHTS`/shared mmap，但尚无用户态 `bind/listen/accept`、通用mmap/munmap、subsurface/layer-shell、动态placement、持续frame/event loop、普通第三方client或多client object ownership。
+这仍不是完整的用户态桌面。PS/2 输入、四份配置的发现与 parse bank、niri 状态机、swww daemon/transition、placement、GOP renderer 与 composition 仍在 kernel。Wayland wire 已是 AF_UNIX byte stream，seat/output/pointer discovery与首次pointer focus已真实往返，首个pool也已用真实 `SCM_RIGHTS`/shared mmap；但尚无keyboard keymap/live input fan-out、用户态 `bind/listen/accept`、通用mmap/munmap、subsurface/layer-shell、动态placement、持续frame/event loop、普通第三方client或多client object ownership。
 
 ## VFS 配置发现与原子重载
 
@@ -212,7 +212,7 @@ VFS 中选中的 CSS 使用 Waybar 同样的 GTK CSS selector 命名；仓库默
 
 这里的 Super+右键 compositor resize 优先级只适用于 bar 不接收该坐标的情况；位于窗口前方且 `passthrough=false` 的 top/overlay bar 会像其他 pointer button 一样先吞掉它，`passthrough=true` 或被普通窗口覆盖的 bottom bar 才把它交给下方窗口。
 
-当前独立测试计数为 shell 56 项、desktop protocol 11 项和 Wayland 13 项，共 80 项；Wayland 组覆盖 frame/argument/object map、core/xdg 分派、FD 边界、server event 编码与 configure-gated 单 surface lifecycle/reject 路径。
+当前独立测试计数为 shell 56 项、desktop protocol 11 项和 Wayland 13 项，共 80 项；Wayland 组覆盖 frame/argument/object map、core/xdg 分派、FD 边界、seat/pointer/output server event编码与 configure-gated 单 surface lifecycle/reject 路径。
 
 ## swww 式壁纸控制
 

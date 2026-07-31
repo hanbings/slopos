@@ -12,14 +12,18 @@ use slopos_desktop_protocol::{
 };
 use slopos_wayland::{
     CORE_GLOBALS, CommittedSurface, SingleSurfaceSession, SurfaceSessionEvent,
-    encode_buffer_release, encode_callback_done, encode_display_delete_id, encode_registry_global,
-    encode_shm_format, encode_xdg_surface_configure, encode_xdg_toplevel_configure,
+    encode_buffer_release, encode_callback_done, encode_display_delete_id,
+    encode_output_description, encode_output_done, encode_output_geometry, encode_output_mode,
+    encode_output_name, encode_output_scale, encode_pointer_enter, encode_registry_global,
+    encode_seat_capabilities, encode_seat_name, encode_shm_format, encode_xdg_surface_configure,
+    encode_xdg_toplevel_configure,
 };
 
 const DESKTOP_SERVICE_PID: u32 = 2;
 const SURFACE_BANKS: usize = 2;
 const NO_BANK: usize = usize::MAX;
 const CONFIGURE_SERIAL: u32 = 1;
+const POINTER_ENTER_SERIAL: u32 = 2;
 const SERVER_SHM_FD: i32 = 1;
 
 struct SurfaceBank {
@@ -203,12 +207,51 @@ fn submit_parts(
         }
         SurfaceSessionEvent::Configure {
             shm,
+            seat,
+            pointer,
+            output,
             xdg_surface,
             toplevel,
             serial,
         } => {
             let mut wire = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
             let mut cursor = 0;
+            cursor += encode_seat_capabilities(&mut wire[cursor..], seat, 1)
+                .map_err(|_| WaylandServiceError::InvalidProtocol)?
+                .len();
+            cursor += encode_seat_name(&mut wire[cursor..], seat, "seat0")
+                .map_err(|_| WaylandServiceError::InvalidProtocol)?
+                .len();
+            cursor += encode_output_geometry(
+                &mut wire[cursor..],
+                output,
+                0,
+                0,
+                270,
+                203,
+                0,
+                "SlopOS",
+                "Virtual Display",
+                0,
+            )
+            .map_err(|_| WaylandServiceError::InvalidProtocol)?
+            .len();
+            cursor += encode_output_mode(&mut wire[cursor..], output, 3, 1024, 768, 60_000)
+                .map_err(|_| WaylandServiceError::InvalidProtocol)?
+                .len();
+            cursor += encode_output_scale(&mut wire[cursor..], output, 1)
+                .map_err(|_| WaylandServiceError::InvalidProtocol)?
+                .len();
+            cursor += encode_output_name(&mut wire[cursor..], output, "SLOPOS-1")
+                .map_err(|_| WaylandServiceError::InvalidProtocol)?
+                .len();
+            cursor +=
+                encode_output_description(&mut wire[cursor..], output, "SlopOS Virtual Output")
+                    .map_err(|_| WaylandServiceError::InvalidProtocol)?
+                    .len();
+            cursor += encode_output_done(&mut wire[cursor..], output)
+                .map_err(|_| WaylandServiceError::InvalidProtocol)?
+                .len();
             cursor += encode_shm_format(&mut wire[cursor..], shm, 0)
                 .map_err(|_| WaylandServiceError::InvalidProtocol)?
                 .len();
@@ -223,7 +266,7 @@ fn submit_parts(
                 .len();
             let sequence = publish_event(WAYLAND_EVENT_CONFIGURE, &wire[..cursor])?;
             crate::serial::serialln(format_args!(
-                "SLOPOS-WAYLAND-SERVER: configure emitted pid={pid} sequence={sequence} serial={serial} shm={shm} formats=argb8888/xrgb8888 xdg_surface={xdg_surface} toplevel={toplevel} geometry=32x24 states=empty wire_bytes={cursor}"
+                "SLOPOS-WAYLAND-SERVER: configure emitted pid={pid} sequence={sequence} serial={serial} seat={seat} capabilities=pointer pointer={pointer} output={output} output_name=SLOPOS-1 mode=1024x768@60000 scale=1 shm={shm} formats=argb8888/xrgb8888 xdg_surface={xdg_surface} toplevel={toplevel} geometry=32x24 states=empty wire_bytes={cursor}"
             ));
             WaylandSubmission::Configure {
                 event_sequence: sequence,
@@ -274,10 +317,13 @@ fn publish_surface(
     GENERATION.store(next_generation, Ordering::Release);
     crate::executor::wake_task(crate::executor::INPUT_TASK);
     crate::serial::serialln(format_args!(
-        "SLOPOS-WAYLAND-SERVER: commit accepted pid={pid} generation={next_generation} transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle={lifecycle} objects=registry/compositor/shm/xdg_toplevel surface={} buffer={} callback={} geometry={}x{} stride={} format={} title=\"{}\" app_id={} wire_bytes={} pixel_bytes={}",
+        "SLOPOS-WAYLAND-SERVER: commit accepted pid={pid} generation={next_generation} transport=AF_UNIX/SOCK_STREAM backing=SCM_RIGHTS/mmap-shared-v1 lifecycle={lifecycle} objects=registry/compositor/shm/seat/pointer/output/xdg_toplevel surface={} buffer={} callback={} seat={} pointer={} output={} geometry={}x{} stride={} format={} title=\"{}\" app_id={} wire_bytes={} pixel_bytes={}",
         metadata.surface,
         metadata.buffer,
         metadata.frame_callback,
+        metadata.seat,
+        metadata.pointer,
+        metadata.output,
         metadata.width,
         metadata.height,
         metadata.stride,
@@ -401,6 +447,18 @@ pub fn acknowledge(generation: u64) {
         .unwrap_or_else(|_| crate::fatal("Wayland presentation lifecycle is invalid"));
     let mut wire = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
     let mut cursor = 0;
+    if generation == 1 {
+        cursor += encode_pointer_enter(
+            &mut wire[cursor..],
+            presented.pointer,
+            POINTER_ENTER_SERIAL,
+            presented.surface,
+            16 << 8,
+            12 << 8,
+        )
+        .unwrap_or_else(|_| crate::fatal("Wayland pointer enter encoding failed"))
+        .len();
+    }
     cursor += encode_buffer_release(&mut wire[cursor..], presented.buffer)
         .unwrap_or_else(|_| crate::fatal("Wayland buffer release encoding failed"))
         .len();
@@ -417,7 +475,12 @@ pub fn acknowledge(generation: u64) {
     let event_sequence = publish_event(WAYLAND_EVENT_PRESENTED, &wire[..cursor])
         .unwrap_or_else(|_| crate::fatal("Wayland presentation event remained pending"));
     *current = Some(candidate);
+    let events = if generation == 1 {
+        "wl_pointer.enter/wl_buffer.release/wl_callback.done/wl_display.delete_id"
+    } else {
+        "wl_buffer.release/wl_callback.done/wl_display.delete_id"
+    };
     crate::serial::serialln(format_args!(
-        "SLOPOS-WAYLAND-SERVER: commit acknowledged generation={generation} renderer=desktop active_bank={bank} event_sequence={event_sequence} events=wl_buffer.release/wl_callback.done/wl_display.delete_id callback_data={generation}"
+        "SLOPOS-WAYLAND-SERVER: commit acknowledged generation={generation} renderer=desktop active_bank={bank} event_sequence={event_sequence} events={events} callback_data={generation}"
     ));
 }

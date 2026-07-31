@@ -452,6 +452,125 @@ pub fn encode_shm_format(bytes: &mut [u8], shm: u32, format: u32) -> Result<&[u8
     message.finish()
 }
 
+pub fn encode_seat_capabilities(
+    bytes: &mut [u8],
+    seat: u32,
+    capabilities: u32,
+) -> Result<&[u8], WireError> {
+    let mut message = MessageBuilder::new(bytes, seat, 0)?;
+    message.uint(capabilities)?;
+    message.finish()
+}
+
+pub fn encode_seat_name<'a>(
+    bytes: &'a mut [u8],
+    seat: u32,
+    name: &str,
+) -> Result<&'a [u8], WireError> {
+    let mut message = MessageBuilder::new(bytes, seat, 1)?;
+    message.string(name)?;
+    message.finish()
+}
+
+pub fn encode_pointer_enter(
+    bytes: &mut [u8],
+    pointer: u32,
+    serial: u32,
+    surface: u32,
+    surface_x: i32,
+    surface_y: i32,
+) -> Result<&[u8], WireError> {
+    if serial == 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, pointer, 0)?;
+    message.uint(serial)?;
+    message.object(surface)?;
+    message.fixed(surface_x)?;
+    message.fixed(surface_y)?;
+    message.finish()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_output_geometry<'a>(
+    bytes: &'a mut [u8],
+    output: u32,
+    x: i32,
+    y: i32,
+    physical_width: i32,
+    physical_height: i32,
+    subpixel: i32,
+    make: &str,
+    model: &str,
+    transform: i32,
+) -> Result<&'a [u8], WireError> {
+    if physical_width <= 0 || physical_height <= 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, output, 0)?;
+    message.int(x)?;
+    message.int(y)?;
+    message.int(physical_width)?;
+    message.int(physical_height)?;
+    message.int(subpixel)?;
+    message.string(make)?;
+    message.string(model)?;
+    message.int(transform)?;
+    message.finish()
+}
+
+pub fn encode_output_mode(
+    bytes: &mut [u8],
+    output: u32,
+    flags: u32,
+    width: i32,
+    height: i32,
+    refresh: i32,
+) -> Result<&[u8], WireError> {
+    if width <= 0 || height <= 0 || refresh <= 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, output, 1)?;
+    message.uint(flags)?;
+    message.int(width)?;
+    message.int(height)?;
+    message.int(refresh)?;
+    message.finish()
+}
+
+pub fn encode_output_done(bytes: &mut [u8], output: u32) -> Result<&[u8], WireError> {
+    MessageBuilder::new(bytes, output, 2)?.finish()
+}
+
+pub fn encode_output_scale(bytes: &mut [u8], output: u32, factor: i32) -> Result<&[u8], WireError> {
+    if factor <= 0 {
+        return Err(WireError::InvalidArgument);
+    }
+    let mut message = MessageBuilder::new(bytes, output, 3)?;
+    message.int(factor)?;
+    message.finish()
+}
+
+pub fn encode_output_name<'a>(
+    bytes: &'a mut [u8],
+    output: u32,
+    name: &str,
+) -> Result<&'a [u8], WireError> {
+    let mut message = MessageBuilder::new(bytes, output, 4)?;
+    message.string(name)?;
+    message.finish()
+}
+
+pub fn encode_output_description<'a>(
+    bytes: &'a mut [u8],
+    output: u32,
+    description: &str,
+) -> Result<&'a [u8], WireError> {
+    let mut message = MessageBuilder::new(bytes, output, 5)?;
+    message.string(description)?;
+    message.finish()
+}
+
 pub fn encode_xdg_toplevel_configure<'a>(
     bytes: &'a mut [u8],
     toplevel: u32,
@@ -1402,6 +1521,9 @@ pub struct CommittedSurface {
     pub xdg_surface: u32,
     pub toplevel: u32,
     pub frame_callback: u32,
+    pub seat: u32,
+    pub pointer: u32,
+    pub output: u32,
     pub width: u32,
     pub height: u32,
     pub stride: u32,
@@ -1434,6 +1556,9 @@ pub enum SurfaceSessionEvent {
     },
     Configure {
         shm: u32,
+        seat: u32,
+        pointer: u32,
+        output: u32,
         xdg_surface: u32,
         toplevel: u32,
         serial: u32,
@@ -1443,8 +1568,10 @@ pub enum SurfaceSessionEvent {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PresentedSurface {
+    pub surface: u32,
     pub buffer: u32,
     pub frame_callback: u32,
+    pub pointer: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1473,6 +1600,9 @@ pub struct SingleSurfaceSession<const OBJECTS: usize> {
     registry: Option<u32>,
     compositor: Option<u32>,
     shm: Option<u32>,
+    seat: Option<u32>,
+    pointer: Option<u32>,
+    output: Option<u32>,
     wm_base: Option<u32>,
     surface: Option<u32>,
     pool: Option<u32>,
@@ -1511,6 +1641,9 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
             registry: None,
             compositor: None,
             shm: None,
+            seat: None,
+            pointer: None,
+            output: None,
             wm_base: None,
             surface: None,
             pool: None,
@@ -1571,6 +1704,9 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                 if !self.initial_committed
                     || self.compositor.is_none()
                     || self.shm.is_none()
+                    || self.seat.is_none()
+                    || self.pointer.is_none()
+                    || self.output.is_none()
                     || self.wm_base.is_none()
                     || self.surface.is_none()
                     || self.xdg_surface.is_none()
@@ -1584,6 +1720,9 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
                 self.phase = SurfacePhase::AwaitConfiguredCommit;
                 Ok(SurfaceSessionEvent::Configure {
                     shm: self.shm.ok_or(SurfaceError::IncompleteLifecycle)?,
+                    seat: self.seat.ok_or(SurfaceError::IncompleteLifecycle)?,
+                    pointer: self.pointer.ok_or(SurfaceError::IncompleteLifecycle)?,
+                    output: self.output.ok_or(SurfaceError::IncompleteLifecycle)?,
                     xdg_surface: self.xdg_surface.ok_or(SurfaceError::IncompleteLifecycle)?,
                     toplevel: self.toplevel.ok_or(SurfaceError::IncompleteLifecycle)?,
                     serial: self.configure_serial,
@@ -1621,9 +1760,16 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
             ) if self.registry == Some(registry) => match interface {
                 Interface::Compositor => set_once(&mut self.compositor, new_id)?,
                 Interface::Shm => set_once(&mut self.shm, new_id)?,
+                Interface::Seat => set_once(&mut self.seat, new_id)?,
+                Interface::Output => set_once(&mut self.output, new_id)?,
                 Interface::XdgWmBase => set_once(&mut self.wm_base, new_id)?,
                 _ => return Err(SurfaceError::UnexpectedRequest),
             },
+            (SurfacePhase::AwaitInitialCommit, Request::SeatGetPointer { seat, pointer })
+                if self.seat == Some(seat) =>
+            {
+                set_once(&mut self.pointer, pointer)?;
+            }
             (
                 SurfacePhase::AwaitInitialCommit,
                 Request::CreateSurface {
@@ -1819,10 +1965,12 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
             return Err(SurfaceError::UnexpectedRequest);
         }
         let presentation = PresentedSurface {
+            surface: self.surface.ok_or(SurfaceError::IncompleteLifecycle)?,
             buffer: self.buffer.ok_or(SurfaceError::IncompleteLifecycle)?.id,
             frame_callback: self
                 .frame_callback
                 .ok_or(SurfaceError::IncompleteLifecycle)?,
+            pointer: self.pointer.ok_or(SurfaceError::IncompleteLifecycle)?,
         };
         self.connection
             .objects
@@ -1848,6 +1996,9 @@ impl<const OBJECTS: usize> SingleSurfaceSession<OBJECTS> {
             frame_callback: self
                 .frame_callback
                 .ok_or(SurfaceError::IncompleteLifecycle)?,
+            seat: self.seat.ok_or(SurfaceError::IncompleteLifecycle)?,
+            pointer: self.pointer.ok_or(SurfaceError::IncompleteLifecycle)?,
+            output: self.output.ok_or(SurfaceError::IncompleteLifecycle)?,
             width: buffer.width,
             height: buffer.height,
             stride: buffer.stride,
@@ -2198,12 +2349,17 @@ mod tests {
         const SURFACE: u32 = 6;
         const XDG_SURFACE: u32 = 9;
         const TOPLEVEL: u32 = 10;
+        const SEAT: u32 = 12;
+        const OUTPUT: u32 = 13;
+        const POINTER: u32 = 14;
 
         let mut bytes = [0; 768];
         let mut cursor = 0;
         for (global, object) in [
             (CORE_GLOBALS[0], COMPOSITOR),
             (CORE_GLOBALS[1], SHM),
+            (CORE_GLOBALS[2], SEAT),
+            (CORE_GLOBALS[3], OUTPUT),
             (CORE_GLOBALS[4], WM_BASE),
         ] {
             append_message(&mut bytes, &mut cursor, REGISTRY, 0, |message| {
@@ -2213,6 +2369,9 @@ mod tests {
                 message.object(object).unwrap();
             });
         }
+        append_message(&mut bytes, &mut cursor, SEAT, 0, |message| {
+            message.object(POINTER).unwrap();
+        });
         append_message(&mut bytes, &mut cursor, COMPOSITOR, 0, |message| {
             message.object(SURFACE).unwrap();
         });
@@ -2337,6 +2496,9 @@ mod tests {
             advance_to_configure(&mut session, "Userspace Surface"),
             SurfaceSessionEvent::Configure {
                 shm: 4,
+                seat: 12,
+                pointer: 14,
+                output: 13,
                 xdg_surface: 9,
                 toplevel: 10,
                 serial: 41,
@@ -2353,6 +2515,10 @@ mod tests {
         assert_eq!(surface.buffer, 8);
         assert_eq!(surface.frame_callback, 11);
         assert_eq!(
+            (surface.seat, surface.pointer, surface.output),
+            (12, 14, 13)
+        );
+        assert_eq!(
             (surface.width, surface.height, surface.stride),
             (32, 24, 128)
         );
@@ -2362,8 +2528,10 @@ mod tests {
         assert_eq!(
             session.present().unwrap(),
             PresentedSurface {
+                surface: 6,
                 buffer: 8,
                 frame_callback: 11,
+                pointer: 14,
             }
         );
 
@@ -2378,8 +2546,10 @@ mod tests {
         assert_eq!(
             session.present().unwrap(),
             PresentedSurface {
+                surface: 6,
                 buffer: 8,
                 frame_callback: 11,
+                pointer: 14,
             }
         );
     }
@@ -2485,6 +2655,36 @@ mod tests {
                 .header
                 .object_id,
             8
+        );
+
+        let frame = encode_seat_capabilities(&mut bytes, 12, 1).unwrap();
+        let (frame, _) = Frame::decode(frame).unwrap();
+        assert_eq!(frame.header.object_id, 12);
+        assert_eq!(ArgumentReader::new(frame.payload).uint().unwrap(), 1);
+
+        let frame = encode_pointer_enter(&mut bytes, 14, 2, 6, 16 << 8, 12 << 8).unwrap();
+        let (frame, _) = Frame::decode(frame).unwrap();
+        let mut arguments = ArgumentReader::new(frame.payload);
+        assert_eq!(frame.header.object_id, 14);
+        assert_eq!(arguments.uint().unwrap(), 2);
+        assert_eq!(arguments.object().unwrap(), 6);
+        assert_eq!(arguments.fixed().unwrap(), 16 << 8);
+        assert_eq!(arguments.fixed().unwrap(), 12 << 8);
+
+        let frame =
+            encode_output_geometry(&mut bytes, 13, 0, 0, 270, 203, 0, "SlopOS", "Virtual", 0)
+                .unwrap();
+        assert_eq!(Frame::decode(frame).unwrap().0.header.object_id, 13);
+        let frame = encode_output_mode(&mut bytes, 13, 3, 1024, 768, 60_000).unwrap();
+        let (frame, _) = Frame::decode(frame).unwrap();
+        let mut arguments = ArgumentReader::new(frame.payload);
+        assert_eq!(arguments.uint().unwrap(), 3);
+        assert_eq!(arguments.int().unwrap(), 1024);
+        assert_eq!(arguments.int().unwrap(), 768);
+        assert_eq!(arguments.int().unwrap(), 60_000);
+        assert_eq!(
+            encode_output_scale(&mut bytes, 13, 0),
+            Err(WireError::InvalidArgument)
         );
     }
 }

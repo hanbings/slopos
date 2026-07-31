@@ -56,6 +56,7 @@ const SHARED_MAPPING_ADDRESS: u64 = USER_STACK_TOP;
 const SHARED_MAPPING_LENGTH: usize = 4096;
 const PREEMPTION_TSC_WINDOW: u64 = 100_000_000;
 const CONFIG_READ_CAPACITY: usize = 256;
+const SOCKET_WRITE_CAPACITY: usize = 256;
 const WAYBAR_FILE_CAPACITY: usize = 4096;
 const SWWW_ENV_FILE_CAPACITY: usize = 512;
 const REGISTRY: u32 = 2;
@@ -68,6 +69,9 @@ const BUFFER: u32 = 8;
 const XDG_SURFACE: u32 = 9;
 const TOPLEVEL: u32 = 10;
 const FRAME_CALLBACK: u32 = 11;
+const SEAT: u32 = 12;
+const OUTPUT: u32 = 13;
+const POINTER: u32 = 14;
 const SURFACE_WIDTH: usize = 32;
 const SURFACE_HEIGHT: usize = 24;
 const SURFACE_PIXEL_LENGTH: usize = SURFACE_WIDTH * SURFACE_HEIGHT * 4;
@@ -226,15 +230,19 @@ fn submit_wayland_surface(socket: i64) {
     }
 }
 
-fn send_wayland_wire(socket: i64, wire: &[u8]) {
-    if syscall3(
-        SYS_WRITE,
-        socket as u64,
-        wire.as_ptr() as u64,
-        wire.len() as u64,
-    ) != wire.len() as i64
-    {
-        exit(21);
+fn send_wayland_wire(socket: i64, mut wire: &[u8]) {
+    while !wire.is_empty() {
+        let length = wire.len().min(SOCKET_WRITE_CAPACITY);
+        if syscall3(
+            SYS_WRITE,
+            socket as u64,
+            wire.as_ptr() as u64,
+            length as u64,
+        ) != length as i64
+        {
+            exit(21);
+        }
+        wire = &wire[length..];
     }
 }
 
@@ -365,6 +373,8 @@ fn build_initial_surface_wire(wire: &mut [u8]) -> Option<usize> {
     for (global, object) in [
         (CORE_GLOBALS[0], COMPOSITOR),
         (CORE_GLOBALS[1], SHM),
+        (CORE_GLOBALS[2], SEAT),
+        (CORE_GLOBALS[3], OUTPUT),
         (CORE_GLOBALS[4], WM_BASE),
     ] {
         append_message(wire, &mut cursor, REGISTRY, 0, |message| {
@@ -375,6 +385,10 @@ fn build_initial_surface_wire(wire: &mut [u8]) -> Option<usize> {
         })
         .ok()?;
     }
+    append_message(wire, &mut cursor, SEAT, 0, |message| {
+        message.object(POINTER)
+    })
+    .ok()?;
     append_message(wire, &mut cursor, COMPOSITOR, 0, |message| {
         message.object(SURFACE)
     })
@@ -501,38 +515,49 @@ fn wait_registry(socket: i64) -> Option<()> {
 fn wait_configure(socket: i64) -> Option<u32> {
     let mut event_bytes = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
     let mut wire = receive_wayland_event(socket, &mut event_bytes)?;
+
+    let mut arguments = take_event(&mut wire, SEAT, 0)?;
+    if arguments.uint().ok()? != 1 || arguments.finish().is_err() {
+        return None;
+    }
+    take_event(&mut wire, SEAT, 1)?;
+    take_event(&mut wire, OUTPUT, 0)?;
+    let mut arguments = take_event(&mut wire, OUTPUT, 1)?;
+    if arguments.uint().ok()? != 3
+        || arguments.int().ok()? != 1024
+        || arguments.int().ok()? != 768
+        || arguments.int().ok()? != 60_000
+        || arguments.finish().is_err()
+    {
+        return None;
+    }
+    let mut arguments = take_event(&mut wire, OUTPUT, 3)?;
+    if arguments.int().ok()? != 1 || arguments.finish().is_err() {
+        return None;
+    }
+    take_event(&mut wire, OUTPUT, 4)?;
+    take_event(&mut wire, OUTPUT, 5)?;
+    if take_event(&mut wire, OUTPUT, 2)?.finish().is_err() {
+        return None;
+    }
+
     for format in [0, 1] {
-        let (frame, remaining) = Frame::decode(wire).ok()?;
-        let mut arguments = ArgumentReader::new(frame.payload);
-        if frame.header.object_id != SHM
-            || frame.header.opcode != 0
-            || arguments.uint().ok()? != format
-            || arguments.finish().is_err()
-        {
+        let mut arguments = take_event(&mut wire, SHM, 0)?;
+        if arguments.uint().ok()? != format || arguments.finish().is_err() {
             return None;
         }
-        wire = remaining;
     }
-    let (frame, remaining) = Frame::decode(wire).ok()?;
-    let mut arguments = ArgumentReader::new(frame.payload);
-    if frame.header.object_id != TOPLEVEL
-        || frame.header.opcode != 0
-        || arguments.int().ok()? != 32
+    let mut arguments = take_event(&mut wire, TOPLEVEL, 0)?;
+    if arguments.int().ok()? != 32
         || arguments.int().ok()? != 24
         || !arguments.array().ok()?.is_empty()
         || arguments.finish().is_err()
     {
         return None;
     }
-    let (frame, remaining) = Frame::decode(remaining).ok()?;
-    let mut arguments = ArgumentReader::new(frame.payload);
+    let mut arguments = take_event(&mut wire, XDG_SURFACE, 0)?;
     let serial = arguments.uint().ok()?;
-    if frame.header.object_id != XDG_SURFACE
-        || frame.header.opcode != 0
-        || serial == 0
-        || arguments.finish().is_err()
-        || !remaining.is_empty()
-    {
+    if serial == 0 || arguments.finish().is_err() || !wire.is_empty() {
         return None;
     }
     Some(serial)
@@ -540,28 +565,41 @@ fn wait_configure(socket: i64) -> Option<u32> {
 
 fn wait_presented(socket: i64, callback_data: u32) -> Option<()> {
     let mut event_bytes = [0; WAYLAND_EVENT_MAX_WIRE_SIZE];
-    let event = receive_wayland_event(socket, &mut event_bytes)?;
-    let (release, wire) = Frame::decode(event).ok()?;
-    let (done, wire) = Frame::decode(wire).ok()?;
-    let mut done_arguments = ArgumentReader::new(done.payload);
-    let (delete_id, remaining) = Frame::decode(wire).ok()?;
-    let mut delete_arguments = ArgumentReader::new(delete_id.payload);
-    if release.header.object_id != BUFFER
-        || release.header.opcode != 0
-        || !release.payload.is_empty()
-        || done.header.object_id != FRAME_CALLBACK
-        || done.header.opcode != 0
-        || done_arguments.uint().ok()? != callback_data
+    let mut wire = receive_wayland_event(socket, &mut event_bytes)?;
+    if callback_data == 1 {
+        let mut enter = take_event(&mut wire, POINTER, 0)?;
+        if enter.uint().ok()? != 2
+            || enter.object().ok()? != SURFACE
+            || enter.fixed().ok()? != 16 << 8
+            || enter.fixed().ok()? != 12 << 8
+            || enter.finish().is_err()
+        {
+            return None;
+        }
+    }
+    if take_event(&mut wire, BUFFER, 0)?.finish().is_err() {
+        return None;
+    }
+    let mut done_arguments = take_event(&mut wire, FRAME_CALLBACK, 0)?;
+    let mut delete_arguments = take_event(&mut wire, DISPLAY_OBJECT_ID, 1)?;
+    if done_arguments.uint().ok()? != callback_data
         || done_arguments.finish().is_err()
-        || delete_id.header.object_id != DISPLAY_OBJECT_ID
-        || delete_id.header.opcode != 1
         || delete_arguments.object().ok()? != FRAME_CALLBACK
         || delete_arguments.finish().is_err()
-        || !remaining.is_empty()
+        || !wire.is_empty()
     {
         return None;
     }
     Some(())
+}
+
+fn take_event<'a>(wire: &mut &'a [u8], object_id: u32, opcode: u16) -> Option<ArgumentReader<'a>> {
+    let (frame, remaining) = Frame::decode(wire).ok()?;
+    if frame.header.object_id != object_id || frame.header.opcode != opcode {
+        return None;
+    }
+    *wire = remaining;
+    Some(ArgumentReader::new(frame.payload))
 }
 
 fn receive_wayland_event(

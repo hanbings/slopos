@@ -9,7 +9,7 @@
 - 每个 descriptor 保存 file node、local-socket generation handle或shared-memory generation handle；file object另保存 size、offset和read/write access mode；
 - bounded read/write window、成功后 offset advance、absolute seek 与 close。
 
-内核当前建立容量 4 的 namespace，把 ext4 注册为 filesystem 1 并挂到 `/`。mount/recovery 后，block task 经同一个 component walker 打开 inode 23 的 `/sbin/slop-init` 与 inode 24 的 `/sbin/slop-shell`，分别跨七/九个逻辑块读出 26344/36840 bytes。init 与 BootInfo 保留的引导副本完全匹配后，两份 VFS bytes 分别交给 ELF/process loader。
+内核当前建立容量 4 的 namespace，把 ext4 注册为 filesystem 1 并挂到 `/`。mount/recovery 后，block task 经同一个 component walker 打开 inode 23 的 `/sbin/slop-init` 与 inode 24 的 `/sbin/slop-shell`，分别跨七/十个逻辑块读出 26344/38176 bytes。init 与 BootInfo 保留的引导副本完全匹配后，两份 VFS bytes 分别交给 ELF/process loader。
 
 PID 1 与 PID 2 通过 `sched_yield` cooperative 交错，也在各自无 syscall TSC 窗口被 100 Hz timer 双向抢占。PID 1 发出 Linux x86-64 `openat(AT_FDCWD, "/etc/slopos/system.conf", O_RDONLY)`，root namespace 解析 inode 18；PID 2 首轮依次打开 inode 20 `/etc/slopos/waybar.jsonc` 与 inode 17 `/etc/slopos/swww.env`。fast handler 保存对应 user frame并回到 block task，各自容量 8 的 fd table 都可返回 fd 3；`Ext4File` 存在按 PID 分隔的 backing array 中，因此同号 fd 不会碰撞。首代 policy 后 PID 2 用 `socket/connect` 把 local socket object固定在fd 3，再以 `memfd_create` 把shared-memory object放在fd 4；该fd经 `sendmsg(SCM_RIGHTS)` 附着到Wayland batch并在第二帧后关闭，后续配置热重读因而继续使用fd 4。file read暂停上下文，异步ext4/virtio completion推进offset；socket read/write/sendmsg走相同suspend/resume boundary，但分派到全双工byte ring、rights slot与Wayland server Future。completion都把结果写回对应user stack/frame并恢复原RIP/RSP/GPR。
 
